@@ -1,0 +1,73 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg17
+        env:
+          POSTGRES_DB: yunpan
+          POSTGRES_USER: yunpan
+          POSTGRES_PASSWORD: yunpan
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U yunpan -d yunpan"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.25.13
+          cache-dependency-path: backend/go.sum
+      - name: Download modules
+        run: go mod download
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Migrate empty database
+        env:
+          POSTGRES_DSN: postgres://yunpan:yunpan@127.0.0.1:5432/yunpan?sslmode=disable
+        run: go run ./cmd/migrate up
+
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Lint OpenAPI
+        run: npx --yes @redocly/cli@latest lint backend/api/openapi.yaml
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: picture_bed
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: picture_bed/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build:docker

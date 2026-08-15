@@ -1,0 +1,28 @@
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+deploy/.env
+
+# Go outputs
+backend/bin/
+backend/coverage.out
+backend/tmp/
+
+# React outputs and dependencies
+picture_bed/node_modules/
+picture_bed/build/
+picture_bed/coverage/
+
+# Logs and local tooling
+*.log
+logs/
+.cache/
+.playwright-mcp/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+docs/

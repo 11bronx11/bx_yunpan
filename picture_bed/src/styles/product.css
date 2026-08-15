@@ -1,0 +1,135 @@
+:root {
+  --ink: #181816;
+  --paper: #f5f4f0;
+  --white: #ffffff;
+  --surface-soft: #faf9f6;
+  --surface-hover: #f6f5f1;
+  --lime: #c6ff00;
+  --pink: #ff2b68;
+  --blue: #1688c4;
+  --coral: #ff7151;
+  --mint: #4ddcb0;
+  --lime-soft: #efffc0;
+  --pink-soft: #ffdce6;
+  --blue-soft: #dceffc;
+  --coral-soft: #ffe1da;
+  --mint-soft: #d9f8ed;
+  --text-secondary: #6d6c67;
+  --text-tertiary: #71706b;
+  --muted: var(--text-secondary);
+  --divider: #e9e8e3;
+  --divider-strong: #d5d4ce;
+  --control-border: #dddcd6;
+  --grid: rgba(24, 24, 22, 0.015);
+  --border-thin: 1px solid var(--divider-strong);
+  --border-heavy: 1.5px solid var(--ink);
+  --radius-panel: 18px;
+  --radius-control: 14px;
+  --radius-pill: 999px;
+  --shadow-small: 0 1px 2px rgba(0, 0, 0, 0.03), 0 4px 12px rgba(0, 0, 0, 0.035);
+  --shadow-panel: 0 8px 24px rgba(0, 0, 0, 0.055);
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-section: 40px;
+  --display-font: "Arial Black", "Helvetica Neue", Arial, sans-serif;
+  --utility-font: "Helvetica Neue", Arial, sans-serif;
+  --body-font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Helvetica Neue", Arial, sans-serif;
+  --transition-fast: 160ms ease;
+  --transition-normal: 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.product-shell {
+  min-height: 100dvh;
+  overflow-x: clip;
+  color: var(--ink);
+  background-color: var(--paper);
+  background-image: none;
+  font-family: var(--body-font);
+}
+
+.product-page { width: min(100%, 1280px); min-width: 0; margin: 0 auto; }
+.product-shell :where(button, a, input, [role="button"]):focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+.product-shell .ant-btn {
+  min-height: 40px;
+  border: 1px solid #d4d3cd;
+  border-radius: var(--radius-pill);
+  box-shadow: none;
+  font-family: var(--body-font);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  transition: color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast);
+}
+
+.product-shell .ant-btn:hover:not(:disabled), .product-shell .ant-btn:focus-visible:not(:disabled) {
+  color: var(--ink) !important;
+  border-color: #9c9b95 !important;
+  background: var(--surface-hover) !important;
+  box-shadow: none;
+  transform: translateY(-1px);
+}
+.product-shell .ant-btn-primary { color: var(--ink); border-color: #242421; background: var(--lime); font-weight: 600; }
+.product-shell .ant-btn-primary:hover:not(:disabled) { border-color: #1b1b19 !important; background: #bdf300 !important; box-shadow: 0 2px 0 var(--ink); }
+.product-shell .ant-btn-primary:active:not(:disabled) { box-shadow: none; transform: translateY(0); }
+.product-shell .ant-btn-dangerous { color: #a52c26; border-color: rgba(165, 44, 38, 0.35); background: var(--white); }
+.product-shell .ant-btn-text, .product-shell .ant-btn-link { border-color: transparent; background: transparent; }
+
+.product-shell .ant-input, .product-shell .ant-input-affix-wrapper {
+  min-height: 44px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: #f8f7f4;
+}
+.product-shell .ant-input-affix-wrapper:hover, .product-shell .ant-input:hover { border-color: #b7b6b0; background: var(--white); }
+.product-shell .ant-input-affix-wrapper-focused, .product-shell .ant-input:focus { border-color: #292926; background: var(--white); box-shadow: 0 0 0 3px rgba(198, 255, 0, 0.22); }
+
+.product-shell .ant-modal-content, .product-shell .ant-drawer-content {
+  border: 1px solid #d8d7d1;
+  border-radius: var(--radius-panel);
+  background: var(--white);
+  box-shadow: var(--shadow-panel);
+}
+.product-shell .ant-modal-header, .product-shell .ant-drawer-header { border-bottom: 1px solid var(--divider); background: transparent; }
+.product-shell .ant-modal-title, .product-shell .ant-drawer-title { font-family: var(--body-font); font-size: 18px; font-weight: 700; }
+.ant-tooltip .ant-tooltip-inner { color: var(--white); border-radius: 6px; background: var(--ink); font-size: 12px; font-weight: 600; }
+
+.editorial-ledger .ant-table, .editorial-ledger .ant-table-container, .editorial-ledger .ant-table-content, .editorial-ledger table { background: var(--white) !important; }
+.editorial-ledger .ant-table-container { overflow: hidden; border: 1px solid #e1e0db; border-radius: var(--radius-control); }
+.editorial-ledger .ant-table-thead > tr > th {
+  height: 44px;
+  padding: 9px 12px;
+  border-bottom: 1px solid #ecebe6;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-family: var(--body-font);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.editorial-ledger .ant-table-tbody > tr > td { height: 60px; padding: 10px 12px; border-bottom: 1px solid #ecebe6; color: var(--ink); background: var(--white); }
+.editorial-ledger .ant-table-tbody > tr:hover > td { background: rgba(198, 255, 0, 0.08) !important; }
+.editorial-ledger .ant-table-cell::before { display: none; }
+.editorial-ledger .ant-pagination-item, .editorial-ledger .ant-pagination-prev button, .editorial-ledger .ant-pagination-next button { border: 1px solid var(--divider); border-radius: var(--radius-pill); background: var(--paper); }
+.editorial-ledger .ant-pagination-item-active { border-color: var(--ink); background: var(--ink); }
+.editorial-ledger .ant-pagination-item-active a { color: var(--white); }
+
+.compact-upload .ant-upload-drag { min-height: 142px; border: 1px solid #e1e0db !important; border-radius: var(--radius-control) !important; background: var(--surface-soft) !important; }
+.compact-upload .ant-upload-drag:hover { border-color: #b7b6b0 !important; background: var(--surface-hover) !important; }
+.compact-upload .ant-progress-inner { border: 1px solid var(--divider); background: var(--paper); }
+.compact-upload .ant-progress-bg { background: var(--ink) !important; }
+
+@media (max-width: 760px) {
+  :root { --radius-panel: 18px; --space-section: 36px; }
+  .product-shell .ant-btn { min-height: 44px; }
+  .editorial-ledger .ant-table-content { overflow-x: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .product-shell *, .product-shell *::before, .product-shell *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+}

@@ -1,0 +1,5 @@
+BEGIN;
+DROP TABLE IF EXISTS object_variants;
+DROP TABLE IF EXISTS share_imports;
+DROP TABLE IF EXISTS shares;
+COMMIT;

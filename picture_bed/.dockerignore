@@ -1,0 +1,14 @@
+.git
+.github
+.env
+node_modules
+build
+coverage
+.cache
+.eslintcache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.playwright-mcp
+src/**/*.test.js
+README.md

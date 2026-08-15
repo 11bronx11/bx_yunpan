@@ -1,0 +1,266 @@
+name: bx-yunpan
+
+x-app-environment: &app-environment
+  APP_ENV: ${APP_ENV:-development}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  HTTP_MAX_BODY_BYTES: ${HTTP_MAX_BODY_BYTES:-1048576}
+  HTTP_MAX_HEADER_BYTES: ${HTTP_MAX_HEADER_BYTES:-65536}
+  HTTP_SHUTDOWN_TIMEOUT: ${HTTP_SHUTDOWN_TIMEOUT:-10s}
+  HTTP_PROBE_TIMEOUT: ${HTTP_PROBE_TIMEOUT:-2s}
+  HTTP_READ_HEADER_TIMEOUT: ${HTTP_READ_HEADER_TIMEOUT:-5s}
+  HTTP_IDLE_TIMEOUT: ${HTTP_IDLE_TIMEOUT:-60s}
+  POSTGRES_DSN: postgres://${POSTGRES_USER:-yunpan}:${POSTGRES_PASSWORD:-yunpan}@postgres:5432/${POSTGRES_DB:-yunpan}?sslmode=disable
+  POSTGRES_MAX_OPEN_CONNS: ${POSTGRES_MAX_OPEN_CONNS:-32}
+  POSTGRES_MAX_IDLE_CONNS: ${POSTGRES_MAX_IDLE_CONNS:-8}
+  POSTGRES_CONN_MAX_LIFETIME: ${POSTGRES_CONN_MAX_LIFETIME:-30m}
+  POSTGRES_CONN_MAX_IDLE_TIME: ${POSTGRES_CONN_MAX_IDLE_TIME:-5m}
+  REDIS_ADDR: redis:6379
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+  REDIS_DB: ${REDIS_DB:-0}
+  S3_ENDPOINT: minio:9000
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-127.0.0.1:3000}
+  S3_PUBLIC_PATH_PREFIX: ${S3_PUBLIC_PATH_PREFIX:-/storage}
+  S3_ACCESS_KEY: ${MINIO_ROOT_USER:-yunpan}
+  S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-yunpan-dev-secret}
+  S3_BUCKET: ${S3_BUCKET:-yunpan}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_SECURE: "false"
+  S3_PUBLIC_SECURE: ${S3_PUBLIC_SECURE:-false}
+  S3_READ_URL_TTL: ${S3_READ_URL_TTL:-10m}
+  AUTH_SIGNING_SEED: ${AUTH_SIGNING_SEED:-bx-yunpan-development-signing-seed}
+  AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+  USER_DEFAULT_QUOTA_BYTES: ${USER_DEFAULT_QUOTA_BYTES:-10737418240}
+  UPLOAD_SESSION_TTL: ${UPLOAD_SESSION_TTL:-24h}
+  UPLOAD_PART_URL_TTL: ${UPLOAD_PART_URL_TTL:-15m}
+  UPLOAD_CLEANUP_INTERVAL: ${UPLOAD_CLEANUP_INTERVAL:-5m}
+  UPLOAD_CLEANUP_BATCH: ${UPLOAD_CLEANUP_BATCH:-100}
+  OUTBOX_POLL_INTERVAL: ${OUTBOX_POLL_INTERVAL:-1s}
+  OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-20}
+  OUTBOX_TASK_MAX_RETRY: ${OUTBOX_TASK_MAX_RETRY:-8}
+  OUTBOX_TASK_TIMEOUT: ${OUTBOX_TASK_TIMEOUT:-30m}
+  OBJECT_GC_DELAY: ${OBJECT_GC_DELAY:-24h}
+  WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-8}
+  WORKER_QUEUE_AI: ${WORKER_QUEUE_AI:-4}
+  WORKER_QUEUE_MEDIA: ${WORKER_QUEUE_MEDIA:-4}
+  WORKER_QUEUE_OBJECT: ${WORKER_QUEUE_OBJECT:-2}
+  WORKER_QUEUE_MAINTENANCE: ${WORKER_QUEUE_MAINTENANCE:-1}
+  AUTH_ISSUER: ${AUTH_ISSUER:-bx-yunpan}
+  SHARE_SECRET: ${SHARE_SECRET:-bx-yunpan-development-share-secret}
+  AUTH_ACCESS_TTL: ${AUTH_ACCESS_TTL:-15m}
+  AUTH_REFRESH_TTL: ${AUTH_REFRESH_TTL:-720h}
+  AUTH_COOKIE_DOMAIN: ${AUTH_COOKIE_DOMAIN:-}
+  SHARE_ACCESS_TTL: ${SHARE_ACCESS_TTL:-15m}
+  AI_PROVIDER: ${AI_PROVIDER:-fake}
+  DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+  AI_BASE_URL: ${AI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+  AI_CHAT_MODEL: ${AI_CHAT_MODEL:-qwen-plus}
+  AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-text-embedding-v4}
+  AI_VISION_MODEL: ${AI_VISION_MODEL:-qwen-vl-plus}
+  # migrations use vector(1024); deploy/up.sh rejects a mismatched value early
+  AI_EMBEDDING_DIMENSION: ${AI_EMBEDDING_DIMENSION:-1024}
+  AI_MAX_OBJECT_MIB: ${AI_MAX_OBJECT_MIB:-32}
+  AI_RATE_LIMIT_ENABLED: ${AI_RATE_LIMIT_ENABLED:-true}
+  AI_RATE_LIMIT_SEARCH_PER_MINUTE: ${AI_RATE_LIMIT_SEARCH_PER_MINUTE:-30}
+  AI_RATE_LIMIT_ASK_PER_MINUTE: ${AI_RATE_LIMIT_ASK_PER_MINUTE:-10}
+  AI_RATE_LIMIT_REPROCESS_PER_MINUTE: ${AI_RATE_LIMIT_REPROCESS_PER_MINUTE:-3}
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-yunpan}
+      POSTGRES_USER: ${POSTGRES_USER:-yunpan}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-yunpan}
+    ports:
+      - "${INFRA_BIND_IP:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.10-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${INFRA_BIND_IP:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-yunpan}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-yunpan-dev-secret}
+    ports:
+      - "${INFRA_BIND_IP:-127.0.0.1}:${MINIO_PORT:-9000}:9000"
+      - "${INFRA_BIND_IP:-127.0.0.1}:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-yunpan}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-yunpan-dev-secret}
+      S3_BUCKET: ${S3_BUCKET:-yunpan}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" &&
+        mc mb --ignore-existing "local/$${S3_BUCKET}" &&
+        mc anonymous set none "local/$${S3_BUCKET}"
+    restart: "no"
+
+  migrate:
+    profiles: ["app"]
+    image: bx-yunpan-migrate:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args:
+        GO_VERSION: ${GO_VERSION:-1.25.13}
+        TARGET: migrate
+    command: ["up"]
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    profiles: ["app"]
+    image: bx-yunpan-api:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args:
+        GO_VERSION: ${GO_VERSION:-1.25.13}
+        TARGET: api
+    environment:
+      <<: *app-environment
+      HTTP_ADDR: :8081
+    ports:
+      - "${APP_BIND_IP:-127.0.0.1}:${API_PORT:-8081}:8081"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8081/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 15s
+
+  worker:
+    profiles: ["app"]
+    image: bx-yunpan-worker:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args:
+        GO_VERSION: ${GO_VERSION:-1.25.13}
+        TARGET: worker
+    environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+  web:
+    profiles: ["app"]
+    image: bx-yunpan-web:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../picture_bed
+      args:
+        NODE_VERSION: ${NODE_VERSION:-22.23.0}
+    ports:
+      - "${APP_BIND_IP:-127.0.0.1}:${WEB_PORT:-3000}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  otel-collector:
+    profiles: ["observability"]
+    image: otel/opentelemetry-collector:0.158.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel/config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:13133:13133"
+    restart: unless-stopped
+
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v3.13.2
+    command: ["--config.file=/etc/prometheus/prometheus.yaml", "--storage.tsdb.retention.time=3d"]
+    volumes:
+      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:13.1.3
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  prometheus-data:
+  grafana-data:

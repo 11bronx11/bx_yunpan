@@ -1,0 +1,1659 @@
+openapi: 3.0.3
+info:
+  title: BX YunPan API
+  version: 0.1.0
+  description: |
+    Contract-first API for the Go backend of BX YunPan.
+    Large file bytes are transferred directly between the browser and S3-compatible storage.
+  license:
+    name: MIT
+    url: https://opensource.org/license/mit
+servers:
+  - url: /
+    description: Current origin behind the deployment proxy
+tags:
+  - name: Auth
+    description: Registration, login, refresh rotation, and logout
+  - name: Users
+    description: Current-user profile and quota
+  - name: Drive
+    description: Folder and logical file operations
+  - name: Uploads
+    description: Multipart upload control plane
+  - name: Shares
+    description: Share keys, public access, and logical import
+  - name: Search
+    description: Permission-aware name, full-text, vector, and hybrid search
+  - name: AI
+    description: File understanding and grounded question answering
+  - name: Operations
+    description: Liveness, readiness, and telemetry endpoints
+security:
+  - bearerAuth: []
+paths:
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a user
+      operationId: registerUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Logged in; the refresh token is set as an HttpOnly cookie
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate a refresh session
+      operationId: refreshSession
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Origin'
+      responses:
+        '200':
+          description: Access token refreshed and refresh cookie rotated
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke the current refresh session
+      operationId: logout
+      parameters:
+        - $ref: '#/components/parameters/Origin'
+      responses:
+        '204':
+          description: Logged out
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/users/me:
+    get:
+      tags: [Users]
+      summary: Get the current user
+      operationId: getCurrentUser
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/users/me/quota:
+    get:
+      tags: [Users]
+      summary: Get storage quota
+      operationId: getCurrentUserQuota
+      responses:
+        '200':
+          description: Quota usage
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quota'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/folders/root:
+    get:
+      tags: [Drive]
+      summary: Get the stable root folder
+      operationId: getRootFolder
+      responses:
+        '200':
+          description: Root folder
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Folder'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/folders/{folderId}/children:
+    get:
+      tags: [Drive]
+      summary: List folder children
+      operationId: listFolderChildren
+      parameters:
+        - $ref: '#/components/parameters/FolderId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Folder children
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriveItemPage'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/folders:
+    post:
+      tags: [Drive]
+      summary: Create a folder
+      operationId: createFolder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFolderRequest'
+      responses:
+        '201':
+          description: Folder created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Folder'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /api/v1/folders/{folderId}:
+    patch:
+      tags: [Drive]
+      summary: Rename a folder
+      operationId: updateFolder
+      parameters:
+        - $ref: '#/components/parameters/FolderId'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenameRequest'
+      responses:
+        '200':
+          description: Folder updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Folder'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Drive]
+      summary: Delete an empty folder
+      operationId: deleteFolder
+      parameters:
+        - $ref: '#/components/parameters/FolderId'
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: Empty folder deleted
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/folders/{folderId}/move:
+    post:
+      tags: [Drive]
+      summary: Move a folder
+      operationId: moveFolder
+      parameters:
+        - $ref: '#/components/parameters/FolderId'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveRequest'
+      responses:
+        '200':
+          description: Folder moved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Folder'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /api/v1/folders/{folderId}/breadcrumb:
+    get:
+      tags: [Drive]
+      summary: Get the path from root to a folder
+      operationId: getFolderBreadcrumb
+      parameters:
+        - $ref: '#/components/parameters/FolderId'
+      responses:
+        '200':
+          description: Ordered root-to-folder path
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Breadcrumb'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/files/{fileId}:
+    get:
+      tags: [Drive]
+      summary: Get file metadata
+      operationId: getFile
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: File metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileEntry'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Drive]
+      summary: Rename a file
+      operationId: updateFile
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenameRequest'
+      responses:
+        '200':
+          description: File updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileEntry'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [Drive]
+      summary: Delete a file entry
+      operationId: deleteFile
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: File entry deleted
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/files/{fileId}/move:
+    post:
+      tags: [Drive]
+      summary: Move a file
+      operationId: moveFile
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveRequest'
+      responses:
+        '200':
+          description: File moved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileEntry'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/files/{fileId}/download-url:
+    get:
+      tags: [Drive]
+      summary: Create a short-lived download URL
+      operationId: createFileDownloadUrl
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: Authorized download URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PresignedUrl'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/files/{fileId}/preview:
+    get:
+      tags: [Drive]
+      summary: Get preview metadata and URL
+      operationId: getFilePreview
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: Preview information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Preview'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/uploads:
+    get:
+      tags: [Uploads]
+      summary: List resumable upload sessions for the current user
+      operationId: listActiveUploads
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active]
+            default: active
+      responses:
+        '200':
+          description: Active upload sessions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadSessionList'
+    post:
+      tags: [Uploads]
+      summary: Create an upload session or complete an instant upload
+      operationId: createUpload
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUploadRequest'
+      responses:
+        '201':
+          description: Instant upload or multipart session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateUploadResponse'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /api/v1/uploads/{uploadId}:
+    get:
+      tags: [Uploads]
+      summary: Get an upload session
+      operationId: getUpload
+      parameters:
+        - $ref: '#/components/parameters/UploadId'
+      responses:
+        '200':
+          description: Upload session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadSession'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Uploads]
+      summary: Abort an upload session
+      operationId: abortUpload
+      parameters:
+        - $ref: '#/components/parameters/UploadId'
+      responses:
+        '204':
+          description: Upload aborted or already terminal
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/uploads/{uploadId}/parts/presign:
+    post:
+      tags: [Uploads]
+      summary: Presign upload part URLs
+      operationId: presignUploadParts
+      parameters:
+        - $ref: '#/components/parameters/UploadId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PresignPartsRequest'
+      responses:
+        '200':
+          description: Presigned part URLs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PresignPartsResponse'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/uploads/{uploadId}/parts/confirm:
+    post:
+      tags: [Uploads]
+      summary: Confirm uploaded parts
+      operationId: confirmUploadParts
+      parameters:
+        - $ref: '#/components/parameters/UploadId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmPartsRequest'
+      responses:
+        '200':
+          description: Parts recorded idempotently
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadSession'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/uploads/{uploadId}/complete:
+    post:
+      tags: [Uploads]
+      summary: Complete multipart upload and start strong verification
+      operationId: completeUpload
+      parameters:
+        - $ref: '#/components/parameters/UploadId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Upload is verifying or already completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadSession'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/shares:
+    get:
+      tags: [Shares]
+      summary: List shares created by the current user
+      operationId: listShares
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Shares
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharePage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Shares]
+      summary: Create a share
+      operationId: createShare
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateShareRequest'
+      responses:
+        '201':
+          description: Share created; share_key is returned only in this response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateShareResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /api/v1/shares/{shareId}:
+    get:
+      tags: [Shares]
+      summary: Get a share owned by the current user
+      operationId: getShare
+      parameters:
+        - $ref: '#/components/parameters/ShareId'
+      responses:
+        '200':
+          description: Share
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Share'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Shares]
+      summary: Revoke a share
+      operationId: revokeShare
+      parameters:
+        - $ref: '#/components/parameters/ShareId'
+      responses:
+        '204':
+          description: Share revoked
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/public/shares/resolve:
+    post:
+      tags: [Shares]
+      summary: Resolve a share key
+      operationId: resolveShare
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveShareRequest'
+      responses:
+        '200':
+          description: Short-lived share access token and public metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveShareResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/public/shares/content:
+    get:
+      tags: [Shares]
+      summary: Get public share content
+      operationId: getPublicShareContent
+      security:
+        - shareToken: []
+      responses:
+        '200':
+          description: Authorized shared content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicShareContent'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/shares/{shareId}/import:
+    post:
+      tags: [Shares]
+      summary: Import a share into the current user's drive
+      operationId: importShare
+      security:
+        - bearerAuth: []
+          shareToken: []
+      parameters:
+        - $ref: '#/components/parameters/ShareId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportShareRequest'
+      responses:
+        '201':
+          description: Share imported or prior idempotent result returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportShareResponse'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/search:
+    post:
+      tags: [Search]
+      summary: Search authorized files and chunks
+      description: |
+        Searches only files visible to the authenticated user. Name mode ranks exact and
+        prefix matches ahead of fuzzy matches. Hybrid mode combines PostgreSQL full-text
+        and pgvector semantic rankings with Reciprocal Rank Fusion. Results default to the
+        20 highest-ranked files and contain at most three evidence excerpts per file.
+      operationId: search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/files/{fileId}/ai:
+    get:
+      tags: [AI]
+      summary: Get AI indexing status and summary for a file
+      operationId: getFileAI
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: AI document state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIDocument'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/files/{fileId}/ai/reprocess:
+    post:
+      tags: [AI]
+      summary: Request file AI reprocessing
+      operationId: reprocessFileAI
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: AI task accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /api/v1/ai/ask:
+    post:
+      tags: [AI]
+      summary: Ask a question over authorized files
+      description: |
+        Retrieves at most eight authorized evidence chunks, with at most two chunks from
+        each file. The model returns a structured grounding decision and evidence IDs;
+        the backend removes duplicate or unknown IDs before exposing citations. When the
+        available evidence does not support an answer, citations is an empty array.
+      operationId: askFiles
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AskRequest'
+      responses:
+        '200':
+          description: Answer grounded in authorized chunks
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AskResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/ai/jobs/{taskId}:
+    get:
+      tags: [AI]
+      summary: Get an AI task
+      operationId: getAIJob
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: AI task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /health/live:
+    get:
+      tags: [Operations]
+      summary: Check process liveness
+      operationId: getLiveness
+      security: []
+      responses:
+        '200':
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /health/ready:
+    get:
+      tags: [Operations]
+      summary: Check dependency readiness
+      operationId: getReadiness
+      security: []
+      responses:
+        '200':
+          description: Required dependencies are ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: A required dependency is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /metrics:
+    get:
+      tags: [Operations]
+      summary: Export Prometheus metrics
+      operationId: getMetrics
+      security: []
+      responses:
+        '200':
+          description: Prometheus text exposition
+          content:
+            text/plain:
+              schema:
+                type: string
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /openapi.yaml:
+    get:
+      tags: [Operations]
+      summary: Get the OpenAPI contract
+      operationId: getOpenAPIContract
+      security: []
+      responses:
+        '200':
+          description: OpenAPI YAML document
+          content:
+            application/yaml:
+              schema:
+                type: string
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /docs:
+    get:
+      tags: [Operations]
+      summary: Get interactive API documentation
+      operationId: getAPIDocs
+      security: []
+      responses:
+        '200':
+          description: Interactive API documentation
+          content:
+            text/html:
+              schema:
+                type: string
+        '403':
+          $ref: '#/components/responses/Forbidden'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    shareToken:
+      type: apiKey
+      in: header
+      name: X-Share-Token
+  parameters:
+    FolderId:
+      name: folderId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/UUID'
+    FileId:
+      name: fileId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/UUID'
+    UploadId:
+      name: uploadId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/UUID'
+    ShareId:
+      name: shareId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/UUID'
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/UUID'
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+        maxLength: 512
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+    Sort:
+      name: sort
+      in: query
+      schema:
+        type: string
+        enum: [name_asc, name_desc, updated_desc, size_desc]
+        default: name_asc
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: Current numeric resource version
+      schema:
+        type: string
+        pattern: '^[0-9]+$'
+    Origin:
+      name: Origin
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uri
+  responses:
+    Unauthorized:
+      description: Authentication or token validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Forbidden:
+      description: The deployment access policy denied this request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: Resource is absent or not visible to the current principal
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Conflict:
+      description: Resource state, version, name, or idempotency conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    TooManyRequests:
+      description: Rate or quota limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ServiceUnavailable:
+      description: AI provider or required upstream service is unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  schemas:
+    UUID:
+      type: string
+      format: uuid
+      example: 0198a1f0-7b2a-7000-8000-000000000001
+    NullableUUID:
+      type: string
+      format: uuid
+      nullable: true
+    Timestamp:
+      type: string
+      format: date-time
+    NullableTimestamp:
+      type: string
+      format: date-time
+      nullable: true
+    ErrorEnvelope:
+      type: object
+      required: [error, request_id]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: upload.hash_mismatch
+            message:
+              type: string
+            details:
+              type: object
+              additionalProperties: true
+        request_id:
+          type: string
+    PageInfo:
+      type: object
+      required: [has_more]
+      properties:
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    User:
+      type: object
+      required: [id, username, status, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/UUID'
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+          nullable: true
+        status:
+          type: string
+          enum: [active, disabled]
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+    Quota:
+      type: object
+      required: [quota_bytes, used_logical_bytes, reserved_bytes]
+      properties:
+        quota_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+        used_logical_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+        reserved_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+    RegisterRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 64
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          minLength: 10
+          maxLength: 128
+      additionalProperties: false
+    LoginRequest:
+      type: object
+      required: [login, password]
+      properties:
+        login:
+          type: string
+          maxLength: 254
+        password:
+          type: string
+          format: password
+          maxLength: 128
+      additionalProperties: false
+    AuthResponse:
+      type: object
+      required: [access_token, expires_in, user]
+      properties:
+        access_token:
+          type: string
+          writeOnly: true
+        token_type:
+          type: string
+          enum: [Bearer]
+          default: Bearer
+        expires_in:
+          type: integer
+          minimum: 1
+        user:
+          $ref: '#/components/schemas/User'
+    Folder:
+      type: object
+      required: [type, id, owner_id, name, version, created_at, updated_at]
+      properties:
+        type:
+          type: string
+          enum: [folder]
+        id:
+          $ref: '#/components/schemas/UUID'
+        owner_id:
+          $ref: '#/components/schemas/UUID'
+        parent_id:
+          $ref: '#/components/schemas/NullableUUID'
+        name:
+          type: string
+        version:
+          type: integer
+          format: int64
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+        updated_at:
+          $ref: '#/components/schemas/Timestamp'
+    FileEntry:
+      type: object
+      required: [type, id, owner_id, folder_id, object_id, name, size_bytes, mime_type, version, created_at, updated_at]
+      properties:
+        type:
+          type: string
+          enum: [file]
+        id:
+          $ref: '#/components/schemas/UUID'
+        owner_id:
+          $ref: '#/components/schemas/UUID'
+        folder_id:
+          $ref: '#/components/schemas/UUID'
+        object_id:
+          $ref: '#/components/schemas/UUID'
+        name:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+        mime_type:
+          type: string
+        thumbnail_url:
+          type: string
+          format: uri
+          nullable: true
+        ai_status:
+          type: string
+          enum: [pending, processing, indexed, failed, unsupported]
+          nullable: true
+        version:
+          type: integer
+          format: int64
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+        updated_at:
+          $ref: '#/components/schemas/Timestamp'
+    DriveItem:
+      oneOf:
+        - $ref: '#/components/schemas/Folder'
+        - $ref: '#/components/schemas/FileEntry'
+      discriminator:
+        propertyName: type
+    DriveItemPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DriveItem'
+        page:
+          $ref: '#/components/schemas/PageInfo'
+    Breadcrumb:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Folder'
+    CreateFolderRequest:
+      type: object
+      required: [parent_id, name]
+      properties:
+        parent_id:
+          $ref: '#/components/schemas/UUID'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+      additionalProperties: false
+    RenameRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+      additionalProperties: false
+    MoveRequest:
+      type: object
+      required: [target_folder_id]
+      properties:
+        target_folder_id:
+          $ref: '#/components/schemas/UUID'
+      additionalProperties: false
+    PresignedUrl:
+      type: object
+      required: [url, expires_at]
+      properties:
+        url:
+          type: string
+          format: uri
+        expires_at:
+          $ref: '#/components/schemas/Timestamp'
+    Preview:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [image, text, pdf, unsupported, processing]
+        url:
+          type: string
+          format: uri
+          nullable: true
+        expires_at:
+          $ref: '#/components/schemas/NullableTimestamp'
+        width:
+          type: integer
+          nullable: true
+        height:
+          type: integer
+          nullable: true
+    CreateUploadRequest:
+      type: object
+      required: [folder_id, filename, sha256, size_bytes, mime_type]
+      properties:
+        folder_id:
+          $ref: '#/components/schemas/UUID'
+        filename:
+          type: string
+          minLength: 1
+          maxLength: 255
+        sha256:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+        mime_type:
+          type: string
+          maxLength: 255
+      additionalProperties: false
+    UploadSession:
+      type: object
+      required: [id, status, folder_id, filename, sha256, size_bytes, part_size, part_count, confirmed_parts, expires_at, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/UUID'
+        status:
+          type: string
+          enum: [created, uploading, verifying, completed, failed, aborted, expired]
+        folder_id:
+          $ref: '#/components/schemas/UUID'
+        filename:
+          type: string
+        sha256:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        part_size:
+          type: integer
+          format: int64
+        part_count:
+          type: integer
+        confirmed_parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfirmedUploadPart'
+        completed_object_id:
+          $ref: '#/components/schemas/NullableUUID'
+        completed_entry_id:
+          $ref: '#/components/schemas/NullableUUID'
+        error_code:
+          type: string
+          nullable: true
+        expires_at:
+          $ref: '#/components/schemas/Timestamp'
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+    ConfirmedUploadPart:
+      type: object
+      required: [part_number, size_bytes, completed_at]
+      properties:
+        part_number:
+          type: integer
+        size_bytes:
+          type: integer
+          format: int64
+        completed_at:
+          $ref: '#/components/schemas/Timestamp'
+    UploadSessionList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/UploadSession'
+    CreateUploadResponse:
+      oneOf:
+        - $ref: '#/components/schemas/InstantUploadResponse'
+        - $ref: '#/components/schemas/MultipartUploadResponse'
+      discriminator:
+        propertyName: mode
+    InstantUploadResponse:
+      type: object
+      required: [mode, file]
+      properties:
+        mode:
+          type: string
+          enum: [instant]
+        file:
+          $ref: '#/components/schemas/FileEntry'
+    MultipartUploadResponse:
+      type: object
+      required: [mode, upload]
+      properties:
+        mode:
+          type: string
+          enum: [multipart]
+        upload:
+          $ref: '#/components/schemas/UploadSession'
+    PresignPartsRequest:
+      type: object
+      required: [part_numbers]
+      properties:
+        part_numbers:
+          type: array
+          minItems: 1
+          maxItems: 20
+          uniqueItems: true
+          items:
+            type: integer
+            minimum: 1
+            maximum: 10000
+      additionalProperties: false
+    PresignedPart:
+      type: object
+      required: [part_number, url, expires_at]
+      properties:
+        part_number:
+          type: integer
+        url:
+          type: string
+          format: uri
+        expires_at:
+          $ref: '#/components/schemas/Timestamp'
+    PresignPartsResponse:
+      type: object
+      required: [parts]
+      properties:
+        parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/PresignedPart'
+    ConfirmedPart:
+      type: object
+      required: [part_number, etag, size_bytes]
+      properties:
+        part_number:
+          type: integer
+          minimum: 1
+        etag:
+          type: string
+          maxLength: 256
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+        checksum:
+          type: string
+          nullable: true
+    ConfirmPartsRequest:
+      type: object
+      required: [parts]
+      properties:
+        parts:
+          type: array
+          minItems: 1
+          maxItems: 10000
+          items:
+            $ref: '#/components/schemas/ConfirmedPart'
+      additionalProperties: false
+    Share:
+      type: object
+      required: [id, file_id, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/UUID'
+        file_id:
+          $ref: '#/components/schemas/UUID'
+        expires_at:
+          $ref: '#/components/schemas/NullableTimestamp'
+        revoked_at:
+          $ref: '#/components/schemas/NullableTimestamp'
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+    SharePage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Share'
+        page:
+          $ref: '#/components/schemas/PageInfo'
+    CreateShareRequest:
+      type: object
+      required: [file_id]
+      properties:
+        file_id:
+          $ref: '#/components/schemas/UUID'
+        expires_at:
+          $ref: '#/components/schemas/Timestamp'
+      additionalProperties: false
+    CreateShareResponse:
+      type: object
+      required: [share, share_key]
+      properties:
+        share:
+          $ref: '#/components/schemas/Share'
+        share_key:
+          type: string
+          minLength: 22
+          writeOnly: true
+    ResolveShareRequest:
+      type: object
+      required: [share_key]
+      properties:
+        share_key:
+          type: string
+          minLength: 22
+      additionalProperties: false
+    PublicShare:
+      type: object
+      required: [id, owner_display_name, file_name, size_bytes, mime_type, expires_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/UUID'
+        owner_display_name:
+          type: string
+        file_name:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        mime_type:
+          type: string
+        expires_at:
+          $ref: '#/components/schemas/NullableTimestamp'
+    ResolveShareResponse:
+      type: object
+      required: [share_access_token, expires_in, share]
+      properties:
+        share_access_token:
+          type: string
+          writeOnly: true
+        expires_in:
+          type: integer
+          minimum: 1
+        share:
+          $ref: '#/components/schemas/PublicShare'
+    PublicShareContent:
+      type: object
+      required: [share, preview]
+      properties:
+        share:
+          $ref: '#/components/schemas/PublicShare'
+        preview:
+          $ref: '#/components/schemas/Preview'
+    ImportShareRequest:
+      type: object
+      required: [target_folder_id]
+      properties:
+        target_folder_id:
+          $ref: '#/components/schemas/UUID'
+      additionalProperties: false
+    ImportShareResponse:
+      type: object
+      required: [share_id, imported_file]
+      properties:
+        share_id:
+          $ref: '#/components/schemas/UUID'
+        imported_file:
+          $ref: '#/components/schemas/FileEntry'
+    SearchRequest:
+      type: object
+      description: Search defaults to the 20 highest-ranked matching files.
+      required: [query, mode]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        mode:
+          type: string
+          enum: [name, fulltext, semantic, hybrid]
+          description: Name search is exact/prefix/fuzzy ranked; hybrid uses full-text and vector RRF.
+        folder_id:
+          $ref: '#/components/schemas/NullableUUID'
+        include_subfolders:
+          type: boolean
+          default: true
+        mime_types:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+      additionalProperties: false
+    Citation:
+      type: object
+      required: [id, file_id, file_name, excerpt]
+      properties:
+        id:
+          type: string
+        file_id:
+          $ref: '#/components/schemas/UUID'
+        file_name:
+          type: string
+        page_number:
+          type: integer
+          nullable: true
+        section:
+          type: string
+          nullable: true
+        excerpt:
+          type: string
+    SearchHit:
+      type: object
+      required: [file, score, match_type, citations]
+      properties:
+        file:
+          $ref: '#/components/schemas/FileEntry'
+        score:
+          type: number
+          format: double
+        match_type:
+          type: string
+          enum: [name, fulltext, semantic, hybrid]
+        citations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Citation'
+    SearchResponse:
+      type: object
+      required: [hits, page]
+      properties:
+        hits:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchHit'
+        page:
+          $ref: '#/components/schemas/PageInfo'
+    AIDocument:
+      type: object
+      required: [file_id, status, pipeline_version, model_version]
+      properties:
+        file_id:
+          $ref: '#/components/schemas/UUID'
+        status:
+          type: string
+          enum: [pending, processing, indexed, failed, unsupported]
+        summary:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+        language:
+          type: string
+          nullable: true
+        pipeline_version:
+          type: string
+        model_version:
+          type: string
+        error_code:
+          type: string
+          nullable: true
+    AskRequest:
+      type: object
+      required: [question]
+      properties:
+        question:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        folder_id:
+          $ref: '#/components/schemas/NullableUUID'
+        file_ids:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/UUID'
+      additionalProperties: false
+    AskResponse:
+      type: object
+      required: [answer, citations]
+      description: Citations contain only model-selected evidence IDs validated against the retrieved authorized chunks.
+      properties:
+        answer:
+          type: string
+        citations:
+          type: array
+          description: Empty when the answer is not grounded in the retrieved evidence.
+          items:
+            $ref: '#/components/schemas/Citation'
+    Task:
+      type: object
+      required: [id, task_type, status, progress, attempt, created_at, updated_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/UUID'
+        task_type:
+          type: string
+        resource_type:
+          type: string
+          nullable: true
+        resource_id:
+          $ref: '#/components/schemas/NullableUUID'
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed, canceled]
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        attempt:
+          type: integer
+          minimum: 0
+        error_code:
+          type: string
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+        updated_at:
+          $ref: '#/components/schemas/Timestamp'
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, unavailable]
+        checks:
+          type: object
+          additionalProperties:
+            type: string

@@ -1,0 +1,4 @@
+BEGIN;
+DROP TABLE IF EXISTS ai_chunks;
+DROP TABLE IF EXISTS ai_documents;
+COMMIT;
