@@ -30,6 +30,10 @@ done
 command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "Docker Compose v2 is required" >&2; exit 1; }
 
+# shellcheck disable=SC1091
+source "$deploy_dir/common.sh"
+yunpan_assert_compose_owner "$deploy_dir"
+
 if [[ ! -f "$env_file" ]]; then
   "$deploy_dir/init-env.sh"
 fi

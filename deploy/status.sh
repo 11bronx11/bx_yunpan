@@ -4,6 +4,13 @@ set -euo pipefail
 deploy_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 env_file="$deploy_dir/.env"
 
+command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
+docker compose version >/dev/null 2>&1 || { echo "Docker Compose v2 is required" >&2; exit 1; }
+
+# shellcheck disable=SC1091
+source "$deploy_dir/common.sh"
+yunpan_assert_compose_owner "$deploy_dir"
+
 [[ -f "$env_file" ]] || { echo "Missing $env_file; run ./deploy/init-env.sh first." >&2; exit 1; }
 
 docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app --profile observability ps
@@ -20,4 +27,6 @@ probe_ip=$bind_ip
 [[ "$probe_ip" == "0.0.0.0" ]] && probe_ip=127.0.0.1
 curl -fsS "http://${probe_ip}:${api_port}/health/ready" && echo
 curl -fsS -o /dev/null -w "web: HTTP %{http_code}\n" "http://${probe_ip}:${web_port}/healthz"
+curl -fsS -o /dev/null -w "web -> api: HTTP %{http_code}\n" "http://${probe_ip}:${web_port}/readyz"
+curl -fsS -o /dev/null -w "web -> storage: HTTP %{http_code}\n" "http://${probe_ip}:${web_port}/storage-healthz"
 "$deploy_dir/config-check.sh"

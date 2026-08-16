@@ -59,10 +59,42 @@ API 保持无状态，文件内容使用对象存储承载，异步任务通过�
 - 首次构建建议至少保留 `6GB` 磁盘空间
 - 支持 `amd64` 和 `arm64`
 
-首次启动：
+### 从 GitHub 拉取后运行
+
+直接体验完整网盘功能：
+
+```bash
+git clone https://github.com/11bronx11/bx_yunpan.git
+cd bx_yunpan
+./deploy/up.sh
+```
+
+首次执行时，`up.sh` 会自动生成 `deploy/.env`、构建业务镜像并启动全部服务。默认使用 `AI_PROVIDER=fake`，不需要外部密钥，适合先验证上传、目录、分享和检索流程。启动完成后访问 `http://127.0.0.1:3000`，再执行下面的命令确认所有链路正常：
+
+```bash
+./deploy/status.sh
+```
+
+需要使用真实 AI 索引、语义检索和 RAG 问答时，建议在第一次启动前完成配置：
+
+```bash
+git clone https://github.com/11bronx11/bx_yunpan.git
+cd bx_yunpan
+./deploy/init-env.sh
+```
+
+编辑 `deploy/.env`，至少修改以下两项，不要把该文件或密钥提交到 Git：
+
+```env
+AI_PROVIDER=dashscope
+DASHSCOPE_API_KEY=你的阿里云百炼 API Key
+```
+
+然后执行：
 
 ```bash
 ./deploy/up.sh
+./deploy/status.sh
 ```
 
 脚本会自动执行以下步骤：
@@ -74,11 +106,15 @@ API 保持无状态，文件内容使用对象存储承载，异步任务通过�
 5. 执行数据库迁移。
 6. 启动 API、Worker、Web，等待健康检查通过。
 
-本机空间低于 `6GB` 时脚本会拒绝构建，避免中途写满磁盘。已经存在应用镜像时可以跳过构建：
+本机空间低于 `6GB` 时脚本会拒绝构建，避免中途写满磁盘。首次启动或者拉取了新的 Go、React、Dockerfile、Compose、Nginx 代码后，应执行完整的 `./deploy/up.sh`。
+
+只有业务镜像已经存在，并且仅修改了 `deploy/.env` 配置时，才使用下面的命令跳过构建：
 
 ```bash
 ./deploy/up.sh --no-build
 ```
+
+`--no-build` 仍会根据 `deploy/.env` 重建需要更新配置的容器，但不会重新编译源码；全新环境不能使用该参数。
 
 同时启动 Prometheus、Grafana 和 OpenTelemetry Collector：
 
@@ -100,7 +136,7 @@ API 保持无状态，文件内容使用对象存储承载，异步任务通过�
 ### 运维命令
 
 ```bash
-# 查看容器状态和健康探针
+# 查看容器状态，并检查 Web、API 和对象存储代理链路
 ./deploy/status.sh
 
 # 单独检查运行容器是否与 deploy/.env 一致

@@ -13,5 +13,8 @@ LABEL org.opencontainers.image.title="BX YunPan Web" \
 COPY nginx-app.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/build /usr/share/nginx/html
 EXPOSE 80
-HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=6 \
-  CMD wget -q -O - http://127.0.0.1/healthz || exit 1
+HEALTHCHECK --interval=10s --timeout=8s --start-period=5s --retries=6 \
+  CMD wget -q -O /dev/null http://127.0.0.1/healthz \
+    && wget -q -O /dev/null http://127.0.0.1/readyz \
+    && wget -q -O /dev/null http://127.0.0.1/storage-healthz \
+    || exit 1
