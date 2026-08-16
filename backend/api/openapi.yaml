@@ -421,7 +421,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/CreateUploadResponse'
         '409':
-          $ref: '#/components/responses/Conflict'
+          description: >-
+            Upload rejected with upload.name_conflict when the target folder already contains
+            the filename, or upload.file_exists when the user already owns the same content.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '422':
           $ref: '#/components/responses/ValidationError'
   /api/v1/uploads/{uploadId}:
@@ -1236,7 +1242,7 @@ components:
         size_bytes:
           type: integer
           format: int64
-          minimum: 0
+          minimum: 1
         mime_type:
           type: string
           maxLength: 255

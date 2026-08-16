@@ -23,14 +23,17 @@ random_secret() {
 }
 
 umask 077
-if command -v docker >/dev/null 2>&1 && docker volume inspect bx-yunpan_postgres-data >/dev/null 2>&1; then
-  postgres_password=yunpan
-  minio_password=yunpan-dev-secret
-  echo "Existing bx-yunpan volumes detected; preserving the original local storage credentials."
-else
-  postgres_password=$(random_secret)
-  minio_password=$(random_secret)
+if command -v docker >/dev/null 2>&1; then
+  for volume in bx-yunpan_postgres-data bx-yunpan_minio-data; do
+    if docker volume inspect "$volume" >/dev/null 2>&1; then
+      echo "Cannot create a new .env while bx-yunpan data volumes already exist." >&2
+      echo "Restore the original deploy/.env or remove the data volumes explicitly." >&2
+      exit 1
+    fi
+  done
 fi
+postgres_password=$(random_secret)
+minio_password=$(random_secret)
 auth_seed=$(random_secret)
 share_secret=$(random_secret)
 grafana_password=$(random_secret)

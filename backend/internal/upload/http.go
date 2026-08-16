@@ -183,6 +183,8 @@ func (h *HTTP) writeError(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, httpapi.ErrorEnvelope(c, "upload.not_found", "upload not found"))
 	case errors.Is(err, ErrQuotaExceeded):
 		c.JSON(http.StatusTooManyRequests, httpapi.ErrorEnvelope(c, "quota.exceeded", "storage quota exceeded"))
+	case errors.Is(err, ErrNameConflict):
+		c.JSON(http.StatusConflict, httpapi.ErrorEnvelope(c, "upload.name_conflict", "file name already exists in folder"))
 	case errors.Is(err, ErrFileExists), errors.Is(err, drive.ErrConflict):
 		c.JSON(http.StatusConflict, httpapi.ErrorEnvelope(c, "upload.file_exists", "file already exists in drive"))
 	case errors.Is(err, ErrConflict):

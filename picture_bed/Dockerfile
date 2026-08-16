@@ -1,14 +1,13 @@
-# syntax=docker/dockerfile:1.7
-
+ARG DOCKER_REGISTRY=docker.io
 ARG NODE_VERSION=22.23.0
-FROM node:${NODE_VERSION}-alpine AS build
+FROM ${DOCKER_REGISTRY}/library/node:${NODE_VERSION}-alpine AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
 
-FROM nginx:1.29-alpine
+FROM ${DOCKER_REGISTRY}/library/nginx:1.29-alpine
 LABEL org.opencontainers.image.title="BX YunPan Web" \
       org.opencontainers.image.description="React web application and same-origin API/object-storage proxy for BX YunPan"
 COPY nginx-app.conf /etc/nginx/conf.d/default.conf

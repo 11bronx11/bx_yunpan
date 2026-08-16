@@ -74,8 +74,22 @@ if [[ "$ai_dimension" != "1024" ]]; then
   exit 1
 fi
 
+s3_public_path_prefix=$(env_value S3_PUBLIC_PATH_PREFIX)
+s3_public_path_prefix=${s3_public_path_prefix:-/storage}
+if [[ "$s3_public_path_prefix" != "/storage" ]]; then
+  echo "S3_PUBLIC_PATH_PREFIX must be /storage for the bundled Web proxy." >&2
+  exit 1
+fi
+
+s3_secure=$(env_value S3_SECURE)
+s3_secure=${s3_secure:-false}
+if [[ "$s3_secure" != "false" ]]; then
+  echo "S3_SECURE must be false for the bundled MinIO service." >&2
+  exit 1
+fi
+
 if [[ "$build" == true ]]; then
-  min_free_gb=${YUNPAN_MIN_FREE_GB:-4}
+  min_free_gb=${YUNPAN_MIN_FREE_GB:-6}
   available_kb=$(df -Pk "$root_dir" | awk 'NR == 2 {print $4}')
   required_kb=$((min_free_gb * 1024 * 1024))
   if ((available_kb < required_kb)); then
@@ -96,8 +110,26 @@ if [[ "$build" == true ]]; then
   args+=(--build)
 fi
 
-docker compose "${args[@]}"
+max_attempts=${YUNPAN_UP_ATTEMPTS:-3}
+started=false
+for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+  if docker compose "${args[@]}"; then
+    started=true
+    break
+  fi
+  if ((attempt < max_attempts)); then
+    delay=$((attempt * 3))
+    echo "Compose startup attempt ${attempt}/${max_attempts} failed; retrying in ${delay}s." >&2
+    sleep "$delay"
+  fi
+done
+if [[ "$started" != true ]]; then
+  echo "Compose startup failed after ${max_attempts} attempts." >&2
+  exit 1
+fi
 
 web_port=$(awk -F= '$1 == "WEB_PORT" {print $2}' "$env_file" | tail -1)
 web_port=${web_port:-3000}
-echo "BX YunPan is ready: http://127.0.0.1:${web_port}"
+bind_ip=$(awk -F= '$1 == "APP_BIND_IP" {print $2}' "$env_file" | tail -1)
+bind_ip=${bind_ip:-127.0.0.1}
+echo "BX YunPan is ready: http://${bind_ip}:${web_port}"

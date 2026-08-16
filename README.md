@@ -9,13 +9,24 @@ BX YunPan 是一个 React 18 + Go Gin 的智能私有云盘。项目以网盘核
 - Ed25519 JWT Access Token、HttpOnly Refresh Cookie、Refresh 轮换和复用检测。
 - 用户目录树、面包屑、文件与目录移动、重命名、空目录安全删除和乐观锁版本控制。
 - MinIO/S3 Multipart 预签名直传、分片确认、暂停恢复、强 SHA-256 校验、配额预占和过期会话回收。
-- FileEntry 与 FileObject 分离，同用户秒传；跨用户只允许通过授权 Share Key 复用对象。
+- FileEntry 与 FileObject 分离，使用 SHA-256 + 文件大小进行内容寻址；同一用户全盘内容唯一，跨用户上传不暴露去重命中，授权 Share Key 可直接复用对象。
 - 图片缩略图、对象延迟 GC、Transactional Outbox 和 Redis/Asynq Worker。
-- TXT、Markdown、PDF、DOCX 文本抽取，以及 JPG/PNG 的可插拔 OCR/Vision Provider。
+- TXT、Markdown、常见源码/配置文件、PDF、DOCX 文本抽取，以及 JPG/PNG 的可插拔 OCR/Vision Provider；二进制 MIME 的源码可按文件名安全回退，并受控兼容 UTF-8 与 GB18030 文本。
 - 文件名精确、前缀和模糊匹配分级排序，PostgreSQL FTS + pgvector + Reciprocal Rank Fusion 混合检索。
 - RAG 最多选取 8 个证据片段、每文件最多 2 个；模型结构化返回 Grounded 判断和证据 ID，后端再按授权证据白名单校验 Citation。
 - 证据不足时保留模型回答但不附带无关引用；文件、段落和页码 Citation 始终受当前用户文件权限约束。
 - 结构化日志、Request ID、Prometheus 指标、存活和依赖就绪探针。
+
+### 文件能力边界
+
+| 能力 | 支持范围 |
+| --- | --- |
+| 上传与下载 | 任意非空文件，受用户剩余配额限制 |
+| 在线图片预览 | JPG、PNG、GIF、WebP |
+| AI 索引 | TXT、Markdown、JSON、CSV、常见源码/配置文件、PDF、DOCX、JPG、PNG |
+| AI 摘要 | 已成功建立 AI 索引的文档和源码文件 |
+
+同一目录不允许存在两个同名文件，即使内容不同也会返回 `upload.name_conflict`。同一用户上传不同名称但内容相同的文件时，不会创建重复条目，并返回 `upload.file_exists`。
 
 ## 架构
 
@@ -45,7 +56,7 @@ API 保持无状态，文件内容使用对象存储承载，异步任务通过�
 
 - Docker Engine 24+
 - Docker Compose v2
-- 首次构建建议至少保留 `4GB` 磁盘空间
+- 首次构建建议至少保留 `6GB` 磁盘空间
 - 支持 `amd64` 和 `arm64`
 
 首次启动：
@@ -63,7 +74,7 @@ API 保持无状态，文件内容使用对象存储承载，异步任务通过�
 5. 执行数据库迁移。
 6. 启动 API、Worker、Web，等待健康检查通过。
 
-本机空间低于 `4GB` 时脚本会拒绝构建，避免中途写满磁盘。已经存在应用镜像时可以跳过构建：
+本机空间低于 `6GB` 时脚本会拒绝构建，避免中途写满磁盘。已经存在应用镜像时可以跳过构建：
 
 ```bash
 ./deploy/up.sh --no-build
@@ -92,6 +103,9 @@ API 保持无状态，文件内容使用对象存储承载，异步任务通过�
 # 查看容器状态和健康探针
 ./deploy/status.sh
 
+# 单独检查运行容器是否与 deploy/.env 一致
+./deploy/config-check.sh
+
 # 跟踪 API、Worker、Web 和迁移日志
 ./deploy/logs.sh
 
@@ -115,41 +129,43 @@ API 保持无状态，文件内容使用对象存储承载，异步任务通过�
 要求 Go 1.25.13+、Node.js 22+ 和 Docker Compose v2。
 
 ```bash
-# 1. 基础设施（使用仓库内默认凭据模板）
-docker compose --env-file deploy/.env.example -f deploy/compose.yaml up -d postgres redis minio minio-init
+# 首次使用时生成 deploy/.env；之后 Docker 和宿主机开发都使用这一个文件
+./deploy/init-env.sh
 
-# 2. 数据库迁移
-cd backend
-go run ./cmd/migrate up
+# 1. 只启动基础设施，业务进程在宿主机运行
+./deploy/infra-up.sh
+
+# 2. 使用同一份配置执行数据库迁移
+./deploy/local-run.sh migrate up
 
 # 3. API
-go run ./cmd/api
+./deploy/local-run.sh api
 ```
 
 另开终端启动 Worker：
 
 ```bash
-cd backend
-go run ./cmd/worker
+./deploy/local-run.sh worker
 ```
 
 再启动前端：
 
 ```bash
-cd picture_bed
-npm ci
-npm start
+./deploy/local-frontend.sh
 ```
 
 开发服务器访问 `http://127.0.0.1:3000`。前端将 `/api` 代理到 `:8081`，将 `/storage` 代理到 MinIO `:9000`。
+`local-run.sh` 和 `local-frontend.sh` 会从 `deploy/.env` 派生宿主机地址；不要再为宿主机单独维护一份业务配置。宿主机 API/Worker 与 Docker 业务服务不能同时占用相同端口。
 
 ## 配置
 
-Compose 从 `deploy/.env` 读取配置。不要提交该文件；可参考 [deploy/.env.example](deploy/.env.example)。
+Docker Compose 和宿主机开发脚本都从 `deploy/.env` 读取配置。不要提交该文件；可参考 [deploy/.env.example](deploy/.env.example)。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `APP_ENV` | `development` | 使用 `production` 时必须替换签名密钥 |
+| `DOCKER_REGISTRY` | `docker.io` | Docker 基础镜像仓库；网络受限时可切换镜像代理 |
+| `GO_PROXY` | `https://proxy.golang.org,direct` | Go 模块下载代理；网络受限时可切换为可达镜像 |
 | `APP_BIND_IP` | `127.0.0.1` | Web/API 监听地址 |
 | `WEB_PORT` | `3000` | Web 对外端口 |
 | `API_PORT` | `8081` | API 对外端口 |
@@ -201,6 +217,7 @@ Compose 从 `deploy/.env` 读取配置。不要提交该文件；可参考 [depl
 | `AI_VISION_MODEL` | `qwen-vl-plus` | 图片理解/OCR 模型 |
 | `AI_EMBEDDING_DIMENSION` | `1024` | 向量维度，数据库列固定为 `vector(1024)` |
 | `AI_MAX_OBJECT_MIB` | `32` | AI 抽取单文件大小上限 |
+| `AI_REQUEST_TIMEOUT` | `90s` | 单次 AI Provider HTTP 请求超时 |
 | `AI_RATE_LIMIT_ENABLED` | `true` | 是否启用 AI 接口的用户级 Redis 限流 |
 | `AI_RATE_LIMIT_SEARCH_PER_MINUTE` | `30` | 每个用户每分钟搜索次数 |
 | `AI_RATE_LIMIT_ASK_PER_MINUTE` | `10` | 每个用户每分钟 AI 问答次数 |
@@ -251,13 +268,19 @@ DASHSCOPE_API_KEY=sk-...
 AI_CHAT_MODEL=qwen-plus
 AI_EMBEDDING_MODEL=text-embedding-v4
 AI_VISION_MODEL=qwen-vl-plus
+AI_REQUEST_TIMEOUT=90s
 AI_RATE_LIMIT_ENABLED=true
 AI_RATE_LIMIT_SEARCH_PER_MINUTE=30
 AI_RATE_LIMIT_ASK_PER_MINUTE=10
 AI_RATE_LIMIT_REPROCESS_PER_MINUTE=3
 ```
 
-修改 `deploy/.env` 后重新执行 `./deploy/up.sh --no-build` 即可重建容器配置。首次使用 Docker 部署时直接执行 `./deploy/up.sh`，脚本会生成带随机密钥的 `deploy/.env`；`.env.example` 只用于本地开发和配置参考。
+修改 `deploy/.env` 后：
+
+- Docker：重新执行 `./deploy/up.sh --no-build`，让 Compose 重建容器配置。
+- 宿主机开发：重新启动 `local-run.sh` 或 `local-frontend.sh` 进程。
+
+首次使用 Docker 或宿主机开发时执行 `./deploy/init-env.sh`，脚本会生成带随机密钥的 `deploy/.env`；`.env.example` 只用于模板和配置参考。
 
 启动脚本会在构建镜像前检查 Provider 配置：`AI_PROVIDER=dashscope` 必须提供 `DASHSCOPE_API_KEY`，且 `AI_EMBEDDING_DIMENSION` 必须保持为 `1024`。检查过程不会输出密钥内容。
 

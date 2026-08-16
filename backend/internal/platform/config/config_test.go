@@ -34,6 +34,9 @@ func TestLoadUsesDevelopmentDefaults(t *testing.T) {
 	if cfg.Outbox.BatchSize != 20 || cfg.Outbox.TaskTimeout != 30*time.Minute || cfg.Outbox.GCDelay != 24*time.Hour {
 		t.Fatalf("unexpected outbox defaults: %+v", cfg.Outbox)
 	}
+	if cfg.AI.RequestTimeout != 90*time.Second {
+		t.Fatalf("unexpected AI request timeout: %s", cfg.AI.RequestTimeout)
+	}
 	if !cfg.AI.RateLimitEnabled {
 		t.Fatal("AI rate limiting should be enabled by default")
 	}
@@ -51,6 +54,7 @@ func TestLoadUsesOperationalOverrides(t *testing.T) {
 	t.Setenv("UPLOAD_CLEANUP_BATCH", "25")
 	t.Setenv("OUTBOX_BATCH_SIZE", "50")
 	t.Setenv("OBJECT_GC_DELAY", "6h")
+	t.Setenv("AI_REQUEST_TIMEOUT", "2m")
 
 	cfg, err := Load()
 	if err != nil {
@@ -64,6 +68,9 @@ func TestLoadUsesOperationalOverrides(t *testing.T) {
 	}
 	if cfg.Outbox.BatchSize != 50 || cfg.Outbox.GCDelay != 6*time.Hour {
 		t.Fatalf("unexpected outbox config: %+v", cfg.Outbox)
+	}
+	if cfg.AI.RequestTimeout != 2*time.Minute {
+		t.Fatalf("unexpected AI request timeout: %s", cfg.AI.RequestTimeout)
 	}
 }
 

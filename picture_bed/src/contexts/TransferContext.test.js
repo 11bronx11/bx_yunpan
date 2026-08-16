@@ -18,7 +18,7 @@ const Probe = () => {
   const { uploads, enqueueUploads } = useTransfers();
   return <div>
     <button type="button" onClick={() => enqueueUploads([new File(['data'], 'sample.txt', { type: 'text/plain' })], 'folder-1', '根目录')}>添加</button>
-    {uploads.map(task => <span key={task.id}>{task.status}:{task.name}:{task.progress}</span>)}
+    {uploads.map(task => <span key={task.id} data-error-code={task.errorCode}>{task.status}:{task.name}:{task.progress}</span>)}
   </div>;
 };
 
@@ -79,4 +79,17 @@ test('treats an existing file as skipped instead of failed', async () => {
   fireEvent.click(screen.getByRole('button', { name: '添加' }));
 
   expect(await screen.findByText('skipped:sample.txt:100')).toBeInTheDocument();
+});
+
+test('preserves the name-conflict reason for the transfer status', async () => {
+  listActiveUploads.mockResolvedValue({ items: [] });
+  const error = new Error('当前目录已存在同名文件，请重命名后上传');
+  error.code = 'upload.name_conflict';
+  uploadFile.mockRejectedValue(error);
+  renderTransfers();
+  await waitFor(() => expect(listActiveUploads).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByRole('button', { name: '添加' }));
+
+  expect(await screen.findByText('skipped:sample.txt:0')).toHaveAttribute('data-error-code', 'upload.name_conflict');
 });

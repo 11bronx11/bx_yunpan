@@ -30,6 +30,7 @@ var (
 	ErrNotFound      = errors.New("upload not found")
 	ErrConflict      = errors.New("upload conflict")
 	ErrFileExists    = errors.New("file already exists")
+	ErrNameConflict  = errors.New("file name already exists in folder")
 	ErrInvalidInput  = errors.New("invalid upload input")
 	ErrQuotaExceeded = errors.New("quota exceeded")
 )
@@ -159,7 +160,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, input CreateInpu
 			return err
 		}
 		if fileCount > 0 {
-			return ErrFileExists
+			return ErrNameConflict
 		}
 		var activeWithSameName int64
 		if err := tx.Model(&Session{}).
@@ -168,7 +169,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, input CreateInpu
 			return err
 		}
 		if activeWithSameName > 0 {
-			return ErrFileExists
+			return ErrNameConflict
 		}
 
 		object, objectErr := s.objects.FindOwnedWith(tx, userID, input.SHA256, input.SizeBytes)
@@ -464,6 +465,19 @@ func (s *Service) Verify(ctx context.Context, sessionID uuid.UUID) error {
 		if err := dblock.Transaction(tx, "upload:object:"+actualHash+":"+strconv.FormatInt(size, 10)); err != nil {
 			return err
 		}
+		filenameLock := "upload:filename:" + locked.UserID.String() + ":" + locked.FolderID.String() + ":" + locked.FilenameNormalized
+		if err := dblock.Transaction(tx, filenameLock); err != nil {
+			return err
+		}
+		var fileCount int64
+		if err := tx.Model(&drive.FileEntry{}).
+			Where("owner_id = ? AND folder_id = ? AND name_normalized = ? AND deleted_at IS NULL", locked.UserID, locked.FolderID, locked.FilenameNormalized).
+			Count(&fileCount).Error; err != nil {
+			return err
+		}
+		if fileCount > 0 {
+			return ErrNameConflict
+		}
 
 		copiedCanonical := false
 		if _, findErr := s.objects.FindByHashWith(tx, actualHash, size); errors.Is(findErr, gorm.ErrRecordNotFound) {
@@ -512,6 +526,9 @@ func (s *Service) Verify(ctx context.Context, sessionID uuid.UUID) error {
 		}
 		return nil
 	})
+	if errors.Is(err, ErrNameConflict) {
+		return s.fail(ctx, session.ID, "upload.name_conflict")
+	}
 	if errors.Is(err, drive.ErrConflict) {
 		return s.fail(ctx, session.ID, "upload.file_exists")
 	}

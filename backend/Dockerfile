@@ -1,17 +1,18 @@
-# syntax=docker/dockerfile:1.7
-
+ARG DOCKER_REGISTRY=docker.io
 ARG GO_VERSION=1.25.13
-FROM golang:${GO_VERSION}-alpine AS build
+FROM ${DOCKER_REGISTRY}/library/golang:${GO_VERSION}-alpine AS build
 
-ARG TARGET=api
+ARG GO_PROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GO_PROXY}
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+ARG TARGET=api
 RUN case "${TARGET}" in api|worker|migrate) ;; *) echo "unsupported TARGET=${TARGET}" >&2; exit 1 ;; esac \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/service ./cmd/${TARGET}
 
-FROM alpine:3.22
+FROM ${DOCKER_REGISTRY}/library/alpine:3.22
 
 LABEL org.opencontainers.image.title="BX YunPan" \
       org.opencontainers.image.description="Go API, asynchronous worker, and database migration runtime for BX YunPan"

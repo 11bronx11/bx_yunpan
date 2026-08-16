@@ -17,10 +17,10 @@ vuln:
 	govulncheck ./...
 
 migrate-up:
-	go run ./cmd/migrate up
+	../deploy/local-run.sh migrate up
 
 migrate-down:
-	go run ./cmd/migrate down-one
+	../deploy/local-run.sh migrate down-one
 
 compose-up:
 	../deploy/up.sh

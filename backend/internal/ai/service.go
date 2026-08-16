@@ -24,7 +24,6 @@ import (
 const (
 	pipelineVersion    = "document-index-v2"
 	embeddingBatchSize = 10
-	processingLease    = 35 * time.Minute
 )
 
 var (
@@ -32,6 +31,7 @@ var (
 	ErrInvalid     = errors.New("invalid AI request")
 	ErrUnavailable = errors.New("AI service unavailable")
 	ErrQuota       = errors.New("AI provider quota exhausted")
+	ErrProcessing  = errors.New("AI document is already processing")
 )
 
 type Service struct {
@@ -66,6 +66,10 @@ func (s *Service) processObject(ctx context.Context, objectID uuid.UUID, force b
 	if object.SizeBytes > s.config.MaxObjectBytes {
 		return s.finishUnsupported(document.ID, "ai.object_too_large")
 	}
+	extractionMimeType, err := s.extractionMimeType(objectID, object.MimeType)
+	if err != nil {
+		return s.finishFailed(document.ID, "ai.metadata_read_failed", err)
+	}
 	stream, err := s.storage.GetObject(ctx, object.Bucket, object.ObjectKey, minio.GetObjectOptions{})
 	if err != nil {
 		return s.finishFailed(document.ID, "ai.storage_read_failed", err)
@@ -75,7 +79,7 @@ func (s *Service) processObject(ctx context.Context, objectID uuid.UUID, force b
 	if err != nil {
 		return s.finishFailed(document.ID, "ai.storage_read_failed", err)
 	}
-	sections, err := extract(ctx, s.provider, object.MimeType, data)
+	sections, err := extract(ctx, s.provider, extractionMimeType, data)
 	if errors.Is(err, errUnsupported) {
 		return s.finishUnsupported(document.ID, "ai.unsupported_type")
 	}
@@ -84,6 +88,9 @@ func (s *Service) processObject(ctx context.Context, objectID uuid.UUID, force b
 	}
 	if err != nil {
 		return s.finishFailed(document.ID, "ai.extraction_failed", err)
+	}
+	if err := s.touchDocument(ctx, document.ID); err != nil {
+		return s.finishFailed(document.ID, "ai.persistence_failed", err)
 	}
 	chunks := makeChunks(sections)
 	if len(chunks) == 0 {
@@ -105,6 +112,9 @@ func (s *Service) processObject(ctx context.Context, objectID uuid.UUID, force b
 			return s.finishFailed(document.ID, "ai.embedding_failed", err)
 		}
 		embeddings = append(embeddings, batch...)
+		if err := s.touchDocument(ctx, document.ID); err != nil {
+			return s.finishFailed(document.ID, "ai.persistence_failed", err)
+		}
 	}
 	insight, err := s.provider.Enrich(ctx, strings.Join(texts, "\n"))
 	if err != nil {
@@ -138,6 +148,25 @@ func (s *Service) processObject(ctx context.Context, objectID uuid.UUID, force b
 		return s.finishFailed(document.ID, "ai.persistence_failed", err)
 	}
 	return nil
+}
+
+func (s *Service) extractionMimeType(objectID uuid.UUID, mimeType string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0]))
+	if normalized != "application/octet-stream" && normalized != "binary/octet-stream" {
+		return mimeType, nil
+	}
+	var names []string
+	if err := s.db.Table("file_entries").
+		Where("object_id = ? AND deleted_at IS NULL", objectID).
+		Pluck("name", &names).Error; err != nil {
+		return "", err
+	}
+	for _, name := range names {
+		if isSourceTextFileName(name) {
+			return "text/plain", nil
+		}
+	}
+	return mimeType, nil
 }
 
 func (s *Service) GetDocument(ownerID, fileID uuid.UUID) (drive.FileView, Document, error) {
@@ -226,7 +255,7 @@ func (s *Service) startDocument(objectID uuid.UUID, force bool) (Document, bool,
 	}
 
 	query := s.db.Model(&Document{}).
-		Where("object_id = ? AND (status <> ? OR updated_at < ?)", objectID, "processing", now.Add(-processingLease))
+		Where("object_id = ? AND (status <> ? OR updated_at < ?)", objectID, "processing", now.Add(-s.processingLease()))
 	if !force {
 		query = query.Where("status <> ? OR pipeline_version <> ? OR model_version <> ?", "indexed", pipelineVersion, s.provider.ModelVersion())
 	}
@@ -238,13 +267,41 @@ func (s *Service) startDocument(objectID uuid.UUID, force bool) (Document, bool,
 		return Document{}, false, result.Error
 	}
 	if result.RowsAffected == 0 {
-		return Document{}, false, nil
+		document = Document{}
+		if err := s.db.Where("object_id = ?", objectID).First(&document).Error; err != nil {
+			return Document{}, false, errors.New("load AI document")
+		}
+		if document.Status == "processing" {
+			return document, false, ErrProcessing
+		}
+		return document, false, nil
 	}
 	document = Document{}
 	if s.db.Where("object_id = ?", objectID).First(&document).Error != nil {
 		return Document{}, false, errors.New("load AI document")
 	}
 	return document, true, nil
+}
+
+func (s *Service) processingLease() time.Duration {
+	lease := 2 * s.config.RequestTimeout
+	if lease < 3*time.Minute {
+		return 3 * time.Minute
+	}
+	return lease
+}
+
+func (s *Service) touchDocument(ctx context.Context, documentID uuid.UUID) error {
+	result := s.db.WithContext(ctx).Model(&Document{}).
+		Where("id = ? AND status = ?", documentID, "processing").
+		Update("updated_at", time.Now().UTC())
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrProcessing
+	}
+	return nil
 }
 
 func (s *Service) finishUnsupported(documentID uuid.UUID, code string) error {

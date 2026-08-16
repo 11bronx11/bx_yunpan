@@ -238,6 +238,28 @@ func TestCreateSerializesConcurrentIdempotentRequests(t *testing.T) {
 	}
 }
 
+func TestCreateDistinguishesSameFolderNameConflict(t *testing.T) {
+	fixture := newConcurrencyFixture(t)
+	firstDigest := sha256.Sum256([]byte("first-content"))
+	secondDigest := sha256.Sum256([]byte("different-content"))
+	first := CreateInput{
+		FolderID: fixture.rootID, Filename: "main.cpp", SHA256: hex.EncodeToString(firstDigest[:]),
+		SizeBytes: 128, MimeType: "application/octet-stream", IdempotencyKey: uuid.NewString(),
+	}
+	if _, err := fixture.service.Create(context.Background(), fixture.userID, first); err != nil {
+		t.Fatalf("create first upload: %v", err)
+	}
+	second := first
+	second.SHA256 = hex.EncodeToString(secondDigest[:])
+	second.SizeBytes = 718
+	second.IdempotencyKey = uuid.NewString()
+
+	_, err := fixture.service.Create(context.Background(), fixture.userID, second)
+	if !errors.Is(err, ErrNameConflict) {
+		t.Fatalf("create same-name upload error = %v, want ErrNameConflict", err)
+	}
+}
+
 func TestCompleteSerializesConcurrentRetries(t *testing.T) {
 	fixture := newConcurrencyFixture(t)
 	digest := sha256.Sum256([]byte(uuid.NewString()))

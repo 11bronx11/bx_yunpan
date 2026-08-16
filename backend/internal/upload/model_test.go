@@ -64,3 +64,27 @@ func TestWriteErrorDistinguishesExistingFile(t *testing.T) {
 		t.Fatalf("error code = %q", body.Error.Code)
 	}
 }
+
+func TestWriteErrorDistinguishesNameConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	context.Request = httptest.NewRequest(http.MethodPost, "/api/v1/uploads", nil)
+
+	new(HTTP).writeError(context, ErrNameConflict)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusConflict)
+	}
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error.Code != "upload.name_conflict" {
+		t.Fatalf("error code = %q", body.Error.Code)
+	}
+}

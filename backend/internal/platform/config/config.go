@@ -113,6 +113,7 @@ type AI struct {
 	VisionModel                 string
 	Dimension                   int
 	MaxObjectBytes              int64
+	RequestTimeout              time.Duration
 	RateLimitEnabled            bool
 	RateLimitSearchPerMinute    int
 	RateLimitAskPerMinute       int
@@ -204,6 +205,7 @@ func Load() (Config, error) {
 			VisionModel:                 env("AI_VISION_MODEL", "qwen-vl-plus"),
 			Dimension:                   envInt("AI_EMBEDDING_DIMENSION", 1024),
 			MaxObjectBytes:              int64(envInt("AI_MAX_OBJECT_MIB", 32)) * 1024 * 1024,
+			RequestTimeout:              envDuration("AI_REQUEST_TIMEOUT", 90*time.Second),
 			RateLimitEnabled:            envBool("AI_RATE_LIMIT_ENABLED", true),
 			RateLimitSearchPerMinute:    envInt("AI_RATE_LIMIT_SEARCH_PER_MINUTE", 30),
 			RateLimitAskPerMinute:       envInt("AI_RATE_LIMIT_ASK_PER_MINUTE", 10),
@@ -284,8 +286,8 @@ func (c Config) Validate() error {
 	if c.AI.Provider == "dashscope" && c.AI.APIKey == "" {
 		errs = append(errs, errors.New("DASHSCOPE_API_KEY is required for dashscope"))
 	}
-	if c.AI.Dimension != 1024 || c.AI.MaxObjectBytes <= 0 {
-		errs = append(errs, errors.New("AI embedding dimension must be 1024 and max object size must be positive"))
+	if c.AI.Dimension != 1024 || c.AI.MaxObjectBytes <= 0 || c.AI.RequestTimeout <= 0 {
+		errs = append(errs, errors.New("AI embedding dimension must be 1024 and AI size/timeout settings must be positive"))
 	}
 	if c.AI.RateLimitEnabled && (c.AI.RateLimitSearchPerMinute <= 0 || c.AI.RateLimitAskPerMinute <= 0 || c.AI.RateLimitReprocessPerMinute <= 0) {
 		errs = append(errs, errors.New("enabled AI rate limits must be positive"))

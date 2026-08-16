@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 )
@@ -81,7 +80,7 @@ func NewProvider(cfg config.AI) Provider {
 		return &dashScopeProvider{
 			apiKey: cfg.APIKey, baseURL: strings.TrimRight(cfg.BaseURL, "/"), chatModel: cfg.ChatModel,
 			embeddingModel: cfg.EmbeddingModel, visionModel: cfg.VisionModel, dimension: cfg.Dimension,
-			client: &http.Client{Timeout: 90 * time.Second},
+			client: &http.Client{Timeout: cfg.RequestTimeout},
 		}
 	}
 	return &fakeProvider{dimension: cfg.Dimension}

@@ -109,7 +109,9 @@ const Transfers = () => {
     {filtered.length === 0
       ? <GraphicEmpty title={uploads.length === 0 ? '暂无上传任务' : '没有符合条件的上传任务'} description="从我的云盘选择文件后，任务会显示在这里。" />
       : <TransferList>{filtered.map(task => {
-        const meta = statusMeta[task.status] || statusMeta.queued;
+        const meta = task.status === 'skipped' && task.errorCode === 'upload.name_conflict'
+          ? { label: '同名冲突', tone: 'blue' }
+          : statusMeta[task.status] || statusMeta.queued;
         const canPause = ['queued', 'uploading'].includes(task.status);
         const canResume = ['paused', 'failed', 'verification_pending'].includes(task.status);
         const canCancel = ['queued', 'checking', 'uploading', 'pausing', 'paused', 'interrupted'].includes(task.status);

@@ -227,8 +227,9 @@ export const TransferProvider = ({ children }) => {
       });
     } catch (error) {
       if (control.canceled) return;
-      if (error.code === 'upload.file_exists') {
-        updateUpload(id, { status: 'skipped', progress: 100, transferred: 0, speed: 0, control: null, error: error.message });
+      if (['upload.file_exists', 'upload.name_conflict'].includes(error.code)) {
+        const duplicateContent = error.code === 'upload.file_exists';
+        updateUpload(id, { status: 'skipped', progress: duplicateContent ? 100 : 0, transferred: 0, speed: 0, control: null, error: error.message, errorCode: error.code });
       } else if (error.code === 'client.file_mismatch') {
         updateUpload(id, { status: 'interrupted', file: null, speed: 0, control: null, error: error.message });
       } else if (error.code === 'client.verify_timeout') {

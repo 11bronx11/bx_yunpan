@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -34,11 +35,11 @@ func TestDocumentProcessingLease(t *testing.T) {
 	if err != nil || !acquired {
 		t.Fatalf("first worker did not acquire lease: acquired=%v err=%v", acquired, err)
 	}
-	if _, acquired, err = service.startDocument(objectID, false); err != nil || acquired {
-		t.Fatalf("duplicate event acquired active lease: acquired=%v err=%v", acquired, err)
+	if _, acquired, err = service.startDocument(objectID, false); !errors.Is(err, ErrProcessing) || acquired {
+		t.Fatalf("duplicate event did not report active lease: acquired=%v err=%v", acquired, err)
 	}
-	if _, acquired, err = service.startDocument(objectID, true); err != nil || acquired {
-		t.Fatalf("forced reprocess acquired active lease: acquired=%v err=%v", acquired, err)
+	if _, acquired, err = service.startDocument(objectID, true); !errors.Is(err, ErrProcessing) || acquired {
+		t.Fatalf("forced reprocess did not report active lease: acquired=%v err=%v", acquired, err)
 	}
 	if err := db.Model(&Document{}).Where("id = ?", document.ID).Update("status", "indexed").Error; err != nil {
 		t.Fatal(err)

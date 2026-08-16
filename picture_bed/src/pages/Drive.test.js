@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Drive from './Drive';
 import { deleteFolder, getBreadcrumb, getChildren, getRoot } from '../services/drive';
+import { getFileAI } from '../services/ai';
 
 const mockLogout = jest.fn();
 const mockEnqueueUploads = jest.fn();
@@ -25,6 +26,10 @@ jest.mock('../services/share', () => ({
   createShare: jest.fn(),
   importShare: jest.fn(),
   resolveShare: jest.fn(),
+}));
+jest.mock('../services/ai', () => ({
+  getFileAI: jest.fn(),
+  reprocessFileAI: jest.fn(),
 }));
 
 beforeEach(() => {
@@ -48,4 +53,18 @@ test('deletes a folder from the compact row menu after confirmation', async () =
 
   await waitFor(() => expect(deleteFolder).toHaveBeenCalledWith('folder-1', 2));
   await waitFor(() => expect(getChildren).toHaveBeenCalledTimes(2));
+});
+
+test('opens the stored AI summary for an octet-stream source file', async () => {
+  getChildren.mockResolvedValue({
+    items: [{ id: 'file-1', type: 'file', name: 'main.cpp', mime_type: 'application/octet-stream', size_bytes: 42, version: 1, ai_status: 'indexed' }],
+  });
+  getFileAI.mockResolvedValue({ status: 'indexed', summary: '一个包含程序入口的 C++ 示例。', tags: ['C++'], language: 'zh' });
+
+  render(<AntApp><MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><Drive /></MemoryRouter></AntApp>);
+
+  fireEvent.click(await screen.findByText('main.cpp'));
+
+  await waitFor(() => expect(getFileAI).toHaveBeenCalledWith('file-1', expect.objectContaining({ signal: expect.any(AbortSignal) })));
+  expect(await screen.findByText('一个包含程序入口的 C++ 示例。')).toBeInTheDocument();
 });

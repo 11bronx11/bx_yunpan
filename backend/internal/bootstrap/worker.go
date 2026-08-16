@@ -41,7 +41,7 @@ func RunWorker(ctx context.Context, cfg config.Config, logger *slog.Logger) erro
 	go runUploadCleanup(ctx, uploads, cfg.Upload.CleanupInterval, cfg.Upload.CleanupBatch, logger)
 
 	mediaReady := media.Handler(mediaService)
-	aiReady := ai.ObjectReadyHandler(aiService)
+	aiReady := ai.ObjectReadyHandler(aiService, logger)
 	objectReady := func(ctx context.Context, task *asynq.Task) error {
 		return errors.Join(mediaReady(ctx, task), aiReady(ctx, task))
 	}
@@ -49,7 +49,7 @@ func RunWorker(ctx context.Context, cfg config.Config, logger *slog.Logger) erro
 		upload.VerifyHandler(uploads),
 		objectReady,
 		objectstore.GCHandler(objects, deps.Storage),
-		ai.ReprocessHandler(aiService),
+		ai.ReprocessHandler(aiService, logger),
 		logger,
 	)
 	return platformworker.Run(ctx, cfg, logger, handlers)

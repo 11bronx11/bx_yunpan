@@ -10,6 +10,7 @@ import { FileTypeBadge, fileTypeLabel, GraphicEmpty, PageHeader, ProductPage, St
 import MoveFileModal from '../components/MoveFileModal';
 import AIIndexModal from '../components/AIIndexModal';
 import FileSummaryModal from '../components/FileSummaryModal';
+import { supportsAISummary } from '../utils/fileCapabilities';
 import styled from '@emotion/styled';
 
 const Workspace = styled.div`display: grid; min-width: 0; gap: 16px;`;
@@ -74,18 +75,6 @@ const aiStatusMeta = {
   failed: { label: '失败', tone: 'coral' },
   unsupported: { label: '未索引', tone: 'coral' },
 };
-
-const summaryMimeTypes = new Set([
-  'text/plain',
-  'text/markdown',
-  'text/x-markdown',
-  'application/json',
-  'text/csv',
-  'application/pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-]);
-
-const supportsAISummary = file => summaryMimeTypes.has((file?.mime_type || '').toLowerCase().split(';')[0].trim());
 
 const Drive = () => {
   const { message, modal } = App.useApp();

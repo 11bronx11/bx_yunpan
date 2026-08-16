@@ -10,9 +10,14 @@ docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile ap
 
 web_port=$(awk -F= '$1 == "WEB_PORT" {print $2}' "$env_file" | tail -1)
 api_port=$(awk -F= '$1 == "API_PORT" {print $2}' "$env_file" | tail -1)
+bind_ip=$(awk -F= '$1 == "APP_BIND_IP" {print $2}' "$env_file" | tail -1)
 web_port=${web_port:-3000}
 api_port=${api_port:-8081}
+bind_ip=${bind_ip:-127.0.0.1}
 
 echo
-curl -fsS "http://127.0.0.1:${api_port}/health/ready" && echo
-curl -fsS -o /dev/null -w "web: HTTP %{http_code}\n" "http://127.0.0.1:${web_port}/healthz"
+probe_ip=$bind_ip
+[[ "$probe_ip" == "0.0.0.0" ]] && probe_ip=127.0.0.1
+curl -fsS "http://${probe_ip}:${api_port}/health/ready" && echo
+curl -fsS -o /dev/null -w "web: HTTP %{http_code}\n" "http://${probe_ip}:${web_port}/healthz"
+"$deploy_dir/config-check.sh"
