@@ -13,10 +13,20 @@ yunpan_assert_compose_owner "$deploy_dir"
 
 [[ -f "$env_file" ]] || { echo "Missing $env_file; run ./deploy/init-env.sh first." >&2; exit 1; }
 
+ai_enabled=$(awk -F= '$1 == "AI_ENABLED" {print $2}' "$env_file" | tail -1)
+ai_enabled=${ai_enabled:-true}
+if [[ "$ai_enabled" != "true" && "$ai_enabled" != "false" ]]; then
+  echo "AI_ENABLED must be true or false." >&2
+  exit 1
+fi
+
 if (($#)); then
   services=("$@")
 else
   services=(api worker web migrate)
+  if [[ "$ai_enabled" == true ]]; then
+    services+=(aisvc etcd)
+  fi
 fi
 
-docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app --profile observability logs --tail=200 -f "${services[@]}"
+docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app --profile ai --profile observability logs --tail=200 -f "${services[@]}"

@@ -7,6 +7,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx"
 )
 
 const requestIDKey = "request_id"
@@ -23,6 +25,7 @@ func RequestID() gin.HandlerFunc {
 			requestID = id.String()
 		}
 		c.Set(requestIDKey, requestID)
+		c.Request = c.Request.WithContext(grpcx.WithRequestID(c.Request.Context(), requestID))
 		c.Header("X-Request-ID", requestID)
 		c.Next()
 	}

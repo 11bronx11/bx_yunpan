@@ -13,7 +13,14 @@ yunpan_assert_compose_owner "$deploy_dir"
 
 [[ -f "$env_file" ]] || { echo "Missing $env_file; run ./deploy/init-env.sh first." >&2; exit 1; }
 
-docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app --profile observability ps
+ai_enabled=$(awk -F= '$1 == "AI_ENABLED" {print $2}' "$env_file" | tail -1)
+ai_enabled=${ai_enabled:-true}
+if [[ "$ai_enabled" != "true" && "$ai_enabled" != "false" ]]; then
+  echo "AI_ENABLED must be true or false." >&2
+  exit 1
+fi
+
+docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app --profile ai --profile observability ps
 
 web_port=$(awk -F= '$1 == "WEB_PORT" {print $2}' "$env_file" | tail -1)
 api_port=$(awk -F= '$1 == "API_PORT" {print $2}' "$env_file" | tail -1)
@@ -27,17 +34,37 @@ probe_ip=$bind_ip
 [[ "$probe_ip" == "0.0.0.0" ]] && probe_ip=127.0.0.1
 curl -fsS "http://${probe_ip}:${api_port}/health/ready" && echo
 
-# aisvc 只暴露 gRPC，用容器内的二进制走 grpc.health.v1 探活。
-aisvc_status=0
-docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app \
-  exec -T aisvc /app/service healthcheck >/dev/null 2>&1 || aisvc_status=$?
-if ((aisvc_status == 0)); then
-  echo "aisvc -> grpc.health.v1: SERVING"
+# aisvc 只暴露 gRPC；逐个检查所有副本，不能让一个健康副本掩盖其他故障。
+compose=(docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app --profile ai)
+mapfile -t aisvc_ids < <("${compose[@]}" ps -q aisvc)
+aisvc_failures=0
+if [[ "$ai_enabled" == true ]]; then
+  if ((${#aisvc_ids[@]} == 0)); then
+    echo "aisvc: no running containers" >&2
+    aisvc_failures=1
+  fi
+  for container_id in "${aisvc_ids[@]}"; do
+    container_name=$(docker inspect --format '{{.Name}}' "$container_id")
+    container_name=${container_name#/}
+    if docker exec "$container_id" /app/service healthcheck >/dev/null 2>&1; then
+      echo "$container_name -> grpc.health.v1: SERVING"
+    else
+      echo "$container_name -> grpc.health.v1: FAILED" >&2
+      aisvc_failures=$((aisvc_failures + 1))
+    fi
+  done
+elif ((${#aisvc_ids[@]} > 0)); then
+  echo "aisvc: disabled but running containers still exist" >&2
+  aisvc_failures=1
 else
-  echo "aisvc -> grpc.health.v1: FAILED" >&2
+  echo "aisvc: disabled"
 fi
 
 curl -fsS -o /dev/null -w "web: HTTP %{http_code}\n" "http://${probe_ip}:${web_port}/healthz"
 curl -fsS -o /dev/null -w "web -> api: HTTP %{http_code}\n" "http://${probe_ip}:${web_port}/readyz"
 curl -fsS -o /dev/null -w "web -> storage: HTTP %{http_code}\n" "http://${probe_ip}:${web_port}/storage-healthz"
 "$deploy_dir/config-check.sh"
+
+if ((aisvc_failures > 0)); then
+  exit 1
+fi

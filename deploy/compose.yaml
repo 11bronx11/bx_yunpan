@@ -50,6 +50,7 @@ x-app-environment: &app-environment
   AUTH_REFRESH_TTL: ${AUTH_REFRESH_TTL:-720h}
   AUTH_COOKIE_DOMAIN: ${AUTH_COOKIE_DOMAIN:-}
   SHARE_ACCESS_TTL: ${SHARE_ACCESS_TTL:-15m}
+  AI_ENABLED: ${AI_ENABLED:-true}
   AI_PROVIDER: ${AI_PROVIDER:-fake}
   DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
   AI_BASE_URL: ${AI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
@@ -80,6 +81,20 @@ x-app-environment: &app-environment
   OTEL_TRACES_ENABLED: ${OTEL_TRACES_ENABLED:-false}
   OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-otel-collector:4317}
   OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
+  # 服务注册发现：关闭时 API 直连 AISVC_GRPC_TARGET，多副本无法自动发现。
+  ETCD_ENABLED: ${ETCD_ENABLED:-true}
+  ETCD_ENDPOINTS: ${ETCD_ENDPOINTS:-etcd:2379}
+  ETCD_USERNAME: ${ETCD_USERNAME:-}
+  ETCD_PASSWORD: ${ETCD_PASSWORD:-}
+  ETCD_DIAL_TIMEOUT: ${ETCD_DIAL_TIMEOUT:-5s}
+  ETCD_SERVICE_PREFIX: ${ETCD_SERVICE_PREFIX:-/services/aisvc}
+  ETCD_LEASE_TTL: ${ETCD_LEASE_TTL:-10s}
+  # 留空则用容器 hostname + 监听端口，--scale 时每个副本自动注册自己的地址。
+  AISVC_ADVERTISE_ADDR: ${AISVC_ADVERTISE_ADDR:-}
+  # Outbox dispatcher 多副本选主，避免同一批 outbox 行被重复投递。
+  OUTBOX_LEADER_LOCK_ENABLED: ${OUTBOX_LEADER_LOCK_ENABLED:-true}
+  OUTBOX_LEADER_LOCK_KEY: ${OUTBOX_LEADER_LOCK_KEY:-yunpan:outbox:dispatcher:leader}
+  OUTBOX_LEADER_LOCK_TTL: ${OUTBOX_LEADER_LOCK_TTL:-15s}
 
 services:
   postgres:
@@ -118,6 +133,31 @@ services:
       - redis-data:/data
     healthcheck:
       test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping; else redis-cli ping; fi"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  # 上游官方镜像只发布在 quay.io，不走 DOCKER_REGISTRY 前缀。
+  etcd:
+    profiles: ["ai"]
+    image: ${ETCD_IMAGE:-quay.io/coreos/etcd:v3.6.6}
+    command: ["/usr/local/bin/etcd"]
+    environment:
+      # 只在 compose 内网监听，不映射到宿主机，因此开发环境不启用认证。
+      ETCD_NAME: yunpan-etcd
+      ETCD_DATA_DIR: /etcd-data
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://etcd:2380
+      ETCD_INITIAL_CLUSTER: yunpan-etcd=http://etcd:2380
+      ETCD_INITIAL_CLUSTER_STATE: new
+    volumes:
+      - etcd-data:/etcd-data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/etcdctl", "endpoint", "health"]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -169,6 +209,8 @@ services:
         DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
         GO_VERSION: ${GO_VERSION:-1.25.13}
         GO_PROXY: ${GO_PROXY:-https://proxy.golang.org,direct}
+        GO_BUILD_PARALLELISM: ${GO_BUILD_PARALLELISM:-1}
+        GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
         TARGET: migrate
     command: ["up"]
     environment: *app-environment
@@ -186,6 +228,8 @@ services:
         DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
         GO_VERSION: ${GO_VERSION:-1.25.13}
         GO_PROXY: ${GO_PROXY:-https://proxy.golang.org,direct}
+        GO_BUILD_PARALLELISM: ${GO_BUILD_PARALLELISM:-1}
+        GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
         TARGET: api
     environment:
       <<: *app-environment
@@ -199,8 +243,7 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
-      aisvc:
-        condition: service_healthy
+      # API 本身不依赖 aisvc 才能提供目录、上传与下载；AI 未就绪时相关接口返回 503。
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8081/health/live"]
       interval: 5s
@@ -220,6 +263,8 @@ services:
         DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
         GO_VERSION: ${GO_VERSION:-1.25.13}
         GO_PROXY: ${GO_PROXY:-https://proxy.golang.org,direct}
+        GO_BUILD_PARALLELISM: ${GO_BUILD_PARALLELISM:-1}
+        GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
         TARGET: worker
     environment: *app-environment
     depends_on:
@@ -237,7 +282,7 @@ services:
   # 抽取、OCR、Embedding 是 CPU/IO 重活，独立进程才能独立扩容：
   # docker compose up -d --scale aisvc=2
   aisvc:
-    profiles: ["app"]
+    profiles: ["ai"]
     image: bx-yunpan-aisvc:${APP_IMAGE_TAG:-local}
     build:
       context: ../backend
@@ -245,6 +290,8 @@ services:
         DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
         GO_VERSION: ${GO_VERSION:-1.25.13}
         GO_PROXY: ${GO_PROXY:-https://proxy.golang.org,direct}
+        GO_BUILD_PARALLELISM: ${GO_BUILD_PARALLELISM:-1}
+        GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
         TARGET: aisvc
     environment: *app-environment
     depends_on:
@@ -253,6 +300,8 @@ services:
       minio-init:
         condition: service_completed_successfully
       redis:
+        condition: service_healthy
+      etcd:
         condition: service_healthy
     healthcheck:
       # 镜像里没有 grpc_health_probe，用自己的二进制走 grpc.health.v1 探活。
@@ -340,5 +389,6 @@ volumes:
   postgres-data:
   redis-data:
   minio-data:
+  etcd-data:
   prometheus-data:
   grafana-data:

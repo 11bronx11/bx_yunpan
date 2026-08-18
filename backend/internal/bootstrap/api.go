@@ -8,6 +8,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/grpc/resolver"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai"
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcclient"
@@ -19,6 +21,7 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dependencies"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/httpapi"
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/registry"
 	"github.com/11bronx11/bx_yunpan/backend/internal/sharing"
 	"github.com/11bronx11/bx_yunpan/backend/internal/upload"
 )
@@ -42,14 +45,24 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	fileHTTP := drive.NewFileHTTP(fileManager, identityHTTP.Authenticate())
 	sharingService := sharing.NewService(deps.GORM, driveService, objects, identityService, cfg.Sharing)
 	sharingHTTP := sharing.NewHTTP(sharingService, fileManager, identityHTTP.Authenticate())
-	// Search / Ask / Reprocess 经 gRPC 调 aisvc；限流已下移到 aisvc 侧。
-	// 文档与任务的只读查询仍直接查库，不必绕一次 RPC。
-	aiClient, err := newAIClient(cfg)
-	if err != nil {
-		return err
+	metrics := httpapi.NewMetrics()
+	var aiBackend ai.Backend = ai.DisabledBackend{}
+	closeAI := func() {}
+	if cfg.AI.Enabled {
+		// Search / Ask / Reprocess 经 gRPC 调 aisvc；限流已下移到 aisvc 侧。
+		// 文档与任务的只读查询仍直接查库，不必绕一次 RPC。
+		aiClient, closeRegistry, err := newAIClient(cfg, logger, metrics.Registry)
+		if err != nil {
+			return err
+		}
+		aiBackend = aiClient
+		closeAI = func() {
+			_ = aiClient.Close()
+			closeRegistry()
+		}
 	}
-	defer func() { _ = aiClient.Close() }()
-	aiHTTP := ai.NewHTTP(aiClient, ai.NewReader(deps.GORM, driveService), identityHTTP.Authenticate())
+	defer closeAI()
+	aiHTTP := ai.NewHTTP(aiBackend, ai.NewReader(deps.GORM, driveService), identityHTTP.Authenticate())
 
 	router := httpapi.NewRouter(httpapi.RouterConfig{
 		Environment:  cfg.App.Env,
@@ -58,7 +71,7 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		MaxBodyBytes: cfg.HTTP.MaxBodyBytes,
 		Logger:       logger,
 		Probes:       deps.Probes(),
-		Metrics:      httpapi.NewMetrics(),
+		Metrics:      metrics,
 		Registrars: []func(*gin.RouterGroup){
 			identityHTTP.RegisterRoutes,
 			driveHTTP.RegisterRoutes,
@@ -101,7 +114,20 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 
 // newAIClient 按配置构造 aisvc 客户端。重试策略按接口性质分别定：
 // Ask 固定 1 次（不重试），Search 与 Reprocess 可重试。
-func newAIClient(cfg config.Config) (*grpcclient.Client, error) {
+func newAIClient(cfg config.Config, logger *slog.Logger, registerer prometheus.Registerer) (*grpcclient.Client, func(), error) {
+	closeRegistry := func() {}
+	target := cfg.AIService.Target
+	if cfg.Registry.Enabled {
+		etcdClient, err := registry.Open(cfg.Registry)
+		if err != nil {
+			return nil, closeRegistry, err
+		}
+		// resolver 注册进 gRPC 的全局表，dial 目标改成 scheme URL 后由它解析。
+		resolver.Register(registry.NewBuilder(etcdClient, logger, registry.NewMetrics(registerer)))
+		target = registry.Scheme + "://" + cfg.Registry.Prefix
+		closeRegistry = func() { _ = etcdClient.Close() }
+	}
+
 	retry := func(attempts int) grpcclient.RetryPolicy {
 		return grpcclient.RetryPolicy{
 			MaxAttempts: attempts,
@@ -109,8 +135,8 @@ func newAIClient(cfg config.Config) (*grpcclient.Client, error) {
 			MaxBackoff:  cfg.AIService.RetryMaxBackoff,
 		}
 	}
-	return grpcclient.New(grpcclient.Config{
-		Target:      cfg.AIService.Target,
+	client, err := grpcclient.New(grpcclient.Config{
+		Target:      target,
 		CallTimeout: cfg.AIService.CallTimeout,
 		SearchRetry: retry(cfg.AIService.SearchMaxAttempts),
 		// LLM 调用非幂等且有成本，超时重试可能重复计费还返回两份不同答案。
@@ -124,4 +150,9 @@ func newAIClient(cfg config.Config) (*grpcclient.Client, error) {
 			HalfOpenProbes: cfg.AIService.BreakerHalfOpenProbes,
 		},
 	})
+	if err != nil {
+		closeRegistry()
+		return nil, func() {}, err
+	}
+	return client, closeRegistry, nil
 }

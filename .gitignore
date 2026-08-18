@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.no-ai.example
 deploy/.env
 
 # Go outputs
@@ -25,3 +26,4 @@ logs/
 .idea/
 .DS_Store
 Thumbs.db
+docs/

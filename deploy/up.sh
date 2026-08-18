@@ -7,13 +7,15 @@ compose_file="$deploy_dir/compose.yaml"
 env_file="$deploy_dir/.env"
 build=true
 observability=false
+aisvc_replicas=
 
 usage() {
   cat <<'EOF'
-Usage: ./deploy/up.sh [--no-build] [--observability]
+Usage: ./deploy/up.sh [--no-build] [--observability] [--aisvc-replicas N]
 
-  --no-build        Start existing images without building them.
-  --observability   Also start Prometheus, Grafana, and OpenTelemetry Collector.
+  --no-build           Start existing images without building them.
+  --observability      Also start Prometheus, Grafana, and OpenTelemetry Collector.
+  --aisvc-replicas N   Override AISVC_REPLICAS for this run.
 EOF
 }
 
@@ -21,6 +23,12 @@ while (($#)); do
   case "$1" in
     --no-build) build=false ;;
     --observability) observability=true ;;
+    --aisvc-replicas)
+      (($# >= 2)) || { echo "--aisvc-replicas requires a value" >&2; exit 2; }
+      aisvc_replicas=$2
+      shift
+      ;;
+    --aisvc-replicas=*) aisvc_replicas=${1#*=} ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -55,27 +63,36 @@ env_value() {
   ' "$env_file"
 }
 
-ai_provider=$(env_value AI_PROVIDER)
-ai_provider=${ai_provider:-fake}
-case "$ai_provider" in
-  fake) ;;
-  dashscope)
-    [[ -n "$(env_value DASHSCOPE_API_KEY)" ]] || {
-      echo "DASHSCOPE_API_KEY is required when AI_PROVIDER=dashscope." >&2
-      exit 1
-    }
-    ;;
-  *)
-    echo "AI_PROVIDER must be fake or dashscope." >&2
-    exit 1
-    ;;
-esac
-
-ai_dimension=$(env_value AI_EMBEDDING_DIMENSION)
-ai_dimension=${ai_dimension:-1024}
-if [[ "$ai_dimension" != "1024" ]]; then
-  echo "AI_EMBEDDING_DIMENSION must be 1024 to match the pgvector schema." >&2
+ai_enabled=$(env_value AI_ENABLED)
+ai_enabled=${ai_enabled:-true}
+if [[ "$ai_enabled" != "true" && "$ai_enabled" != "false" ]]; then
+  echo "AI_ENABLED must be true or false." >&2
   exit 1
+fi
+
+if [[ "$ai_enabled" == true ]]; then
+  ai_provider=$(env_value AI_PROVIDER)
+  ai_provider=${ai_provider:-fake}
+  case "$ai_provider" in
+    fake) ;;
+    dashscope)
+      [[ -n "$(env_value DASHSCOPE_API_KEY)" ]] || {
+        echo "DASHSCOPE_API_KEY is required when AI_PROVIDER=dashscope." >&2
+        exit 1
+      }
+      ;;
+    *)
+      echo "AI_PROVIDER must be fake or dashscope when AI is enabled." >&2
+      exit 1
+      ;;
+  esac
+
+  ai_dimension=$(env_value AI_EMBEDDING_DIMENSION)
+  ai_dimension=${ai_dimension:-1024}
+  if [[ "$ai_dimension" != "1024" ]]; then
+    echo "AI_EMBEDDING_DIMENSION must be 1024 to match the pgvector schema." >&2
+    exit 1
+  fi
 fi
 
 s3_public_path_prefix=$(env_value S3_PUBLIC_PATH_PREFIX)
@@ -92,8 +109,40 @@ if [[ "$s3_secure" != "false" ]]; then
   exit 1
 fi
 
+aisvc_replicas=${aisvc_replicas:-$(env_value AISVC_REPLICAS)}
+if [[ "$ai_enabled" == true ]]; then
+  aisvc_replicas=${aisvc_replicas:-1}
+  if [[ ! "$aisvc_replicas" =~ ^[1-9][0-9]*$ ]]; then
+    echo "AISVC_REPLICAS must be a positive integer when AI is enabled." >&2
+    exit 1
+  fi
+elif [[ -n "$aisvc_replicas" && "$aisvc_replicas" != "0" ]]; then
+  echo "AISVC_REPLICAS must be 0 when AI_ENABLED=false." >&2
+  exit 1
+else
+  aisvc_replicas=0
+fi
+
+go_build_parallelism=$(env_value GO_BUILD_PARALLELISM)
+go_build_parallelism=${go_build_parallelism:-1}
+go_build_max_procs=$(env_value GO_BUILD_MAX_PROCS)
+go_build_max_procs=${go_build_max_procs:-2}
+compose_parallel_limit=$(env_value COMPOSE_PARALLEL_LIMIT)
+compose_parallel_limit=${compose_parallel_limit:-1}
+for build_limit in "$go_build_parallelism" "$go_build_max_procs" "$compose_parallel_limit"; do
+  if [[ ! "$build_limit" =~ ^[1-9][0-9]*$ ]]; then
+    echo "GO_BUILD_PARALLELISM, GO_BUILD_MAX_PROCS, and COMPOSE_PARALLEL_LIMIT must be positive integers." >&2
+    exit 1
+  fi
+done
+
 if [[ "$build" == true ]]; then
-  min_free_gb=${YUNPAN_MIN_FREE_GB:-6}
+  min_free_gb=${YUNPAN_MIN_FREE_GB:-$(env_value YUNPAN_MIN_FREE_GB)}
+  min_free_gb=${min_free_gb:-6}
+  if [[ ! "$min_free_gb" =~ ^[1-9][0-9]*$ ]]; then
+    echo "YUNPAN_MIN_FREE_GB must be a positive integer." >&2
+    exit 1
+  fi
   available_kb=$(df -Pk "$root_dir" | awk 'NR == 2 {print $4}')
   required_kb=$((min_free_gb * 1024 * 1024))
   if ((available_kb < required_kb)); then
@@ -102,22 +151,35 @@ if [[ "$build" == true ]]; then
     echo "Free disk space or use --no-build when application images already exist." >&2
     exit 1
   fi
+  build_targets=(migrate api worker web)
+  if [[ "$ai_enabled" == true ]]; then
+    build_targets=(migrate api worker aisvc web)
+  fi
+  "$deploy_dir/build.sh" "${build_targets[@]}"
 fi
 
 profiles=(--profile app)
+if [[ "$ai_enabled" == true ]]; then
+  profiles+=(--profile ai)
+fi
 if [[ "$observability" == true ]]; then
   profiles+=(--profile observability)
 fi
 
 args=(--env-file "$env_file" -f "$compose_file" "${profiles[@]}" up -d --remove-orphans --wait --wait-timeout 240)
-if [[ "$build" == true ]]; then
-  args+=(--build)
+if [[ "$ai_enabled" == true ]]; then
+  args+=(--scale "aisvc=$aisvc_replicas")
 fi
 
-max_attempts=${YUNPAN_UP_ATTEMPTS:-3}
+max_attempts=${YUNPAN_UP_ATTEMPTS:-$(env_value YUNPAN_UP_ATTEMPTS)}
+max_attempts=${max_attempts:-3}
+if [[ ! "$max_attempts" =~ ^[1-9][0-9]*$ ]]; then
+  echo "YUNPAN_UP_ATTEMPTS must be a positive integer." >&2
+  exit 1
+fi
 started=false
 for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-  if docker compose "${args[@]}"; then
+  if COMPOSE_PARALLEL_LIMIT="$compose_parallel_limit" docker compose "${args[@]}"; then
     started=true
     break
   fi
@@ -130,6 +192,13 @@ done
 if [[ "$started" != true ]]; then
   echo "Compose startup failed after ${max_attempts} attempts." >&2
   exit 1
+fi
+
+if [[ "$ai_enabled" == false ]]; then
+  # Profile-disabled services are not orphans, so remove old AI containers
+  # explicitly when switching an existing deployment to core-only mode.
+  docker compose --env-file "$env_file" -f "$compose_file" --profile ai stop aisvc etcd
+  docker compose --env-file "$env_file" -f "$compose_file" --profile ai rm -f aisvc etcd
 fi
 
 web_port=$(awk -F= '$1 == "WEB_PORT" {print $2}' "$env_file" | tail -1)

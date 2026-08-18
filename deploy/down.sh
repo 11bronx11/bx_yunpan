@@ -21,7 +21,7 @@ elif (($#)); then
   exit 2
 fi
 
-args=(--env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app --profile observability down --remove-orphans)
+args=(--env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app --profile ai --profile observability down --remove-orphans)
 if [[ "$remove_volumes" == true ]]; then
   args+=(--volumes)
 fi

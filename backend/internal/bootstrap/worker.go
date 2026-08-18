@@ -34,7 +34,9 @@ func RunWorker(ctx context.Context, cfg config.Config, logger *slog.Logger) erro
 	redisOptions := asynq.RedisClientOpt{Addr: cfg.Redis.Addr, Password: cfg.Redis.Password, DB: cfg.Redis.DB}
 	queueClient := asynq.NewClient(redisOptions)
 	defer func() { _ = queueClient.Close() }()
-	dispatcher := outbox.NewDispatcher(deps.GORM, queueClient, logger, cfg.Outbox)
+	dispatcher := outbox.NewDispatcher(deps.GORM, queueClient, logger, cfg.Outbox).
+		WithLeaderLock(deps.Redis, cfg.Locking).
+		WithAIEnabled(cfg.AI.Enabled)
 	go dispatcher.Run(ctx)
 	go runUploadCleanup(ctx, uploads, cfg.Upload.CleanupInterval, cfg.Upload.CleanupBatch, logger)
 

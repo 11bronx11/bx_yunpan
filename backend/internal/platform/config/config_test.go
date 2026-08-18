@@ -37,11 +37,31 @@ func TestLoadUsesDevelopmentDefaults(t *testing.T) {
 	if cfg.AI.RequestTimeout != 90*time.Second {
 		t.Fatalf("unexpected AI request timeout: %s", cfg.AI.RequestTimeout)
 	}
+	if !cfg.AI.Enabled {
+		t.Fatal("AI should be enabled by default")
+	}
 	if !cfg.AI.RateLimitEnabled {
 		t.Fatal("AI rate limiting should be enabled by default")
 	}
 	if cfg.AI.RateLimitSearchPerMinute != 30 || cfg.AI.RateLimitAskPerMinute != 10 || cfg.AI.RateLimitReprocessPerMinute != 3 {
 		t.Fatalf("unexpected default AI rate limits: %+v", cfg.AI)
+	}
+}
+
+func TestLoadSupportsDisabledAI(t *testing.T) {
+	t.Setenv("AI_ENABLED", "false")
+	t.Setenv("AI_PROVIDER", "disabled")
+	t.Setenv("AI_EMBEDDING_DIMENSION", "0")
+	t.Setenv("AISVC_CALL_TIMEOUT", "1ms")
+	t.Setenv("ETCD_ENABLED", "true")
+	t.Setenv("ETCD_LEASE_TTL", "1s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load disabled AI config: %v", err)
+	}
+	if cfg.AI.Enabled {
+		t.Fatal("AI should be disabled")
 	}
 }
 

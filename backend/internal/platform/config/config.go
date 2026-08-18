@@ -24,6 +24,8 @@ type Config struct {
 	AI        AI
 	AIService AIService
 	Tracing   Tracing
+	Registry  Registry
+	Locking   Locking
 }
 
 type App struct {
@@ -136,7 +138,35 @@ type AIService struct {
 	BreakerHalfOpenProbes int
 }
 
+// Registry 描述 etcd 服务注册发现参数。
+type Registry struct {
+	Enabled bool
+	// Endpoints 是 etcd 集群地址列表。
+	Endpoints   []string
+	Username    string
+	Password    string
+	DialTimeout time.Duration
+	// Prefix 是注册键前缀，实例键为 {Prefix}/{instanceID}。
+	Prefix string
+	// LeaseTTL 是租约时长：实例进程消失后最多这么久被摘除。
+	LeaseTTL time.Duration
+	// AdvertiseAddr 是写进 etcd 供其他实例 dial 的地址，容器里必须是
+	// 对端可解析的地址而不是 :8082 这种监听串。
+	AdvertiseAddr string
+}
+
+// Locking 描述 Outbox dispatcher 选主用的 Redis 锁参数。
+type Locking struct {
+	// DispatcherLeaderEnabled 打开后多副本 dispatcher 只有持锁者投递。
+	DispatcherLeaderEnabled bool
+	// LeaderKey 是选主锁的 Redis 键。
+	LeaderKey string
+	// LeaderTTL 是锁的过期时间，持锁期间由 watchdog 续期。
+	LeaderTTL time.Duration
+}
+
 type AI struct {
+	Enabled                     bool
 	Provider                    string
 	APIKey                      string
 	BaseURL                     string
@@ -229,6 +259,7 @@ func Load() (Config, error) {
 			AccessTTL: envDuration("SHARE_ACCESS_TTL", 15*time.Minute),
 		},
 		AI: AI{
+			Enabled:                     envBool("AI_ENABLED", true),
 			Provider:                    env("AI_PROVIDER", "fake"),
 			APIKey:                      os.Getenv("DASHSCOPE_API_KEY"),
 			BaseURL:                     env("AI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
@@ -262,6 +293,21 @@ func Load() (Config, error) {
 			Endpoint:     env("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317"),
 			SamplerRatio: envFloat("OTEL_TRACES_SAMPLER_ARG", 1.0),
 			Environment:  env("APP_ENV", "development"),
+		},
+		Registry: Registry{
+			Enabled:       envBool("ETCD_ENABLED", false),
+			Endpoints:     envList("ETCD_ENDPOINTS", []string{"etcd:2379"}),
+			Username:      env("ETCD_USERNAME", ""),
+			Password:      env("ETCD_PASSWORD", ""),
+			DialTimeout:   envDuration("ETCD_DIAL_TIMEOUT", 5*time.Second),
+			Prefix:        env("ETCD_SERVICE_PREFIX", "/services/aisvc"),
+			LeaseTTL:      envDuration("ETCD_LEASE_TTL", 10*time.Second),
+			AdvertiseAddr: env("AISVC_ADVERTISE_ADDR", ""),
+		},
+		Locking: Locking{
+			DispatcherLeaderEnabled: envBool("OUTBOX_LEADER_LOCK_ENABLED", true),
+			LeaderKey:               env("OUTBOX_LEADER_LOCK_KEY", "yunpan:outbox:dispatcher:leader"),
+			LeaderTTL:               envDuration("OUTBOX_LEADER_LOCK_TTL", 15*time.Second),
 		},
 	}
 
@@ -332,37 +378,39 @@ func (c Config) Validate() error {
 	if c.App.Env == "production" && c.Sharing.Secret == "bx-yunpan-development-share-secret" {
 		errs = append(errs, errors.New("SHARE_SECRET must be changed in production"))
 	}
-	if c.AI.Provider != "fake" && c.AI.Provider != "dashscope" {
-		errs = append(errs, errors.New("AI_PROVIDER must be fake or dashscope"))
-	}
-	if c.AI.Provider == "dashscope" && c.AI.APIKey == "" {
-		errs = append(errs, errors.New("DASHSCOPE_API_KEY is required for dashscope"))
-	}
-	if c.AI.Dimension != 1024 || c.AI.MaxObjectBytes <= 0 || c.AI.RequestTimeout <= 0 {
-		errs = append(errs, errors.New("AI embedding dimension must be 1024 and AI size/timeout settings must be positive"))
-	}
-	if c.AI.RateLimitEnabled && (c.AI.RateLimitSearchPerMinute <= 0 || c.AI.RateLimitAskPerMinute <= 0 || c.AI.RateLimitReprocessPerMinute <= 0) {
-		errs = append(errs, errors.New("enabled AI rate limits must be positive"))
-	}
-	if strings.TrimSpace(c.AIService.GRPCAddr) == "" || strings.TrimSpace(c.AIService.Target) == "" {
-		errs = append(errs, errors.New("AISVC_GRPC_ADDR and AISVC_GRPC_TARGET are required"))
-	}
-	// 三层 deadline 收敛：API 调用预算不能短于 aisvc 单次 Provider 调用超时，
-	// 否则请求必然在下游还没做完时就被上游掐断。
-	if c.AIService.CallTimeout < c.AI.RequestTimeout {
-		errs = append(errs, errors.New("AISVC_CALL_TIMEOUT must not be shorter than AI_REQUEST_TIMEOUT"))
-	}
-	if c.AIService.SearchMaxAttempts <= 0 || c.AIService.ReprocessMaxAttempts <= 0 {
-		errs = append(errs, errors.New("AISVC retry attempts must be positive"))
-	}
-	if c.AIService.RetryBaseBackoff <= 0 || c.AIService.RetryMaxBackoff < c.AIService.RetryBaseBackoff {
-		errs = append(errs, errors.New("AISVC retry backoff settings are invalid"))
-	}
-	if c.AIService.BreakerWindow <= 0 || c.AIService.BreakerMinRequests <= 0 || c.AIService.BreakerOpenTimeout <= 0 || c.AIService.BreakerHalfOpenProbes <= 0 {
-		errs = append(errs, errors.New("AISVC breaker settings must be positive"))
-	}
-	if c.AIService.BreakerFailureRate <= 0 || c.AIService.BreakerFailureRate > 1 {
-		errs = append(errs, errors.New("AISVC_BREAKER_FAILURE_RATE must be in (0, 1]"))
+	if c.AI.Enabled {
+		if c.AI.Provider != "fake" && c.AI.Provider != "dashscope" {
+			errs = append(errs, errors.New("AI_PROVIDER must be fake or dashscope when AI is enabled"))
+		}
+		if c.AI.Provider == "dashscope" && c.AI.APIKey == "" {
+			errs = append(errs, errors.New("DASHSCOPE_API_KEY is required for dashscope"))
+		}
+		if c.AI.Dimension != 1024 || c.AI.MaxObjectBytes <= 0 || c.AI.RequestTimeout <= 0 {
+			errs = append(errs, errors.New("AI embedding dimension must be 1024 and AI size/timeout settings must be positive"))
+		}
+		if c.AI.RateLimitEnabled && (c.AI.RateLimitSearchPerMinute <= 0 || c.AI.RateLimitAskPerMinute <= 0 || c.AI.RateLimitReprocessPerMinute <= 0) {
+			errs = append(errs, errors.New("enabled AI rate limits must be positive"))
+		}
+		if strings.TrimSpace(c.AIService.GRPCAddr) == "" || strings.TrimSpace(c.AIService.Target) == "" {
+			errs = append(errs, errors.New("AISVC_GRPC_ADDR and AISVC_GRPC_TARGET are required"))
+		}
+		// 三层 deadline 收敛：API 调用预算不能短于 aisvc 单次 Provider 调用超时，
+		// 否则请求必然在下游还没做完时就被上游掐断。
+		if c.AIService.CallTimeout < c.AI.RequestTimeout {
+			errs = append(errs, errors.New("AISVC_CALL_TIMEOUT must not be shorter than AI_REQUEST_TIMEOUT"))
+		}
+		if c.AIService.SearchMaxAttempts <= 0 || c.AIService.ReprocessMaxAttempts <= 0 {
+			errs = append(errs, errors.New("AISVC retry attempts must be positive"))
+		}
+		if c.AIService.RetryBaseBackoff <= 0 || c.AIService.RetryMaxBackoff < c.AIService.RetryBaseBackoff {
+			errs = append(errs, errors.New("AISVC retry backoff settings are invalid"))
+		}
+		if c.AIService.BreakerWindow <= 0 || c.AIService.BreakerMinRequests <= 0 || c.AIService.BreakerOpenTimeout <= 0 || c.AIService.BreakerHalfOpenProbes <= 0 {
+			errs = append(errs, errors.New("AISVC breaker settings must be positive"))
+		}
+		if c.AIService.BreakerFailureRate <= 0 || c.AIService.BreakerFailureRate > 1 {
+			errs = append(errs, errors.New("AISVC_BREAKER_FAILURE_RATE must be in (0, 1]"))
+		}
 	}
 	if c.Tracing.Enabled {
 		if strings.TrimSpace(c.Tracing.Endpoint) == "" {
@@ -372,7 +420,51 @@ func (c Config) Validate() error {
 			errs = append(errs, errors.New("OTEL_TRACES_SAMPLER_ARG must be in [0, 1]"))
 		}
 	}
+	if c.AI.Enabled && c.Registry.Enabled {
+		if len(c.Registry.Endpoints) == 0 {
+			errs = append(errs, errors.New("ETCD_ENDPOINTS is required when etcd is enabled"))
+		}
+		if strings.TrimSpace(c.Registry.Prefix) == "" {
+			errs = append(errs, errors.New("ETCD_SERVICE_PREFIX is required when etcd is enabled"))
+		}
+		if c.Registry.DialTimeout <= 0 {
+			errs = append(errs, errors.New("ETCD_DIAL_TIMEOUT must be positive"))
+		}
+		// 租约太短会在网络抖动时误摘除健康实例：KeepAlive 的心跳间隔是
+		// TTL/3，低于 3s 基本没有重试余量。
+		if c.Registry.LeaseTTL < 3*time.Second {
+			errs = append(errs, errors.New("ETCD_LEASE_TTL must be at least 3s"))
+		}
+	}
+	if c.Locking.DispatcherLeaderEnabled {
+		if strings.TrimSpace(c.Locking.LeaderKey) == "" {
+			errs = append(errs, errors.New("OUTBOX_LEADER_LOCK_KEY is required when leader lock is enabled"))
+		}
+		// 锁 TTL 必须明显长于一轮轮询，否则每轮都在临界点上抢锁，
+		// 主从会来回抖动。
+		if c.Locking.LeaderTTL <= c.Outbox.PollInterval*2 {
+			errs = append(errs, errors.New("OUTBOX_LEADER_LOCK_TTL must be longer than twice OUTBOX_POLL_INTERVAL"))
+		}
+	}
 	return errors.Join(errs...)
+}
+
+// envList 解析逗号分隔的列表，忽略空白项。
+func envList(name string, fallback []string) []string {
+	value, ok := os.LookupEnv(name)
+	if !ok {
+		return fallback
+	}
+	items := make([]string, 0, 2)
+	for _, item := range strings.Split(value, ",") {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			items = append(items, trimmed)
+		}
+	}
+	if len(items) == 0 {
+		return fallback
+	}
+	return items
 }
 
 func env(name, fallback string) string {

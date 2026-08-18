@@ -14,6 +14,7 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai"
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai/pb"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/breaker"
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx"
 )
 
 // Config 描述客户端的连接、超时与各接口重试策略。
@@ -156,6 +157,7 @@ func (c *Client) RequestReprocess(ctx context.Context, ownerID, fileID uuid.UUID
 // call 统一套上总预算 deadline、熔断与重试。deadline 设在整个重试序列之外，
 // 保证"下游超时不长于上游"：预算耗尽后不会再发起新的尝试。
 func (c *Client) call(ctx context.Context, policy RetryPolicy, attempt func(context.Context) (bool, error)) error {
+	ctx = grpcx.InjectRequestID(ctx)
 	if c.config.CallTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, c.config.CallTimeout)

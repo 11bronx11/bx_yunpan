@@ -51,5 +51,10 @@ export AISVC_GRPC_TARGET="${proxy_app_host}:${aisvc_port:-8082}"
 if [[ "${OTEL_EXPORTER_OTLP_ENDPOINT:-}" == otel-collector:* ]]; then
   export OTEL_EXPORTER_OTLP_ENDPOINT="${proxy_infra_host}:${OTEL_EXPORTER_OTLP_ENDPOINT##*:}"
 fi
+# etcd 只在 compose 内网暴露，宿主机直跑时没有可连的地址：关掉服务发现，
+# 退回直连 AISVC_GRPC_TARGET。
+if [[ "${ETCD_ENDPOINTS:-}" == etcd:* ]]; then
+  export ETCD_ENABLED=false
+fi
 export YUNPAN_LOCAL_API_URL="http://${proxy_app_host}:${API_PORT:-8081}"
 export YUNPAN_LOCAL_STORAGE_URL="http://${proxy_infra_host}:${MINIO_PORT:-9000}"

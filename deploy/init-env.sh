@@ -5,6 +5,13 @@ deploy_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 env_file="$deploy_dir/.env"
 template_file="$deploy_dir/.env.example"
 
+if [[ ${1:-} == "--no-ai" ]]; then
+  template_file="$deploy_dir/.env.no-ai.example"
+elif (($#)); then
+  echo "Usage: ./deploy/init-env.sh [--no-ai]" >&2
+  exit 2
+fi
+
 if [[ -f "$env_file" ]]; then
   echo "Environment already exists: $env_file"
   exit 0
@@ -51,4 +58,4 @@ set_env SHARE_SECRET "$share_secret"
 set_env GRAFANA_ADMIN_PASSWORD "$grafana_password"
 chmod 600 "$env_file"
 
-echo "Created $env_file with local random secrets."
+echo "Created $env_file from $(basename "$template_file") with local random secrets."

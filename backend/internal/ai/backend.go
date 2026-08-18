@@ -19,6 +19,25 @@ type Backend interface {
 
 var _ Backend = (*Service)(nil)
 
+// DisabledBackend keeps the core drive API available when AI is explicitly
+// disabled. AI write/search routes fail immediately instead of waiting for a
+// gRPC connection to a service that is intentionally not running.
+type DisabledBackend struct{}
+
+var _ Backend = DisabledBackend{}
+
+func (DisabledBackend) Search(context.Context, uuid.UUID, SearchInput) ([]SearchHit, error) {
+	return nil, ErrUnavailable
+}
+
+func (DisabledBackend) Ask(context.Context, uuid.UUID, string, *uuid.UUID, []uuid.UUID) (string, []Citation, error) {
+	return "", nil, ErrUnavailable
+}
+
+func (DisabledBackend) RequestReprocess(context.Context, uuid.UUID, uuid.UUID, string) (Task, error) {
+	return Task{}, ErrUnavailable
+}
+
 // Reader 承载 AI 文档与任务的只读查询。这两条路径只读 ai_documents 与
 // async_tasks，不写 ai_* 表，因此 API 进程可以直接查库，不必绕一次 RPC。
 type Reader struct {

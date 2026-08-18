@@ -40,8 +40,8 @@ func requestIDFromIncoming(ctx context.Context) string {
 	return id.String()
 }
 
-// injectRequestID 把 context 里的 Request ID 写入 outgoing metadata。
-func injectRequestID(ctx context.Context) context.Context {
+// InjectRequestID 把 context 里的 Request ID 写入 outgoing metadata。
+func InjectRequestID(ctx context.Context) context.Context {
 	requestID := RequestID(ctx)
 	if requestID == "" {
 		return ctx
