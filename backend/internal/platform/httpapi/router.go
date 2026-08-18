@@ -7,13 +7,26 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	apispec "github.com/11bronx11/bx_yunpan/backend/api"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/health"
 )
 
+// tracedRequest 过滤掉探针与静态契约路由：它们由 k8s/compose 高频轮询，
+// 全采会把 Jaeger 刷满且没有诊断价值。
+func tracedRequest(c *gin.Context) bool {
+	switch c.FullPath() {
+	case "/health/live", "/health/ready", "/metrics", "/openapi.yaml", "/docs":
+		return false
+	default:
+		return true
+	}
+}
+
 type RouterConfig struct {
 	Environment  string
+	ServiceName  string
 	ProbeTimeout time.Duration
 	MaxBodyBytes int64
 	Logger       *slog.Logger
@@ -28,6 +41,9 @@ func NewRouter(cfg RouterConfig) *gin.Engine {
 	}
 
 	router := gin.New()
+	// otelgin 放在最前：它负责从 traceparent 头恢复上游 trace 并开出 server span，
+	// 后面所有中间件与 handler 都能从 ctx 拿到这个 span 作为父节点。
+	router.Use(otelgin.Middleware(cfg.ServiceName, otelgin.WithGinFilter(tracedRequest)))
 	router.Use(RequestID(), cfg.Metrics.Middleware(), AccessLog(cfg.Logger), Recovery(cfg.Logger), LimitRequestBody(cfg.MaxBodyBytes))
 
 	router.GET("/health/live", func(c *gin.Context) {

@@ -47,5 +47,9 @@ export S3_SECRET_KEY="${S3_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-yunpan-dev-secret}
 # aisvc:8082 只在 Docker 网络内可解析，宿主机改指本机端口。
 aisvc_port=${AISVC_GRPC_ADDR##*:}
 export AISVC_GRPC_TARGET="${proxy_app_host}:${aisvc_port:-8082}"
+# otel-collector:4317 同理只在 Docker 网络内可解析。
+if [[ "${OTEL_EXPORTER_OTLP_ENDPOINT:-}" == otel-collector:* ]]; then
+  export OTEL_EXPORTER_OTLP_ENDPOINT="${proxy_infra_host}:${OTEL_EXPORTER_OTLP_ENDPOINT##*:}"
+fi
 export YUNPAN_LOCAL_API_URL="http://${proxy_app_host}:${API_PORT:-8081}"
 export YUNPAN_LOCAL_STORAGE_URL="http://${proxy_infra_host}:${MINIO_PORT:-9000}"

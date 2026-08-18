@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type searchCandidate struct {
@@ -37,6 +38,7 @@ const (
 	maxQuestionRunes    = 2000
 )
 
+// Search 是检索入口。span 开在参数归一化之后，属性才反映真正生效的值。
 func (s *Service) Search(ctx context.Context, ownerID uuid.UUID, input SearchInput) ([]SearchHit, error) {
 	input.Query = strings.TrimSpace(input.Query)
 	if input.Query == "" || len([]rune(input.Query)) > maxSearchQueryRunes || len(input.MimeTypes) > 20 ||
@@ -49,20 +51,33 @@ func (s *Service) Search(ctx context.Context, ownerID uuid.UUID, input SearchInp
 	if input.Limit > 100 {
 		input.Limit = 100
 	}
+	ctx, span := startSpan(ctx, "ai.search",
+		attribute.String("ai.search_mode", input.Mode),
+		attribute.Int("ai.limit", input.Limit),
+	)
+	hits, err := s.search(ctx, ownerID, input)
+	if err == nil {
+		span.SetAttributes(attribute.Int("ai.hit_count", len(hits)))
+	}
+	endSpan(span, err)
+	return hits, err
+}
+
+func (s *Service) search(ctx context.Context, ownerID uuid.UUID, input SearchInput) ([]SearchHit, error) {
 	if input.FolderID != nil {
 		if _, err := s.drive.Folder(ownerID, *input.FolderID); err != nil {
 			return nil, ErrNotFound
 		}
 	}
 	if input.Mode == "name" {
-		candidates, err := s.queryCandidates(ctx, ownerID, input, "name", "")
+		candidates, err := s.recall(ctx, ownerID, input, "name", "")
 		return groupCandidates(candidates, "name", input.Limit), err
 	}
 	if input.Mode == "fulltext" {
-		candidates, err := s.queryCandidates(ctx, ownerID, input, "fulltext", "")
+		candidates, err := s.recall(ctx, ownerID, input, "fulltext", "")
 		return groupCandidates(candidates, "fulltext", input.Limit), err
 	}
-	embeddings, err := s.provider.Embeddings(ctx, []string{input.Query})
+	embeddings, err := s.embedQuery(ctx, input.Query)
 	if errors.Is(err, errProviderQuota) {
 		return nil, ErrQuota
 	}
@@ -71,7 +86,7 @@ func (s *Service) Search(ctx context.Context, ownerID uuid.UUID, input SearchInp
 	}
 	vector := vectorLiteral(embeddings[0])
 	if input.Mode == "semantic" {
-		candidates, err := s.queryCandidates(ctx, ownerID, input, "semantic", vector)
+		candidates, err := s.recall(ctx, ownerID, input, "semantic", vector)
 		return groupCandidates(candidates, "semantic", input.Limit), err
 	}
 	// 双路召回并发发起，融合延迟贴近较慢的那一路而非两路之和。
@@ -84,24 +99,39 @@ func (s *Service) Search(ctx context.Context, ownerID uuid.UUID, input SearchInp
 	wait.Add(2)
 	go func() {
 		defer wait.Done()
-		fulltext, fulltextErr = s.queryCandidates(ctx, ownerID, input, "fulltext", "")
+		fulltext, fulltextErr = s.recall(ctx, ownerID, input, "fulltext", "")
 	}()
 	go func() {
 		defer wait.Done()
-		semantic, semanticErr = s.queryCandidates(ctx, ownerID, input, "semantic", vector)
+		semantic, semanticErr = s.recall(ctx, ownerID, input, "semantic", vector)
 	}()
 	wait.Wait()
 	if err := errors.Join(fulltextErr, semanticErr); err != nil {
 		return nil, err
 	}
-	return reciprocalRankFusion(fulltext, semantic, input.Limit), nil
+	return fuse(ctx, fulltext, semantic, input.Limit), nil
 }
 
+// Ask 是问答入口：一个父 span 下面挂 ai.search（检索）与 ai.llm（生成），
+// 一眼能看出"慢在检索还是慢在大模型"。
 func (s *Service) Ask(ctx context.Context, ownerID uuid.UUID, question string, folderID *uuid.UUID, fileIDs []uuid.UUID) (string, []Citation, error) {
 	question = strings.TrimSpace(question)
 	if question == "" || len([]rune(question)) > maxQuestionRunes {
 		return "", nil, ErrInvalid
 	}
+	ctx, span := startSpan(ctx, "ai.ask",
+		attribute.Int("ai.scoped_file_count", len(fileIDs)),
+		attribute.Bool("ai.folder_scoped", folderID != nil),
+	)
+	answerText, citations, err := s.ask(ctx, ownerID, question, folderID, fileIDs)
+	if err == nil {
+		span.SetAttributes(attribute.Int("ai.citation_count", len(citations)))
+	}
+	endSpan(span, err)
+	return answerText, citations, err
+}
+
+func (s *Service) ask(ctx context.Context, ownerID uuid.UUID, question string, folderID *uuid.UUID, fileIDs []uuid.UUID) (string, []Citation, error) {
 	hits, err := s.Search(ctx, ownerID, SearchInput{
 		Query: question, Mode: "hybrid", FolderID: folderID, IncludeSubfolders: true, Limit: 40,
 	})
@@ -138,7 +168,7 @@ func (s *Service) Ask(ctx context.Context, ownerID uuid.UUID, question string, f
 			break
 		}
 	}
-	answer, err := s.provider.Answer(ctx, question, evidence)
+	answer, err := s.answer(ctx, question, evidence)
 	if errors.Is(err, errProviderQuota) {
 		return "", nil, ErrQuota
 	}

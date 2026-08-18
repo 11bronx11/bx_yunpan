@@ -91,7 +91,7 @@ func (h *FileHTTP) delete(c *gin.Context) {
 		new(HTTP).writeError(c, err)
 		return
 	}
-	if err := h.manager.Delete(ownerID, fileID, version); err != nil {
+	if err := h.manager.Delete(c.Request.Context(), ownerID, fileID, version); err != nil {
 		new(HTTP).writeError(c, err)
 		return
 	}

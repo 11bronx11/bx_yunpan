@@ -11,6 +11,7 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	redis "github.com/redis/go-redis/v9"
+	"github.com/uptrace/opentelemetry-go-extra/otelgorm"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -56,6 +57,12 @@ func Open(ctx context.Context, cfg config.Config) (*Set, error) {
 	if err != nil {
 		_ = redisClient.Close()
 		return nil, fmt.Errorf("create gorm database: %w", err)
+	}
+	// 数据库自动埋点：每条 SQL 一个 span，挂在当前请求或任务的 span 下。
+	// 未启用 tracing 时 otel.Tracer 是 no-op，开销接近于零。
+	if err := gormDB.Use(otelgorm.NewPlugin()); err != nil {
+		_ = redisClient.Close()
+		return nil, fmt.Errorf("install gorm tracing plugin: %w", err)
 	}
 	sqlDB, err := gormDB.DB()
 	if err != nil {

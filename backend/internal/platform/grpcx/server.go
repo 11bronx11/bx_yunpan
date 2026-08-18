@@ -6,6 +6,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -22,10 +23,15 @@ type ServerOptions struct {
 	Mapper  ErrorMapper
 }
 
-// ServerInterceptors 返回 unary 与 stream 两组拦截器：
+// ServerInterceptors 返回服务端需要的 grpc.ServerOption：
+// otelgrpc stats handler(恢复上游 trace 并开 server span)+
 // Request ID 透传 → panic recover → 错误码映射 → 耗时与错误码指标。
+//
+// StatsHandler 在拦截器之前执行，所以拦截器与 handler 拿到的 ctx 里
+// 已经带上了 server span,手动埋点会自动挂在它下面。
 func ServerInterceptors(options ServerOptions) []grpc.ServerOption {
 	return []grpc.ServerOption{
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(unaryServerInterceptor(options)),
 		grpc.ChainStreamInterceptor(streamServerInterceptor(options)),
 	}

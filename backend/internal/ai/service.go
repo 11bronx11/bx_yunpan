@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"github.com/minio/minio-go/v7"
+	"go.opentelemetry.io/otel/attribute"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -52,6 +53,18 @@ func (s *Service) ProcessObject(ctx context.Context, objectID uuid.UUID) error {
 }
 
 func (s *Service) processObject(ctx context.Context, objectID uuid.UUID, force bool) error {
+	// ai.index 是索引链路的业务根 span：它的父节点是 Asynq 消费 span，
+	// 后者又续接上传请求的 trace，因此一次上传能一路看到索引完成。
+	ctx, span := startSpan(ctx, "ai.index",
+		attribute.String("ai.object_id", objectID.String()),
+		attribute.Bool("ai.force", force),
+	)
+	err := s.runIndex(ctx, objectID, force)
+	endSpan(span, err)
+	return err
+}
+
+func (s *Service) runIndex(ctx context.Context, objectID uuid.UUID, force bool) error {
 	object, err := s.objects.Get(objectID)
 	if err != nil {
 		return ErrNotFound
@@ -79,7 +92,7 @@ func (s *Service) processObject(ctx context.Context, objectID uuid.UUID, force b
 	if err != nil {
 		return s.finishFailed(document.ID, "ai.storage_read_failed", err)
 	}
-	sections, err := extract(ctx, s.provider, extractionMimeType, data)
+	sections, err := s.extractSections(ctx, extractionMimeType, object.SizeBytes, data)
 	if errors.Is(err, errUnsupported) {
 		return s.finishUnsupported(document.ID, "ai.unsupported_type")
 	}
@@ -92,7 +105,7 @@ func (s *Service) processObject(ctx context.Context, objectID uuid.UUID, force b
 	if err := s.touchDocument(ctx, document.ID); err != nil {
 		return s.finishFailed(document.ID, "ai.persistence_failed", err)
 	}
-	chunks := makeChunks(sections)
+	chunks := s.makeChunksTraced(ctx, sections)
 	if len(chunks) == 0 {
 		return s.finishUnsupported(document.ID, "ai.empty_content")
 	}
@@ -101,22 +114,11 @@ func (s *Service) processObject(ctx context.Context, objectID uuid.UUID, force b
 	for index := range chunks {
 		texts[index] = chunks[index].Content
 	}
-	embeddings := make([][]float32, 0, len(texts))
-	for start := 0; start < len(texts); start += embeddingBatchSize {
-		end := start + embeddingBatchSize
-		if end > len(texts) {
-			end = len(texts)
-		}
-		batch, err := s.provider.Embeddings(ctx, texts[start:end])
-		if err != nil {
-			return s.finishFailed(document.ID, "ai.embedding_failed", err)
-		}
-		embeddings = append(embeddings, batch...)
-		if err := s.touchDocument(ctx, document.ID); err != nil {
-			return s.finishFailed(document.ID, "ai.persistence_failed", err)
-		}
+	embeddings, err := s.embedTexts(ctx, document.ID, texts)
+	if err != nil {
+		return s.finishFailed(document.ID, "ai.embedding_failed", err)
 	}
-	insight, err := s.provider.Enrich(ctx, strings.Join(texts, "\n"))
+	insight, err := s.enrich(ctx, strings.Join(texts, "\n"))
 	if err != nil {
 		return s.finishFailed(document.ID, "ai.enrichment_failed", err)
 	}

@@ -144,7 +144,7 @@ func (h *HTTP) importShare(c *gin.Context) {
 		h.writeError(c, ErrNotFound)
 		return
 	}
-	file, err := h.service.Import(userID, shareID, request.TargetFolderID, c.GetHeader("Idempotency-Key"), c.GetHeader("X-Share-Token"))
+	file, err := h.service.Import(c.Request.Context(), userID, shareID, request.TargetFolderID, c.GetHeader("Idempotency-Key"), c.GetHeader("X-Share-Token"))
 	if err != nil {
 		h.writeError(c, err)
 		return

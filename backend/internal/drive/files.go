@@ -49,8 +49,10 @@ func (m *FileManager) Move(ownerID, fileID, targetFolderID uuid.UUID, version in
 	return m.drive.MoveFile(ownerID, fileID, targetFolderID, version)
 }
 
-func (m *FileManager) Delete(ownerID, fileID uuid.UUID, version int64) error {
-	return m.drive.db.Transaction(func(tx *gorm.DB) error {
+// Delete 需要 ctx：事务里写 Outbox 时要把当前 span context 一起注入，
+// 让异步 GC 能续接同一条 trace。
+func (m *FileManager) Delete(ctx context.Context, ownerID, fileID uuid.UUID, version int64) error {
+	return m.drive.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var entry FileEntry
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ? AND deleted_at IS NULL", fileID, ownerID).First(&entry).Error; err != nil {
 			return ErrNotFound

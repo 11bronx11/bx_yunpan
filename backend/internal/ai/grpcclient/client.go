@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -45,6 +46,9 @@ func New(config Config) (*Client, error) {
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		// 客户端侧负载均衡：配合 T3 的 etcd resolver 在多副本间轮询。
 		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig":[{"round_robin":{}}]}`),
+		// otelgrpc 负责开 client span 并把 traceparent 注入 metadata，
+		// 让 API 与 aisvc 的 span 串成同一条 trace。
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	}, config.DialOptions...)
 
 	conn, err := grpc.NewClient(config.Target, options...)

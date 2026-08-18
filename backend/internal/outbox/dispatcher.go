@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"time"
@@ -48,6 +49,7 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context) error {
 			return err
 		}
 		for _, event := range events {
+			payload := payloadWithTrace(event, d.logger)
 			for _, target := range fanout(event.EventType) {
 				options := []asynq.Option{
 					// TaskID 带上任务类型：同一 outbox 行扇出的两个任务要有不同
@@ -60,7 +62,7 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context) error {
 				if target.taskType == EventObjectGCRequested {
 					options = append(options, asynq.ProcessAt(time.Now().UTC().Add(d.config.GCDelay)))
 				}
-				_, err := d.client.EnqueueContext(ctx, asynq.NewTask(target.taskType, event.Payload), options...)
+				_, err := d.client.EnqueueContext(ctx, asynq.NewTask(target.taskType, payload), options...)
 				if err != nil && !errors.Is(err, asynq.ErrTaskIDConflict) {
 					return err
 				}
@@ -73,6 +75,33 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context) error {
 		}
 		return nil
 	})
+}
+
+// TracePayloadKey 是 Asynq payload 里承载 trace context 的字段名。
+// 业务 handler 用具名 struct 反序列化，多出这个字段不会影响它们。
+const TracePayloadKey = "_trace"
+
+// payloadWithTrace 把 outbox 行上的 trace context 合并进任务 payload，
+// 让 Worker / aisvc 侧能 Extract 出来当 parent span。
+func payloadWithTrace(event Event, logger *slog.Logger) []byte {
+	if len(event.TraceContext) == 0 {
+		return event.Payload
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(event.Payload, &fields); err != nil {
+		// payload 不是 JSON 对象时原样投递，不因为 trace 丢失影响业务投递。
+		return event.Payload
+	}
+	if fields == nil {
+		fields = map[string]json.RawMessage{}
+	}
+	fields[TracePayloadKey] = json.RawMessage(event.TraceContext)
+	merged, err := json.Marshal(fields)
+	if err != nil {
+		logger.Warn("merge trace context into task payload", "event_id", event.ID, "error", err)
+		return event.Payload
+	}
+	return merged
 }
 
 // dispatchTarget 是一条 outbox 行要投递到的一个 Asynq 任务。

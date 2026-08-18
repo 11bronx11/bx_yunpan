@@ -128,7 +128,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, input CreateInpu
 	var mode string
 	var resultID uuid.UUID
 	var started *Session
-	err = s.db.Transaction(func(tx *gorm.DB) error {
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		idempotencyLock := "upload:idempotency:" + userID.String() + ":" + input.IdempotencyKey
 		if err := dblock.Transaction(tx, idempotencyLock); err != nil {
 			return err

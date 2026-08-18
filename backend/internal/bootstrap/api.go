@@ -53,6 +53,7 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 
 	router := httpapi.NewRouter(httpapi.RouterConfig{
 		Environment:  cfg.App.Env,
+		ServiceName:  "bx-yunpan-api",
 		ProbeTimeout: cfg.HTTP.ProbeTimeout,
 		MaxBodyBytes: cfg.HTTP.MaxBodyBytes,
 		Logger:       logger,

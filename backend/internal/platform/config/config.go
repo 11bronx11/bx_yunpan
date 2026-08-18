@@ -23,6 +23,7 @@ type Config struct {
 	Sharing   Sharing
 	AI        AI
 	AIService AIService
+	Tracing   Tracing
 }
 
 type App struct {
@@ -103,6 +104,16 @@ type Outbox struct {
 type Sharing struct {
 	Secret    string
 	AccessTTL time.Duration
+}
+
+// Tracing 描述 OpenTelemetry 接入参数。
+type Tracing struct {
+	Enabled bool
+	// Endpoint 是 OTLP gRPC collector 地址（host:port，不带 scheme）。
+	Endpoint string
+	// SamplerRatio 配合 ParentBased 使用，开发默认 1.0 全采。
+	SamplerRatio float64
+	Environment  string
 }
 
 // AIService 描述 aisvc 进程与 API 侧客户端的连接参数。
@@ -246,6 +257,12 @@ func Load() (Config, error) {
 			BreakerOpenTimeout:    envDuration("AISVC_BREAKER_OPEN_TIMEOUT", 5*time.Second),
 			BreakerHalfOpenProbes: envInt("AISVC_BREAKER_HALF_OPEN_PROBES", 3),
 		},
+		Tracing: Tracing{
+			Enabled:      envBool("OTEL_TRACES_ENABLED", false),
+			Endpoint:     env("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317"),
+			SamplerRatio: envFloat("OTEL_TRACES_SAMPLER_ARG", 1.0),
+			Environment:  env("APP_ENV", "development"),
+		},
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -346,6 +363,14 @@ func (c Config) Validate() error {
 	}
 	if c.AIService.BreakerFailureRate <= 0 || c.AIService.BreakerFailureRate > 1 {
 		errs = append(errs, errors.New("AISVC_BREAKER_FAILURE_RATE must be in (0, 1]"))
+	}
+	if c.Tracing.Enabled {
+		if strings.TrimSpace(c.Tracing.Endpoint) == "" {
+			errs = append(errs, errors.New("OTEL_EXPORTER_OTLP_ENDPOINT is required when tracing is enabled"))
+		}
+		if c.Tracing.SamplerRatio < 0 || c.Tracing.SamplerRatio > 1 {
+			errs = append(errs, errors.New("OTEL_TRACES_SAMPLER_ARG must be in [0, 1]"))
+		}
 	}
 	return errors.Join(errs...)
 }

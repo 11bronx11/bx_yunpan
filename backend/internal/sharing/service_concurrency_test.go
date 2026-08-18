@@ -1,6 +1,7 @@
 package sharing
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -89,7 +90,7 @@ func TestImportSerializesConcurrentIdempotentRequests(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			file, err := service.Import(recipientID, share.ID, recipientRoot.ID, idempotencyKey, accessToken)
+			file, err := service.Import(context.Background(), recipientID, share.ID, recipientRoot.ID, idempotencyKey, accessToken)
 			results <- file
 			errs <- err
 		}()

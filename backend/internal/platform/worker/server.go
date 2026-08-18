@@ -47,6 +47,7 @@ func run(ctx context.Context, cfg config.Config, queues map[string]int, logger *
 		},
 	)
 	mux := asynq.NewServeMux()
+	mux.Use(TracingMiddleware())
 	mux.HandleFunc(TaskSystemPing, func(ctx context.Context, _ *asynq.Task) error {
 		logger.DebugContext(ctx, "worker ping handled")
 		return nil

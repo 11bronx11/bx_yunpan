@@ -1,6 +1,7 @@
 package sharing
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -156,7 +157,8 @@ func (s *Service) Access(raw string) (Share, drive.FileView, error) {
 	return share, file, nil
 }
 
-func (s *Service) Import(userID, shareID, targetFolderID uuid.UUID, idempotencyKey, accessToken string) (drive.FileView, error) {
+// Import 需要 ctx：事务里写 Outbox 时要注入当前 span context。
+func (s *Service) Import(ctx context.Context, userID, shareID, targetFolderID uuid.UUID, idempotencyKey, accessToken string) (drive.FileView, error) {
 	share, source, err := s.Access(accessToken)
 	if err != nil || share.ID != shareID || len(idempotencyKey) == 0 || len(idempotencyKey) > 128 {
 		return drive.FileView{}, ErrNotFound
@@ -169,7 +171,7 @@ func (s *Service) Import(userID, shareID, targetFolderID uuid.UUID, idempotencyK
 		return drive.FileView{}, ErrNotFound
 	}
 	var importedID uuid.UUID
-	err = s.db.Transaction(func(tx *gorm.DB) error {
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		lockKey := "share:import:" + userID.String() + ":" + shareID.String() + ":" + idempotencyKey
 		if err := dblock.Transaction(tx, lockKey); err != nil {
 			return err
