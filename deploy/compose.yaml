@@ -64,6 +64,18 @@ x-app-environment: &app-environment
   AI_RATE_LIMIT_SEARCH_PER_MINUTE: ${AI_RATE_LIMIT_SEARCH_PER_MINUTE:-30}
   AI_RATE_LIMIT_ASK_PER_MINUTE: ${AI_RATE_LIMIT_ASK_PER_MINUTE:-10}
   AI_RATE_LIMIT_REPROCESS_PER_MINUTE: ${AI_RATE_LIMIT_REPROCESS_PER_MINUTE:-3}
+  AISVC_GRPC_ADDR: ${AISVC_GRPC_ADDR:-:8082}
+  AISVC_GRPC_TARGET: ${AISVC_GRPC_TARGET:-aisvc:8082}
+  AISVC_CALL_TIMEOUT: ${AISVC_CALL_TIMEOUT:-120s}
+  AISVC_SEARCH_MAX_ATTEMPTS: ${AISVC_SEARCH_MAX_ATTEMPTS:-3}
+  AISVC_REPROCESS_MAX_ATTEMPTS: ${AISVC_REPROCESS_MAX_ATTEMPTS:-3}
+  AISVC_RETRY_BASE_BACKOFF: ${AISVC_RETRY_BASE_BACKOFF:-20ms}
+  AISVC_RETRY_MAX_BACKOFF: ${AISVC_RETRY_MAX_BACKOFF:-1s}
+  AISVC_BREAKER_WINDOW: ${AISVC_BREAKER_WINDOW:-10s}
+  AISVC_BREAKER_MIN_REQUESTS: ${AISVC_BREAKER_MIN_REQUESTS:-20}
+  AISVC_BREAKER_FAILURE_RATE: ${AISVC_BREAKER_FAILURE_RATE:-0.5}
+  AISVC_BREAKER_OPEN_TIMEOUT: ${AISVC_BREAKER_OPEN_TIMEOUT:-5s}
+  AISVC_BREAKER_HALF_OPEN_PROBES: ${AISVC_BREAKER_HALF_OPEN_PROBES:-3}
 
 services:
   postgres:
@@ -183,6 +195,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      aisvc:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8081/health/live"]
       interval: 5s
@@ -215,11 +229,43 @@ services:
     init: true
     stop_grace_period: 30s
 
+  # AI 服务：gRPC server + 独占 ai 队列的 Asynq worker。
+  # 抽取、OCR、Embedding 是 CPU/IO 重活，独立进程才能独立扩容：
+  # docker compose up -d --scale aisvc=2
+  aisvc:
+    profiles: ["app"]
+    image: bx-yunpan-aisvc:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args:
+        DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
+        GO_VERSION: ${GO_VERSION:-1.25.13}
+        GO_PROXY: ${GO_PROXY:-https://proxy.golang.org,direct}
+        TARGET: aisvc
+    environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # 镜像里没有 grpc_health_probe，用自己的二进制走 grpc.health.v1 探活。
+      test: ["CMD", "/app/service", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
   web:
     profiles: ["app"]
     image: bx-yunpan-web:${APP_IMAGE_TAG:-local}
     build:
-      context: ../picture_bed
+      context: ../web
       args:
         DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
         NODE_VERSION: ${NODE_VERSION:-22.23.0}
@@ -246,6 +292,17 @@ services:
       - "127.0.0.1:4317:4317"
       - "127.0.0.1:4318:4318"
       - "127.0.0.1:13133:13133"
+    depends_on:
+      - jaeger
+    restart: unless-stopped
+
+  jaeger:
+    profiles: ["observability"]
+    image: ${DOCKER_REGISTRY:-docker.io}/jaegertracing/all-in-one:1.74.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "127.0.0.1:${JAEGER_UI_PORT:-16686}:16686"
     restart: unless-stopped
 
   prometheus:

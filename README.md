@@ -2,7 +2,7 @@
 
 BX YunPan 是一个 React 18 + Go Gin 的智能私有云盘。项目以网盘核心链路为主，覆盖目录化文件管理、S3 Multipart 上传、断点恢复、SHA-256 秒传、Share Key 导入、异步缩略图，以及混合检索和有证据约束的 RAG 问答。
 
-后端采用模块化单体架构，按 Identity、Drive、Upload、Object、Sharing、AI/Search 等业务边界组织代码。当前支持 Docker Compose 单机部署，API 与 Worker 可独立扩容，并为后续按数据所有权拆分微服务预留了清晰边界。
+**技术栈定位：模块化单体 + AI 服务独立部署。** 后端主体是模块化单体，按 Identity、Drive、Upload、Object、Sharing 等业务边界组织代码，共享一个本地事务边界；只有 AI 模块（文本抽取、OCR/Vision、Embedding）因为 CPU/IO 密集、请求特征与 API 显著不同，被拆成独立进程 `aisvc`，经 gRPC 调用并独立扩容。这不是完整的微服务架构：`ai_*` 表由 aisvc 独占写入，但 drive 的 `file_entries` / `folders` / `file_objects` 保持只读共享，以保留把权限过滤下推到 SQL 的检索设计。取舍理由见「架构取舍」。
 
 ## 核心能力
 
@@ -116,7 +116,7 @@ DASHSCOPE_API_KEY=你的阿里云百炼 API Key
 
 `--no-build` 仍会根据 `deploy/.env` 重建需要更新配置的容器，但不会重新编译源码；全新环境不能使用该参数。
 
-同时启动 Prometheus、Grafana 和 OpenTelemetry Collector：
+同时启动 Prometheus、Grafana、OpenTelemetry Collector 和 Jaeger：
 
 ```bash
 ./deploy/up.sh --observability
@@ -132,6 +132,7 @@ DASHSCOPE_API_KEY=你的阿里云百炼 API Key
 | MinIO Console | `http://127.0.0.1:9001` | 对象存储管理 |
 | Prometheus | `http://127.0.0.1:9090` | 可选指标查询 |
 | Grafana | `http://127.0.0.1:3001` | 可选监控面板 |
+| Jaeger | `http://127.0.0.1:16686` | 可选分布式 Trace 查询 |
 
 ### 运维命令
 
@@ -329,7 +330,7 @@ go test ./...
 go vet ./...
 
 # React
-cd picture_bed
+cd web
 npm run lint
 CI=true npm test -- --runInBand
 npm run build
@@ -363,6 +364,6 @@ backend/internal/media       图片缩略图
 backend/internal/ai          抽取、Embedding、RRF 与 RAG
 backend/internal/outbox      Transactional Outbox
 backend/migrations           PostgreSQL/pgvector Schema
-picture_bed/src              React 云盘工作台
+web/src                      React 云盘工作台
 deploy                       Compose、Nginx、监控和部署脚本
 ```

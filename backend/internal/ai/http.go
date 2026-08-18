@@ -12,49 +12,30 @@ import (
 )
 
 type HTTP struct {
-	service      *Service
+	backend      Backend
+	reader       *Reader
 	authenticate gin.HandlerFunc
-	limiter      RequestLimiter
 }
 
-func NewHTTP(service *Service, authenticate gin.HandlerFunc, limiter RequestLimiter) *HTTP {
-	return &HTTP{service: service, authenticate: authenticate, limiter: limiter}
+// NewHTTP 接受 Backend 接口：进程内 *Service 或 gRPC 客户端均可。
+// 限流已下移到 aisvc 侧，API 侧不再计数，避免多副本各自计数导致总量失控。
+func NewHTTP(backend Backend, reader *Reader, authenticate gin.HandlerFunc) *HTTP {
+	return &HTTP{backend: backend, reader: reader, authenticate: authenticate}
 }
 
 func (h *HTTP) RegisterRoutes(v1 *gin.RouterGroup) {
-	v1.POST("/search", h.authenticate, h.limitBody(), h.rateLimit("search"), h.search)
+	v1.POST("/search", h.authenticate, h.limitBody(), h.search)
 	files := v1.Group("/files", h.authenticate)
 	files.GET("/:fileId/ai", h.getDocument)
-	files.POST("/:fileId/ai/reprocess", h.rateLimit("reprocess"), h.reprocess)
+	files.POST("/:fileId/ai/reprocess", h.reprocess)
 	ai := v1.Group("/ai", h.authenticate)
-	ai.POST("/ask", h.limitBody(), h.rateLimit("ask"), h.ask)
+	ai.POST("/ask", h.limitBody(), h.ask)
 	ai.GET("/jobs/:taskId", h.getTask)
 }
 
 func (h *HTTP) limitBody() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
-		c.Next()
-	}
-}
-
-func (h *HTTP) rateLimit(scope string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		ownerID, ok := httpapi.PrincipalID(c)
-		if !ok || h.limiter == nil {
-			c.Next()
-			return
-		}
-		allowed, err := h.limiter.Allow(c.Request.Context(), ownerID, scope)
-		if err != nil {
-			c.Next()
-			return
-		}
-		if !allowed {
-			c.Header("Retry-After", "60")
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, httpapi.ErrorEnvelope(c, "ai.rate_limited", "AI request rate limit exceeded"))
-			return
-		}
 		c.Next()
 	}
 }
@@ -77,7 +58,7 @@ func (h *HTTP) search(c *gin.Context) {
 		includeSubfolders = *request.IncludeSubfolders
 	}
 	ownerID, _ := httpapi.PrincipalID(c)
-	hits, err := h.service.Search(c.Request.Context(), ownerID, SearchInput{
+	hits, err := h.backend.Search(c.Request.Context(), ownerID, SearchInput{
 		Query: request.Query, Mode: request.Mode, FolderID: request.FolderID, IncludeSubfolders: includeSubfolders,
 		MimeTypes: request.MimeTypes, Limit: request.Limit,
 	})
@@ -95,7 +76,7 @@ func (h *HTTP) getDocument(c *gin.Context) {
 		h.writeError(c, ErrNotFound)
 		return
 	}
-	file, document, err := h.service.GetDocument(ownerID, fileID)
+	file, document, err := h.reader.GetDocument(ownerID, fileID)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -114,7 +95,7 @@ func (h *HTTP) reprocess(c *gin.Context) {
 		h.writeError(c, ErrNotFound)
 		return
 	}
-	task, err := h.service.RequestReprocess(ownerID, fileID, c.GetHeader("Idempotency-Key"))
+	task, err := h.backend.RequestReprocess(c.Request.Context(), ownerID, fileID, c.GetHeader("Idempotency-Key"))
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -133,7 +114,7 @@ func (h *HTTP) ask(c *gin.Context) {
 		return
 	}
 	ownerID, _ := httpapi.PrincipalID(c)
-	answer, citations, err := h.service.Ask(c.Request.Context(), ownerID, request.Question, request.FolderID, request.FileIDs)
+	answer, citations, err := h.backend.Ask(c.Request.Context(), ownerID, request.Question, request.FolderID, request.FileIDs)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -148,7 +129,7 @@ func (h *HTTP) getTask(c *gin.Context) {
 		h.writeError(c, ErrNotFound)
 		return
 	}
-	task, err := h.service.GetTask(ownerID, taskID)
+	task, err := h.reader.GetTask(ownerID, taskID)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -156,19 +137,13 @@ func (h *HTTP) getTask(c *gin.Context) {
 	c.JSON(http.StatusOK, taskResponse(task))
 }
 
+// writeError 走 errmap.go 的统一映射表，避免三层错误码散落在各处。
 func (h *HTTP) writeError(c *gin.Context, err error) {
-	switch {
-	case errors.Is(err, ErrNotFound):
-		c.JSON(http.StatusNotFound, httpapi.ErrorEnvelope(c, "ai.not_found", "AI resource not found"))
-	case errors.Is(err, ErrInvalid):
-		c.JSON(http.StatusUnprocessableEntity, httpapi.ErrorEnvelope(c, "ai.invalid_request", "invalid AI request"))
-	case errors.Is(err, ErrQuota):
-		c.JSON(http.StatusTooManyRequests, httpapi.ErrorEnvelope(c, "ai.quota_exhausted", "AI provider quota exhausted"))
-	case errors.Is(err, ErrUnavailable):
-		c.JSON(http.StatusServiceUnavailable, httpapi.ErrorEnvelope(c, "ai.unavailable", "AI provider unavailable"))
-	default:
-		c.JSON(http.StatusInternalServerError, httpapi.ErrorEnvelope(c, "internal.error", "internal server error"))
+	status, code, message := HTTPStatus(err)
+	if errors.Is(err, ErrRateLimited) {
+		c.Header("Retry-After", "60")
 	}
+	c.JSON(status, httpapi.ErrorEnvelope(c, code, message))
 }
 
 func taskResponse(task Task) gin.H {

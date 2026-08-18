@@ -5,9 +5,9 @@ deploy_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 root_dir=$(cd -- "$deploy_dir/.." && pwd)
 
 case "${1:-}" in
-  api|worker|migrate) target=$1; shift ;;
+  api|worker|aisvc|migrate) target=$1; shift ;;
   *)
-    echo "Usage: ./deploy/local-run.sh {api|worker|migrate} [args...]" >&2
+    echo "Usage: ./deploy/local-run.sh {api|worker|aisvc|migrate} [args...]" >&2
     exit 2
     ;;
 esac

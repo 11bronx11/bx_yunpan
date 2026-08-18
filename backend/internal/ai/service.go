@@ -169,19 +169,7 @@ func (s *Service) extractionMimeType(objectID uuid.UUID, mimeType string) (strin
 	return mimeType, nil
 }
 
-func (s *Service) GetDocument(ownerID, fileID uuid.UUID) (drive.FileView, Document, error) {
-	file, err := s.drive.File(ownerID, fileID)
-	if err != nil {
-		return drive.FileView{}, Document{}, ErrNotFound
-	}
-	var document Document
-	if err := s.db.Where("object_id = ?", file.ObjectID).First(&document).Error; err != nil {
-		return file, Document{}, ErrNotFound
-	}
-	return file, document, nil
-}
-
-func (s *Service) RequestReprocess(ownerID, fileID uuid.UUID, idempotencyKey string) (Task, error) {
+func (s *Service) RequestReprocess(ctx context.Context, ownerID, fileID uuid.UUID, idempotencyKey string) (Task, error) {
 	if strings.TrimSpace(idempotencyKey) == "" {
 		return Task{}, ErrInvalid
 	}
@@ -194,7 +182,7 @@ func (s *Service) RequestReprocess(ownerID, fileID uuid.UUID, idempotencyKey str
 		ID: uuid.Must(uuid.NewV7()), OwnerID: ownerID, TaskType: "ai.reprocess", DedupeKey: dedupeKey,
 		ResourceType: "file", ResourceID: fileID, Status: "pending", Progress: 0,
 	}
-	err = s.db.Transaction(func(tx *gorm.DB) error {
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		result := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "task_type"}, {Name: "dedupe_key"}}, DoNothing: true}).Create(&task)
 		if result.Error != nil {
 			return result.Error
@@ -207,14 +195,6 @@ func (s *Service) RequestReprocess(ownerID, fileID uuid.UUID, idempotencyKey str
 		})
 	})
 	return task, err
-}
-
-func (s *Service) GetTask(ownerID, taskID uuid.UUID) (Task, error) {
-	var task Task
-	if err := s.db.Where("id = ? AND owner_id = ?", taskID, ownerID).First(&task).Error; err != nil {
-		return Task{}, ErrNotFound
-	}
-	return task, nil
 }
 
 func (s *Service) ProcessTask(ctx context.Context, taskID, objectID uuid.UUID) error {

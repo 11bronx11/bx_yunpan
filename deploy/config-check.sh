@@ -33,12 +33,13 @@ keys=(
   AI_PROVIDER DASHSCOPE_API_KEY AI_BASE_URL AI_CHAT_MODEL AI_EMBEDDING_MODEL AI_VISION_MODEL
   AI_EMBEDDING_DIMENSION AI_MAX_OBJECT_MIB AI_REQUEST_TIMEOUT AI_RATE_LIMIT_ENABLED
   AI_RATE_LIMIT_SEARCH_PER_MINUTE AI_RATE_LIMIT_ASK_PER_MINUTE AI_RATE_LIMIT_REPROCESS_PER_MINUTE
+  AISVC_GRPC_ADDR AISVC_GRPC_TARGET AISVC_CALL_TIMEOUT
 )
 
 compose=(docker compose --env-file "$env_file" -f "$compose_file" --profile app)
 mismatches=0
 
-for service in api worker; do
+for service in api worker aisvc; do
   container_id=$("${compose[@]}" ps -q "$service")
   if [[ -z "$container_id" ]]; then
     echo "$service: container is not running" >&2

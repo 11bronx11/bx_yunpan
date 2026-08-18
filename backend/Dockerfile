@@ -9,7 +9,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG TARGET=api
-RUN case "${TARGET}" in api|worker|migrate) ;; *) echo "unsupported TARGET=${TARGET}" >&2; exit 1 ;; esac \
+RUN case "${TARGET}" in api|worker|aisvc|migrate) ;; *) echo "unsupported TARGET=${TARGET}" >&2; exit 1 ;; esac \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/service ./cmd/${TARGET}
 
 FROM ${DOCKER_REGISTRY}/library/alpine:3.22

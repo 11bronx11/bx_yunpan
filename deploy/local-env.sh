@@ -44,5 +44,8 @@ export S3_ENDPOINT="${infra_host}:${MINIO_PORT:-9000}"
 export S3_SECURE=false
 export S3_ACCESS_KEY="${S3_ACCESS_KEY:-${MINIO_ROOT_USER:-yunpan}}"
 export S3_SECRET_KEY="${S3_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-yunpan-dev-secret}}"
+# aisvc:8082 只在 Docker 网络内可解析，宿主机改指本机端口。
+aisvc_port=${AISVC_GRPC_ADDR##*:}
+export AISVC_GRPC_TARGET="${proxy_app_host}:${aisvc_port:-8082}"
 export YUNPAN_LOCAL_API_URL="http://${proxy_app_host}:${API_PORT:-8081}"
 export YUNPAN_LOCAL_STORAGE_URL="http://${proxy_infra_host}:${MINIO_PORT:-9000}"

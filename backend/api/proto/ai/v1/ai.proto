@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package yunpan.ai.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/11bronx11/bx_yunpan/backend/internal/ai/pb;pb";
+
+// AIService 承载文本抽取、Embedding 与 RAG 问答等 CPU/IO 密集工作。
+// owner_id 由调用方显式传递；权限过滤仍在 AI 服务侧下推到 SQL 完成，
+// Citation 回验也留在 AI 服务侧，避免授权边界被拆散。
+service AIService {
+  // Search 以 server streaming 返回命中，调用方可边收边渲染。
+  rpc Search(SearchRequest) returns (stream SearchHit);
+  // Ask 执行 RAG 问答。非幂等且有外部模型成本，客户端不重试。
+  rpc Ask(AskRequest) returns (AskResponse);
+  // Reprocess 触发重建索引，靠 Pipeline/Model Version 保证幂等，可重试。
+  rpc Reprocess(ReprocessRequest) returns (ReprocessResponse);
+}
+
+message SearchRequest {
+  string owner_id = 1;
+  string query = 2;
+  // name | fulltext | semantic | hybrid
+  string mode = 3;
+  optional string folder_id = 4;
+  bool include_subfolders = 5;
+  repeated string mime_types = 6;
+  int32 limit = 7;
+}
+
+message FileRef {
+  string id = 1;
+  string owner_id = 2;
+  string folder_id = 3;
+  string object_id = 4;
+  string name = 5;
+  int64 size_bytes = 6;
+  string mime_type = 7;
+  int64 version = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message Citation {
+  string id = 1;
+  string file_id = 2;
+  string file_name = 3;
+  optional int32 page_number = 4;
+  optional string section = 5;
+  string excerpt = 6;
+}
+
+message SearchHit {
+  FileRef file = 1;
+  double score = 2;
+  string match_type = 3;
+  repeated Citation citations = 4;
+}
+
+message AskRequest {
+  string owner_id = 1;
+  string question = 2;
+  optional string folder_id = 3;
+  repeated string file_ids = 4;
+}
+
+message AskResponse {
+  string answer = 1;
+  repeated Citation citations = 2;
+}
+
+message ReprocessRequest {
+  string owner_id = 1;
+  string file_id = 2;
+  string idempotency_key = 3;
+}
+
+message ReprocessResponse {
+  Task task = 1;
+}
+
+message Task {
+  string id = 1;
+  string task_type = 2;
+  string resource_type = 3;
+  string resource_id = 4;
+  string status = 5;
+  int32 progress = 6;
+  int32 attempt = 7;
+  optional string error_code = 8;
+  optional string error_message = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}

@@ -15,6 +15,11 @@ const (
 	EventObjectReady           = "object.ready.v1"
 	EventObjectGCRequested     = "object.gc_requested.v1"
 	EventAIReprocessRequested  = "ai.reprocess_requested.v1"
+	// EventAIIndexRequested 不由业务事务写入 outbox，而是 dispatcher 投递
+	// EventObjectReady 时额外扇出的任务类型：对象就绪要同时触发缩略图
+	// （worker，media 队列）与 AI 索引（aisvc，ai 队列），而 Asynq 一个任务
+	// 只会被一个消费者处理，所以在投递侧扇出成两个任务。
+	EventAIIndexRequested = "ai.index_requested.v1"
 )
 
 func EventTypes() []string {
@@ -25,6 +30,7 @@ func EventTypes() []string {
 		EventObjectReady,
 		EventObjectGCRequested,
 		EventAIReprocessRequested,
+		EventAIIndexRequested,
 	}
 }
 

@@ -10,18 +10,19 @@ import (
 )
 
 type Config struct {
-	App      App
-	HTTP     HTTP
-	Postgres Postgres
-	Redis    Redis
-	Storage  Storage
-	Worker   Worker
-	Auth     Auth
-	Identity Identity
-	Upload   Upload
-	Outbox   Outbox
-	Sharing  Sharing
-	AI       AI
+	App       App
+	HTTP      HTTP
+	Postgres  Postgres
+	Redis     Redis
+	Storage   Storage
+	Worker    Worker
+	Auth      Auth
+	Identity  Identity
+	Upload    Upload
+	Outbox    Outbox
+	Sharing   Sharing
+	AI        AI
+	AIService AIService
 }
 
 type App struct {
@@ -102,6 +103,26 @@ type Outbox struct {
 type Sharing struct {
 	Secret    string
 	AccessTTL time.Duration
+}
+
+// AIService 描述 aisvc 进程与 API 侧客户端的连接参数。
+type AIService struct {
+	// GRPCAddr 是 aisvc 的 gRPC 监听地址。
+	GRPCAddr string
+	// Target 是 API 侧的 dial 目标：host:port 或 etcd resolver URL。
+	Target string
+	// CallTimeout 是 API 侧单次调用的总预算，必须不小于 AI.RequestTimeout，
+	// 否则单次 Provider 调用还没跑完就被上游掐断。
+	CallTimeout           time.Duration
+	SearchMaxAttempts     int
+	ReprocessMaxAttempts  int
+	RetryBaseBackoff      time.Duration
+	RetryMaxBackoff       time.Duration
+	BreakerWindow         time.Duration
+	BreakerMinRequests    int
+	BreakerFailureRate    float64
+	BreakerOpenTimeout    time.Duration
+	BreakerHalfOpenProbes int
 }
 
 type AI struct {
@@ -211,6 +232,20 @@ func Load() (Config, error) {
 			RateLimitAskPerMinute:       envInt("AI_RATE_LIMIT_ASK_PER_MINUTE", 10),
 			RateLimitReprocessPerMinute: envInt("AI_RATE_LIMIT_REPROCESS_PER_MINUTE", 3),
 		},
+		AIService: AIService{
+			GRPCAddr:              env("AISVC_GRPC_ADDR", ":8082"),
+			Target:                env("AISVC_GRPC_TARGET", "127.0.0.1:8082"),
+			CallTimeout:           envDuration("AISVC_CALL_TIMEOUT", 120*time.Second),
+			SearchMaxAttempts:     envInt("AISVC_SEARCH_MAX_ATTEMPTS", 3),
+			ReprocessMaxAttempts:  envInt("AISVC_REPROCESS_MAX_ATTEMPTS", 3),
+			RetryBaseBackoff:      envDuration("AISVC_RETRY_BASE_BACKOFF", 20*time.Millisecond),
+			RetryMaxBackoff:       envDuration("AISVC_RETRY_MAX_BACKOFF", time.Second),
+			BreakerWindow:         envDuration("AISVC_BREAKER_WINDOW", 10*time.Second),
+			BreakerMinRequests:    envInt("AISVC_BREAKER_MIN_REQUESTS", 20),
+			BreakerFailureRate:    envFloat("AISVC_BREAKER_FAILURE_RATE", 0.5),
+			BreakerOpenTimeout:    envDuration("AISVC_BREAKER_OPEN_TIMEOUT", 5*time.Second),
+			BreakerHalfOpenProbes: envInt("AISVC_BREAKER_HALF_OPEN_PROBES", 3),
+		},
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -292,6 +327,26 @@ func (c Config) Validate() error {
 	if c.AI.RateLimitEnabled && (c.AI.RateLimitSearchPerMinute <= 0 || c.AI.RateLimitAskPerMinute <= 0 || c.AI.RateLimitReprocessPerMinute <= 0) {
 		errs = append(errs, errors.New("enabled AI rate limits must be positive"))
 	}
+	if strings.TrimSpace(c.AIService.GRPCAddr) == "" || strings.TrimSpace(c.AIService.Target) == "" {
+		errs = append(errs, errors.New("AISVC_GRPC_ADDR and AISVC_GRPC_TARGET are required"))
+	}
+	// 三层 deadline 收敛：API 调用预算不能短于 aisvc 单次 Provider 调用超时，
+	// 否则请求必然在下游还没做完时就被上游掐断。
+	if c.AIService.CallTimeout < c.AI.RequestTimeout {
+		errs = append(errs, errors.New("AISVC_CALL_TIMEOUT must not be shorter than AI_REQUEST_TIMEOUT"))
+	}
+	if c.AIService.SearchMaxAttempts <= 0 || c.AIService.ReprocessMaxAttempts <= 0 {
+		errs = append(errs, errors.New("AISVC retry attempts must be positive"))
+	}
+	if c.AIService.RetryBaseBackoff <= 0 || c.AIService.RetryMaxBackoff < c.AIService.RetryBaseBackoff {
+		errs = append(errs, errors.New("AISVC retry backoff settings are invalid"))
+	}
+	if c.AIService.BreakerWindow <= 0 || c.AIService.BreakerMinRequests <= 0 || c.AIService.BreakerOpenTimeout <= 0 || c.AIService.BreakerHalfOpenProbes <= 0 {
+		errs = append(errs, errors.New("AISVC breaker settings must be positive"))
+	}
+	if c.AIService.BreakerFailureRate <= 0 || c.AIService.BreakerFailureRate > 1 {
+		errs = append(errs, errors.New("AISVC_BREAKER_FAILURE_RATE must be in (0, 1]"))
+	}
 	return errors.Join(errs...)
 }
 
@@ -332,6 +387,18 @@ func envBool(name string, fallback bool) bool {
 		return fallback
 	}
 	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envFloat(name string, fallback float64) float64 {
+	value, ok := os.LookupEnv(name)
+	if !ok {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return fallback
 	}

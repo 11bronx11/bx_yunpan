@@ -26,6 +26,17 @@ echo
 probe_ip=$bind_ip
 [[ "$probe_ip" == "0.0.0.0" ]] && probe_ip=127.0.0.1
 curl -fsS "http://${probe_ip}:${api_port}/health/ready" && echo
+
+# aisvc 只暴露 gRPC，用容器内的二进制走 grpc.health.v1 探活。
+aisvc_status=0
+docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app \
+  exec -T aisvc /app/service healthcheck >/dev/null 2>&1 || aisvc_status=$?
+if ((aisvc_status == 0)); then
+  echo "aisvc -> grpc.health.v1: SERVING"
+else
+  echo "aisvc -> grpc.health.v1: FAILED" >&2
+fi
+
 curl -fsS -o /dev/null -w "web: HTTP %{http_code}\n" "http://${probe_ip}:${web_port}/healthz"
 curl -fsS -o /dev/null -w "web -> api: HTTP %{http_code}\n" "http://${probe_ip}:${web_port}/readyz"
 curl -fsS -o /dev/null -w "web -> storage: HTTP %{http_code}\n" "http://${probe_ip}:${web_port}/storage-healthz"

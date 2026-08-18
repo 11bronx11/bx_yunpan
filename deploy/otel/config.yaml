@@ -16,6 +16,11 @@ processors:
 exporters:
   debug:
     verbosity: basic
+  # Jaeger 自 1.35 起原生接收 OTLP，无需 jaeger exporter
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
 
 service:
   extensions: [health_check]
@@ -23,7 +28,7 @@ service:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [debug, otlp/jaeger]
     metrics:
       receivers: [otlp]
       processors: [batch]

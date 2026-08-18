@@ -48,22 +48,22 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context) error {
 			return err
 		}
 		for _, event := range events {
-			options := []asynq.Option{asynq.TaskID(event.ID.String()), asynq.MaxRetry(d.config.MaxRetry), asynq.Timeout(d.config.TaskTimeout)}
-			switch event.EventType {
-			case EventObjectGCRequested:
-				options = append(options, asynq.ProcessAt(time.Now().UTC().Add(d.config.GCDelay)), asynq.Queue("maintenance"))
-			case EventObjectVerifyRequested:
-				options = append(options, asynq.Queue("object"))
-			case EventObjectReady:
-				options = append(options, asynq.Queue("media"))
-			case EventAIReprocessRequested:
-				options = append(options, asynq.Queue("ai"))
-			default:
-				options = append(options, asynq.Queue("maintenance"))
-			}
-			_, err := d.client.EnqueueContext(ctx, asynq.NewTask(event.EventType, event.Payload), options...)
-			if err != nil && !errors.Is(err, asynq.ErrTaskIDConflict) {
-				return err
+			for _, target := range fanout(event.EventType) {
+				options := []asynq.Option{
+					// TaskID 带上任务类型：同一 outbox 行扇出的两个任务要有不同
+					// 的 ID，否则第二个会被判为重复而丢弃。
+					asynq.TaskID(event.ID.String() + ":" + target.taskType),
+					asynq.MaxRetry(d.config.MaxRetry),
+					asynq.Timeout(d.config.TaskTimeout),
+					asynq.Queue(target.queue),
+				}
+				if target.taskType == EventObjectGCRequested {
+					options = append(options, asynq.ProcessAt(time.Now().UTC().Add(d.config.GCDelay)))
+				}
+				_, err := d.client.EnqueueContext(ctx, asynq.NewTask(target.taskType, event.Payload), options...)
+				if err != nil && !errors.Is(err, asynq.ErrTaskIDConflict) {
+					return err
+				}
 			}
 			now := time.Now().UTC()
 			if err := tx.Model(&Event{}).Where("id = ?", event.ID).
@@ -73,4 +73,33 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context) error {
 		}
 		return nil
 	})
+}
+
+// dispatchTarget 是一条 outbox 行要投递到的一个 Asynq 任务。
+type dispatchTarget struct {
+	taskType string
+	queue    string
+}
+
+// fanout 把一个事件类型映射到一到多个 Asynq 任务。
+//
+// object.ready 是唯一需要扇出的事件：缩略图留在 worker 的 media 队列，
+// AI 索引进 ai 队列由 aisvc 消费。两个任务共用同一份 payload，各自独立
+// 重试，任一失败不会拖累另一个。
+func fanout(eventType string) []dispatchTarget {
+	switch eventType {
+	case EventObjectReady:
+		return []dispatchTarget{
+			{taskType: EventObjectReady, queue: "media"},
+			{taskType: EventAIIndexRequested, queue: "ai"},
+		}
+	case EventObjectGCRequested:
+		return []dispatchTarget{{taskType: EventObjectGCRequested, queue: "maintenance"}}
+	case EventObjectVerifyRequested:
+		return []dispatchTarget{{taskType: EventObjectVerifyRequested, queue: "object"}}
+	case EventAIReprocessRequested:
+		return []dispatchTarget{{taskType: EventAIReprocessRequested, queue: "ai"}}
+	default:
+		return []dispatchTarget{{taskType: eventType, queue: "maintenance"}}
+	}
 }

@@ -8,7 +8,6 @@ import (
 
 	"github.com/hibiken/asynq"
 
-	"github.com/11bronx11/bx_yunpan/backend/internal/ai"
 	"github.com/11bronx11/bx_yunpan/backend/internal/drive"
 	"github.com/11bronx11/bx_yunpan/backend/internal/identity"
 	"github.com/11bronx11/bx_yunpan/backend/internal/media"
@@ -32,7 +31,6 @@ func RunWorker(ctx context.Context, cfg config.Config, logger *slog.Logger) erro
 	quota := identity.NewService(deps.GORM, identity.NewTokenManager(cfg.Auth), driveService, cfg.Identity.DefaultQuotaBytes)
 	uploads := upload.NewService(deps.GORM, deps.Storage, deps.Presigner, deps.Bucket, driveService, objects, quota, cfg.Upload)
 	mediaService := media.NewService(deps.GORM, objects, deps.Storage, deps.Presigner, deps.Bucket, cfg.Storage.ReadURLTTL)
-	aiService := ai.NewService(deps.GORM, driveService, objects, deps.Storage, cfg.AI)
 	redisOptions := asynq.RedisClientOpt{Addr: cfg.Redis.Addr, Password: cfg.Redis.Password, DB: cfg.Redis.DB}
 	queueClient := asynq.NewClient(redisOptions)
 	defer func() { _ = queueClient.Close() }()
@@ -40,16 +38,11 @@ func RunWorker(ctx context.Context, cfg config.Config, logger *slog.Logger) erro
 	go dispatcher.Run(ctx)
 	go runUploadCleanup(ctx, uploads, cfg.Upload.CleanupInterval, cfg.Upload.CleanupBatch, logger)
 
-	mediaReady := media.Handler(mediaService)
-	aiReady := ai.ObjectReadyHandler(aiService, logger)
-	objectReady := func(ctx context.Context, task *asynq.Task) error {
-		return errors.Join(mediaReady(ctx, task), aiReady(ctx, task))
-	}
+	// AI 索引与重建索引已迁到 cmd/aisvc，这里只保留缩略图、对象校验、GC 与清理。
 	handlers := workerHandlers(
 		upload.VerifyHandler(uploads),
-		objectReady,
+		media.Handler(mediaService),
 		objectstore.GCHandler(objects, deps.Storage),
-		ai.ReprocessHandler(aiService, logger),
 		logger,
 	)
 	return platformworker.Run(ctx, cfg, logger, handlers)
@@ -73,7 +66,7 @@ func runUploadCleanup(ctx context.Context, uploads *upload.Service, interval tim
 	}
 }
 
-func workerHandlers(verify, ready, gc, reprocess asynq.HandlerFunc, logger *slog.Logger) map[string]asynq.HandlerFunc {
+func workerHandlers(verify, ready, gc asynq.HandlerFunc, logger *slog.Logger) map[string]asynq.HandlerFunc {
 	acknowledge := func(ctx context.Context, task *asynq.Task) error {
 		logger.DebugContext(ctx, "domain event acknowledged", "event_type", task.Type())
 		return nil
@@ -84,6 +77,5 @@ func workerHandlers(verify, ready, gc, reprocess asynq.HandlerFunc, logger *slog
 		outbox.EventObjectVerifyRequested: verify,
 		outbox.EventObjectReady:           ready,
 		outbox.EventObjectGCRequested:     gc,
-		outbox.EventAIReprocessRequested:  reprocess,
 	}
 }

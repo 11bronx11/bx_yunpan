@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -73,12 +74,24 @@ func (s *Service) Search(ctx context.Context, ownerID uuid.UUID, input SearchInp
 		candidates, err := s.queryCandidates(ctx, ownerID, input, "semantic", vector)
 		return groupCandidates(candidates, "semantic", input.Limit), err
 	}
-	fulltext, err := s.queryCandidates(ctx, ownerID, input, "fulltext", "")
-	if err != nil {
-		return nil, err
-	}
-	semantic, err := s.queryCandidates(ctx, ownerID, input, "semantic", vector)
-	if err != nil {
+	// 双路召回并发发起，融合延迟贴近较慢的那一路而非两路之和。
+	var (
+		fulltext, semantic []searchCandidate
+		fulltextErr        error
+		semanticErr        error
+		wait               sync.WaitGroup
+	)
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		fulltext, fulltextErr = s.queryCandidates(ctx, ownerID, input, "fulltext", "")
+	}()
+	go func() {
+		defer wait.Done()
+		semantic, semanticErr = s.queryCandidates(ctx, ownerID, input, "semantic", vector)
+	}()
+	wait.Wait()
+	if err := errors.Join(fulltextErr, semanticErr); err != nil {
 		return nil, err
 	}
 	return reciprocalRankFusion(fulltext, semantic, input.Limit), nil
