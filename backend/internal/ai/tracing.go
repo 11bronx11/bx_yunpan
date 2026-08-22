@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
@@ -115,6 +116,44 @@ func (s *Service) answer(ctx context.Context, question string, evidence []Eviden
 	result, err := s.provider.Answer(ctx, question, evidence)
 	endSpan(span, err)
 	return result, err
+}
+
+func (s *Service) rerank(ctx context.Context, query string, candidates []searchCandidate) ([]searchCandidate, error) {
+	if s.reranker == nil || len(candidates) == 0 {
+		return candidates, nil
+	}
+	ctx, span := startSpan(ctx, "ai.rerank",
+		attribute.Int("ai.candidate_count", len(candidates)),
+		attribute.String("ai.rerank_model", s.config.RerankModel),
+	)
+	docs := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Content == nil {
+			docs = append(docs, "")
+			continue
+		}
+		docs = append(docs, *candidate.Content)
+	}
+	scores, err := s.reranker.Rerank(ctx, query, docs)
+	if err != nil {
+		endSpan(span, err)
+		return candidates, err
+	}
+	if len(scores) != len(candidates) {
+		err = errors.New("reranker score count mismatch")
+		endSpan(span, err)
+		return candidates, err
+	}
+	ordered := orderByRerank(scores)
+	result := make([]searchCandidate, 0, len(candidates))
+	for _, index := range ordered {
+		candidate := candidates[index]
+		candidate.Score = scores[index]
+		result = append(result, candidate)
+	}
+	span.SetAttributes(attribute.Int("ai.rerank_result_count", len(result)))
+	endSpan(span, nil)
+	return result, nil
 }
 
 // embedQuery 是检索侧的查询向量化，与索引侧的 ai.embed 区分开：

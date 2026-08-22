@@ -1,0 +1,4 @@
+Aurora release freeze date	aurora.txt	0	aurora.txt
+HNSW ef_search embedding dimension	pgvector.txt	0	pgvector.txt
+unreferenced object garbage collection delay	retention.txt	0	retention.txt
+Redis database cleanup interval	distractor.txt	0	distractor.txt

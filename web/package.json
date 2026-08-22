@@ -18,7 +18,7 @@
     "start": "react-scripts start",
     "build": "react-scripts build",
     "build:docker": "react-scripts build",
-    "lint": "eslint \"src/**/*.js\" --max-warnings=0",
+    "lint": "eslint src --ext .js --ignore-pattern build --max-warnings=0",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },

@@ -57,6 +57,34 @@ func TestExtractDOCXRejectsOversizedDocumentXML(t *testing.T) {
 	}
 }
 
+func TestExtractDOCXPreservesParagraphBoundaries(t *testing.T) {
+	var archive bytes.Buffer
+	writer := zip.NewWriter(&archive)
+	entry, err := writer.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const document = `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>第一段。</w:t></w:r></w:p><w:p><w:r><w:t>第二段。</w:t></w:r></w:p></w:body></w:document>`
+	if _, err := entry.Write([]byte(document)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	sections, err := extractDOCX(archive.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized := ""
+	if len(sections) == 1 {
+		normalized = normalizeParagraphText(sections[0].Text)
+	}
+	if len(sections) != 1 || normalized != "第一段。\n\n第二段。" {
+		t.Fatalf("expected paragraph boundary, got %#v", sections)
+	}
+}
+
 func TestExtractRejectsOversizedVisionImage(t *testing.T) {
 	provider := &fakeProvider{dimension: 1024}
 	_, err := extract(context.Background(), provider, "image/jpeg", make([]byte, maxVisionImageBytes+1))

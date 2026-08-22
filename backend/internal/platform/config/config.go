@@ -173,6 +173,12 @@ type AI struct {
 	ChatModel                   string
 	EmbeddingModel              string
 	VisionModel                 string
+	RerankEnabled               bool
+	RerankBaseURL               string
+	RerankModel                 string
+	RerankCandidates            int
+	RerankTopK                  int
+	RerankTimeout               time.Duration
 	Dimension                   int
 	MaxObjectBytes              int64
 	RequestTimeout              time.Duration
@@ -266,6 +272,12 @@ func Load() (Config, error) {
 			ChatModel:                   env("AI_CHAT_MODEL", "qwen-plus"),
 			EmbeddingModel:              env("AI_EMBEDDING_MODEL", "text-embedding-v4"),
 			VisionModel:                 env("AI_VISION_MODEL", "qwen-vl-plus"),
+			RerankEnabled:               envBool("AI_RERANK_ENABLED", false),
+			RerankBaseURL:               env("AI_RERANK_BASE_URL", ""),
+			RerankModel:                 env("AI_RERANK_MODEL", "qwen3-rerank"),
+			RerankCandidates:            envInt("AI_RERANK_CANDIDATES", 30),
+			RerankTopK:                  envInt("AI_RERANK_TOP_K", 8),
+			RerankTimeout:               envDuration("AI_RERANK_TIMEOUT", 30*time.Second),
 			Dimension:                   envInt("AI_EMBEDDING_DIMENSION", 1024),
 			MaxObjectBytes:              int64(envInt("AI_MAX_OBJECT_MIB", 32)) * 1024 * 1024,
 			RequestTimeout:              envDuration("AI_REQUEST_TIMEOUT", 90*time.Second),
@@ -387,6 +399,15 @@ func (c Config) Validate() error {
 		}
 		if c.AI.Dimension != 1024 || c.AI.MaxObjectBytes <= 0 || c.AI.RequestTimeout <= 0 {
 			errs = append(errs, errors.New("AI embedding dimension must be 1024 and AI size/timeout settings must be positive"))
+		}
+		if c.AI.RerankCandidates <= 0 || c.AI.RerankTopK <= 0 || c.AI.RerankTopK > c.AI.RerankCandidates || c.AI.RerankTimeout <= 0 {
+			errs = append(errs, errors.New("AI reranker candidate/top-k/timeout settings are invalid"))
+		}
+		if c.AI.RerankEnabled && strings.TrimSpace(c.AI.RerankModel) == "" {
+			errs = append(errs, errors.New("AI_RERANK_MODEL is required when reranking is enabled"))
+		}
+		if c.AI.RerankEnabled && c.AI.Provider == "dashscope" && strings.TrimSpace(c.AI.RerankBaseURL) == "" {
+			errs = append(errs, errors.New("AI_RERANK_BASE_URL is required for DashScope qwen3-rerank"))
 		}
 		if c.AI.RateLimitEnabled && (c.AI.RateLimitSearchPerMinute <= 0 || c.AI.RateLimitAskPerMinute <= 0 || c.AI.RateLimitReprocessPerMinute <= 0) {
 			errs = append(errs, errors.New("enabled AI rate limits must be positive"))

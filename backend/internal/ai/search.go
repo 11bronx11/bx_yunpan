@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -20,6 +19,7 @@ type searchCandidate struct {
 	OwnerID    uuid.UUID
 	FolderID   uuid.UUID
 	ObjectID   uuid.UUID
+	DocumentID uuid.UUID
 	Name       string
 	SizeBytes  int64
 	MimeType   string
@@ -36,6 +36,9 @@ type searchCandidate struct {
 const (
 	maxSearchQueryRunes = 1000
 	maxQuestionRunes    = 2000
+	maxAskFileIDs       = 50
+	hybridRecallLimit   = 50
+	hybridFusionLimit   = 30
 )
 
 // Search 是检索入口。span 开在参数归一化之后，属性才反映真正生效的值。
@@ -89,7 +92,12 @@ func (s *Service) search(ctx context.Context, ownerID uuid.UUID, input SearchInp
 		candidates, err := s.recall(ctx, ownerID, input, "semantic", vector)
 		return groupCandidates(candidates, "semantic", input.Limit), err
 	}
-	// 双路召回并发发起，融合延迟贴近较慢的那一路而非两路之和。
+	// 双路先保留至少 50 个候选，再做最多 30 个 chunk 的融合池；最终
+	// response 仍遵守调用方的 limit，Ask 可直接把内部融合池交给 reranker。
+	recallInput := input
+	if recallInput.Limit < hybridRecallLimit {
+		recallInput.Limit = hybridRecallLimit
+	}
 	var (
 		fulltext, semantic []searchCandidate
 		fulltextErr        error
@@ -99,24 +107,28 @@ func (s *Service) search(ctx context.Context, ownerID uuid.UUID, input SearchInp
 	wait.Add(2)
 	go func() {
 		defer wait.Done()
-		fulltext, fulltextErr = s.recall(ctx, ownerID, input, "fulltext", "")
+		fulltext, fulltextErr = s.recall(ctx, ownerID, recallInput, "fulltext", "")
 	}()
 	go func() {
 		defer wait.Done()
-		semantic, semanticErr = s.recall(ctx, ownerID, input, "semantic", vector)
+		semantic, semanticErr = s.recall(ctx, ownerID, recallInput, "semantic", vector)
 	}()
 	wait.Wait()
 	if err := errors.Join(fulltextErr, semanticErr); err != nil {
 		return nil, err
 	}
-	return fuse(ctx, fulltext, semantic, input.Limit), nil
+	fused := fuse(ctx, fulltext, semantic, max(input.Limit, hybridFusionLimit))
+	if len(fused) > input.Limit {
+		fused = fused[:input.Limit]
+	}
+	return fused, nil
 }
 
 // Ask 是问答入口：一个父 span 下面挂 ai.search（检索）与 ai.llm（生成），
 // 一眼能看出"慢在检索还是慢在大模型"。
 func (s *Service) Ask(ctx context.Context, ownerID uuid.UUID, question string, folderID *uuid.UUID, fileIDs []uuid.UUID) (string, []Citation, error) {
 	question = strings.TrimSpace(question)
-	if question == "" || len([]rune(question)) > maxQuestionRunes {
+	if question == "" || len([]rune(question)) > maxQuestionRunes || len(fileIDs) > maxAskFileIDs {
 		return "", nil, ErrInvalid
 	}
 	ctx, span := startSpan(ctx, "ai.ask",
@@ -133,38 +145,64 @@ func (s *Service) Ask(ctx context.Context, ownerID uuid.UUID, question string, f
 
 func (s *Service) ask(ctx context.Context, ownerID uuid.UUID, question string, folderID *uuid.UUID, fileIDs []uuid.UUID) (string, []Citation, error) {
 	hits, err := s.Search(ctx, ownerID, SearchInput{
-		Query: question, Mode: "hybrid", FolderID: folderID, IncludeSubfolders: true, Limit: 40,
+		Query: question, Mode: "hybrid", FolderID: folderID, IncludeSubfolders: true, FileIDs: fileIDs, Limit: hybridFusionLimit,
 	})
 	if err != nil {
 		return "", nil, err
 	}
-	allowed := map[uuid.UUID]bool{}
-	for _, fileID := range fileIDs {
-		allowed[fileID] = true
+	candidateLimit := s.config.RerankCandidates
+	if candidateLimit <= 0 {
+		candidateLimit = hybridFusionLimit
 	}
-	evidence := make([]Evidence, 0, 8)
-	citationByID := make(map[string]Citation, 8)
-	perFile := make(map[uuid.UUID]int)
+	candidates := make([]searchCandidate, 0, candidateLimit)
+	seenChunks := make(map[uuid.UUID]struct{}, candidateLimit)
 	for _, hit := range hits {
-		fileID, ok := hit.File["id"].(uuid.UUID)
-		if !ok || (len(allowed) > 0 && !allowed[fileID]) {
-			continue
-		}
-		for _, citation := range hit.Citations {
-			if perFile[fileID] >= 2 {
-				break
-			}
-			if citation.ID == "" {
+		for _, candidate := range hit.candidates {
+			if candidate.ChunkID == nil {
 				continue
 			}
-			evidence = append(evidence, Evidence{ID: citation.ID, FileName: citation.FileName, Content: citation.Excerpt})
-			citationByID[citation.ID] = citation
-			perFile[fileID]++
-			if len(evidence) == 8 {
+			if _, exists := seenChunks[*candidate.ChunkID]; exists {
+				continue
+			}
+			seenChunks[*candidate.ChunkID] = struct{}{}
+			candidates = append(candidates, candidate)
+			if len(candidates) == candidateLimit {
 				break
 			}
 		}
-		if len(evidence) == 8 {
+		if len(candidates) == candidateLimit {
+			break
+		}
+	}
+	candidates, err = s.loadFullChunks(ctx, ownerID, candidates)
+	if err != nil {
+		return "", nil, ErrUnavailable
+	}
+	if s.reranker != nil && len(candidates) > 1 {
+		ordered, rerankErr := s.rerank(ctx, question, candidates)
+		if rerankErr == nil {
+			candidates = ordered
+		}
+	}
+	maxEvidence := s.config.RerankTopK
+	if maxEvidence <= 0 {
+		maxEvidence = 8
+	}
+	evidence := make([]Evidence, 0, maxEvidence)
+	citationByID := make(map[string]Citation, 8)
+	perFile := make(map[uuid.UUID]int)
+	for _, candidate := range candidates {
+		if perFile[candidate.FileID] >= 2 || candidate.Content == nil {
+			continue
+		}
+		citation := candidateCitation(candidate)
+		if citation.ID == "" {
+			continue
+		}
+		evidence = append(evidence, Evidence{ID: citation.ID, FileName: citation.FileName, Content: *candidate.Content})
+		citationByID[citation.ID] = citation
+		perFile[candidate.FileID]++
+		if len(evidence) == maxEvidence {
 			break
 		}
 	}
@@ -182,6 +220,67 @@ func (s *Service) ask(ctx context.Context, ownerID uuid.UUID, question string, f
 		}
 	}
 	return answer.Answer, citations, nil
+}
+
+type fullChunkRow struct {
+	ChunkID    uuid.UUID
+	DocumentID uuid.UUID
+	FileID     uuid.UUID
+	Content    string
+}
+
+func (s *Service) loadFullChunks(ctx context.Context, ownerID uuid.UUID, candidates []searchCandidate) ([]searchCandidate, error) {
+	if len(candidates) == 0 {
+		return candidates, nil
+	}
+	chunkIDs := make([]string, 0, len(candidates))
+	fileIDs := make([]string, 0, len(candidates))
+	seenChunks := make(map[uuid.UUID]struct{}, len(candidates))
+	seenFiles := make(map[uuid.UUID]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.ChunkID != nil {
+			if _, exists := seenChunks[*candidate.ChunkID]; !exists {
+				seenChunks[*candidate.ChunkID] = struct{}{}
+				chunkIDs = append(chunkIDs, candidate.ChunkID.String())
+			}
+		}
+		if _, exists := seenFiles[candidate.FileID]; !exists {
+			seenFiles[candidate.FileID] = struct{}{}
+			fileIDs = append(fileIDs, candidate.FileID.String())
+		}
+	}
+	var rows []fullChunkRow
+	err := s.db.WithContext(ctx).Raw(`
+		SELECT c.id AS chunk_id, d.id AS document_id, e.id AS file_id, c.content
+		FROM ai_chunks c
+		JOIN ai_documents d ON d.id = c.document_id AND d.status = 'indexed'
+		JOIN file_entries e ON e.object_id = d.object_id AND e.deleted_at IS NULL
+		JOIN file_objects o ON o.id = e.object_id AND o.status = 'ready'
+		WHERE c.id = ANY(CAST(@chunk_ids AS uuid[]))
+		  AND e.id = ANY(CAST(@file_ids AS uuid[]))
+		  AND e.owner_id = @owner`,
+		sql.Named("chunk_ids", pq.Array(chunkIDs)), sql.Named("file_ids", pq.Array(fileIDs)), sql.Named("owner", ownerID),
+	).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	byKey := make(map[string]string, len(rows))
+	for _, row := range rows {
+		byKey[row.FileID.String()+":"+row.ChunkID.String()] = row.Content
+	}
+	result := make([]searchCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.ChunkID == nil {
+			continue
+		}
+		content, ok := byKey[candidate.FileID.String()+":"+candidate.ChunkID.String()]
+		if !ok {
+			continue
+		}
+		candidate.Content = &content
+		result = append(result, candidate)
+	}
+	return result, nil
 }
 
 func (s *Service) queryCandidates(ctx context.Context, ownerID uuid.UUID, input SearchInput, mode, vector string) ([]searchCandidate, error) {
@@ -202,50 +301,59 @@ func (s *Service) queryCandidates(ctx context.Context, ownerID uuid.UUID, input 
 	if len(input.MimeTypes) > 0 {
 		mimeFilter = "o.mime_type = ANY(@mime_types)"
 	}
+	fileFilter := "TRUE"
+	if len(input.FileIDs) > 0 {
+		fileFilter = "e.id = ANY(CAST(@file_ids AS uuid[]))"
+	}
 	selectFields := `e.id AS file_id, e.owner_id, e.folder_id, e.object_id, e.name,
 		o.size_bytes, o.mime_type, e.version, e.created_at, e.updated_at`
 	var query string
 	switch mode {
 	case "name":
 		query = prefix + `SELECT ` + selectFields + `,
-			NULL::uuid AS chunk_id, NULL::integer AS page_number, NULL::text AS section, NULL::text AS content,
+			NULL::uuid AS document_id, NULL::uuid AS chunk_id, NULL::integer AS page_number, NULL::text AS section, NULL::text AS content,
 			CASE
 				WHEN e.name_normalized = lower(@query) THEN 1.0
 				WHEN e.name_normalized ILIKE lower(@query) || '%' THEN 0.75 + similarity(e.name_normalized, lower(@query)) * 0.25
 				ELSE similarity(e.name_normalized, lower(@query))
 			END AS score
 		FROM file_entries e JOIN file_objects o ON o.id = e.object_id AND o.status = 'ready'
-		WHERE e.owner_id = @owner AND e.deleted_at IS NULL AND ` + folderFilter + ` AND ` + mimeFilter + `
+			WHERE e.owner_id = @owner AND e.deleted_at IS NULL AND ` + fileFilter + ` AND ` + folderFilter + ` AND ` + mimeFilter + `
 			AND (e.name_normalized ILIKE '%' || lower(@query) || '%' OR similarity(e.name_normalized, lower(@query)) > 0.1)
 		ORDER BY score DESC, e.created_at DESC LIMIT @candidate_limit`
 	case "fulltext":
 		query = prefix + `SELECT ` + selectFields + `,
-			c.id AS chunk_id, c.page_number, c.section, c.content,
+			d.id AS document_id, c.id AS chunk_id, c.page_number, c.section, c.content,
 			ts_rank_cd(c.content_tsv, plainto_tsquery('simple', @query)) AS score
 		FROM file_entries e
 		JOIN file_objects o ON o.id = e.object_id AND o.status = 'ready'
 		JOIN ai_documents d ON d.object_id = e.object_id AND d.status = 'indexed'
 		JOIN ai_chunks c ON c.document_id = d.id
-		WHERE e.owner_id = @owner AND e.deleted_at IS NULL AND ` + folderFilter + ` AND ` + mimeFilter + `
+			WHERE e.owner_id = @owner AND e.deleted_at IS NULL AND ` + fileFilter + ` AND ` + folderFilter + ` AND ` + mimeFilter + `
 			AND c.content_tsv @@ plainto_tsquery('simple', @query)
 		ORDER BY score DESC LIMIT @candidate_limit`
 	case "semantic":
 		query = prefix + `SELECT ` + selectFields + `,
-			c.id AS chunk_id, c.page_number, c.section, c.content,
+			d.id AS document_id, c.id AS chunk_id, c.page_number, c.section, c.content,
 			1 - (c.embedding <=> CAST(@embedding AS vector)) AS score
 		FROM file_entries e
 		JOIN file_objects o ON o.id = e.object_id AND o.status = 'ready'
 		JOIN ai_documents d ON d.object_id = e.object_id AND d.status = 'indexed'
 		JOIN ai_chunks c ON c.document_id = d.id
-		WHERE e.owner_id = @owner AND e.deleted_at IS NULL AND ` + folderFilter + ` AND ` + mimeFilter + `
+			WHERE e.owner_id = @owner AND e.deleted_at IS NULL AND ` + fileFilter + ` AND ` + folderFilter + ` AND ` + mimeFilter + `
 			AND d.model_version = @model_version AND d.pipeline_version = @pipeline_version
 		ORDER BY c.embedding <=> CAST(@embedding AS vector) LIMIT @candidate_limit`
 	default:
 		return nil, ErrInvalid
 	}
+	candidateLimit := max(input.Limit, 40)
+	fileIDs := make([]string, 0, len(input.FileIDs))
+	for _, fileID := range input.FileIDs {
+		fileIDs = append(fileIDs, fileID.String())
+	}
 	arguments := []any{
-		sql.Named("owner", ownerID), sql.Named("query", input.Query), sql.Named("embedding", vector),
-		sql.Named("mime_types", pq.Array(input.MimeTypes)), sql.Named("candidate_limit", max(input.Limit*4, 40)),
+		sql.Named("owner", ownerID), sql.Named("query", input.Query), sql.Named("embedding", vector), sql.Named("file_ids", pq.Array(fileIDs)),
+		sql.Named("mime_types", pq.Array(input.MimeTypes)), sql.Named("candidate_limit", candidateLimit),
 		sql.Named("model_version", s.provider.ModelVersion()),
 		sql.Named("pipeline_version", pipelineVersion),
 	}
@@ -270,7 +378,7 @@ func groupCandidates(candidates []searchCandidate, matchType string, limit int) 
 			}
 			indexes[candidate.FileID] = len(hits)
 			hits = append(hits, SearchHit{
-				File: candidateFile(candidate), Score: candidate.Score, MatchType: matchType, Citations: []Citation{},
+				File: candidateFile(candidate), Score: candidate.Score, MatchType: matchType, Citations: []Citation{}, candidates: []searchCandidate{},
 			})
 			index = len(hits) - 1
 		}
@@ -279,6 +387,7 @@ func groupCandidates(candidates []searchCandidate, matchType string, limit int) 
 		}
 		if candidate.ChunkID != nil && candidate.Content != nil && len(hits[index].Citations) < 3 {
 			hits[index].Citations = append(hits[index].Citations, candidateCitation(candidate))
+			hits[index].candidates = append(hits[index].candidates, candidate)
 		}
 	}
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
@@ -289,26 +398,24 @@ func reciprocalRankFusion(fulltext, semantic []searchCandidate, limit int) []Sea
 	type fused struct {
 		candidate searchCandidate
 		score     float64
-		citations []searchCandidate
 	}
-	items := map[uuid.UUID]*fused{}
+	// Hybrid retrieval is chunk-level. A file can contribute several distinct
+	// chunks to the RRF pool, which is the candidate set the Ask reranker sees.
+	items := map[string]*fused{}
 	add := func(candidates []searchCandidate) {
-		seen := map[uuid.UUID]bool{}
-		rank := 0
-		for _, candidate := range candidates {
-			if seen[candidate.FileID] {
-				continue
+		for rank, candidate := range candidates {
+			key := candidate.FileID.String()
+			if candidate.ChunkID != nil {
+				key += ":" + candidate.ChunkID.String()
 			}
-			seen[candidate.FileID] = true
-			rank++
-			item := items[candidate.FileID]
+			item := items[key]
 			if item == nil {
 				item = &fused{candidate: candidate}
-				items[candidate.FileID] = item
+				items[key] = item
 			}
-			item.score += 1 / float64(60+rank)
-			if candidate.ChunkID != nil && len(item.citations) < 3 {
-				item.citations = append(item.citations, candidate)
+			item.score += 1 / float64(60+rank+1)
+			if candidate.Score > item.candidate.Score {
+				item.candidate = candidate
 			}
 		}
 	}
@@ -316,25 +423,51 @@ func reciprocalRankFusion(fulltext, semantic []searchCandidate, limit int) []Sea
 	add(semantic)
 	ordered := make([]*fused, 0, len(items))
 	for _, item := range items {
+		item.candidate.Score = item.score
 		ordered = append(ordered, item)
 	}
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].score > ordered[j].score })
-	if len(ordered) > limit {
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].score == ordered[j].score {
+			left, right := "", ""
+			if ordered[i].candidate.ChunkID != nil {
+				left = ordered[i].candidate.ChunkID.String()
+			}
+			if ordered[j].candidate.ChunkID != nil {
+				right = ordered[j].candidate.ChunkID.String()
+			}
+			return left < right
+		}
+		return ordered[i].score > ordered[j].score
+	})
+	if limit > 0 && len(ordered) > limit {
 		ordered = ordered[:limit]
 	}
+
+	// Keep the public Search contract file-oriented while carrying all fused
+	// chunk candidates privately for Ask/reranking.
+	hitByFile := make(map[uuid.UUID]int)
 	hits := make([]SearchHit, 0, len(ordered))
 	for _, item := range ordered {
-		citations := make([]Citation, 0, len(item.citations))
-		seen := map[string]bool{}
-		for _, candidate := range item.citations {
-			citation := candidateCitation(candidate)
-			if !seen[citation.ID] {
-				citations = append(citations, citation)
-				seen[citation.ID] = true
-			}
+		candidate := item.candidate
+		index, exists := hitByFile[candidate.FileID]
+		if !exists {
+			hitByFile[candidate.FileID] = len(hits)
+			hits = append(hits, SearchHit{
+				File: candidateFile(candidate), Score: item.score, MatchType: "hybrid",
+				Citations: []Citation{}, candidates: []searchCandidate{},
+			})
+			index = len(hits) - 1
 		}
-		hits = append(hits, SearchHit{File: candidateFile(item.candidate), Score: item.score, MatchType: "hybrid", Citations: citations})
+		if item.score > hits[index].Score {
+			hits[index].Score = item.score
+			hits[index].File = candidateFile(candidate)
+		}
+		hits[index].candidates = append(hits[index].candidates, candidate)
+		if candidate.ChunkID != nil && len(hits[index].Citations) < 3 {
+			hits[index].Citations = append(hits[index].Citations, candidateCitation(candidate))
+		}
 	}
+	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
 	return hits
 }
 
@@ -347,7 +480,10 @@ func candidateFile(value searchCandidate) map[string]any {
 }
 
 func candidateCitation(value searchCandidate) Citation {
-	id := fmt.Sprintf("%s:%s", value.FileID, value.ChunkID)
+	id := ""
+	if value.ChunkID != nil {
+		id = value.FileID.String() + ":" + value.ChunkID.String()
+	}
 	excerpt := ""
 	if value.Content != nil {
 		excerpt = limitRunes(strings.Join(strings.Fields(*value.Content), " "), 320)

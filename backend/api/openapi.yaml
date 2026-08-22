@@ -1609,11 +1609,14 @@ components:
       additionalProperties: false
     AskResponse:
       type: object
-      required: [answer, citations]
+      required: [answer, grounded, citations]
       description: Citations contain only model-selected evidence IDs validated against the retrieved authorized chunks.
       properties:
         answer:
           type: string
+        grounded:
+          type: boolean
+          description: True only when at least one returned citation survived server-side evidence validation.
         citations:
           type: array
           description: Empty when the answer is not grounded in the retrieved evidence.

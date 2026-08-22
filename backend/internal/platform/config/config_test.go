@@ -37,6 +37,9 @@ func TestLoadUsesDevelopmentDefaults(t *testing.T) {
 	if cfg.AI.RequestTimeout != 90*time.Second {
 		t.Fatalf("unexpected AI request timeout: %s", cfg.AI.RequestTimeout)
 	}
+	if cfg.AI.RerankEnabled || cfg.AI.RerankBaseURL != "" || cfg.AI.RerankModel != "qwen3-rerank" || cfg.AI.RerankCandidates != 30 || cfg.AI.RerankTopK != 8 || cfg.AI.RerankTimeout != 30*time.Second {
+		t.Fatalf("unexpected reranker defaults: %+v", cfg.AI)
+	}
 	if !cfg.AI.Enabled {
 		t.Fatal("AI should be enabled by default")
 	}
@@ -135,5 +138,24 @@ func TestLoadCanDisableAIRateLimit(t *testing.T) {
 	}
 	if cfg.AI.RateLimitEnabled {
 		t.Fatal("AI rate limiting should be disabled")
+	}
+}
+
+func TestLoadRejectsInvalidRerankTopK(t *testing.T) {
+	t.Setenv("AI_RERANK_ENABLED", "true")
+	t.Setenv("AI_RERANK_CANDIDATES", "4")
+	t.Setenv("AI_RERANK_TOP_K", "5")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected reranker top-k larger than candidates to fail")
+	}
+}
+
+func TestLoadRejectsDashScopeRerankWithoutBaseURL(t *testing.T) {
+	t.Setenv("AI_PROVIDER", "dashscope")
+	t.Setenv("DASHSCOPE_API_KEY", "test-key")
+	t.Setenv("AI_RERANK_ENABLED", "true")
+	t.Setenv("AI_RERANK_BASE_URL", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected DashScope reranker base URL to be required")
 	}
 }

@@ -1,0 +1,5 @@
+What date does the Aurora release train freeze?	aurora.txt	true	true	true	1
+What ef_search value and embedding dimension are used by the vector index?	pgvector.txt	true	true	true	1
+When are unreferenced objects garbage-collected?	retention.txt	true	true	true	1
+What Redis database and cleanup interval are used in staging?	distractor.txt	true	true	true	1
+What is the office temperature on Mars?	NONE	false	false	false	0

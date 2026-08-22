@@ -1,0 +1,18 @@
+RAG lightweight after-change result
+Date: 2026-08-22
+Provider: fake/local deterministic; no external model calls
+Command: go test ./internal/ai/ragtest -run TestReport -count=1 -v
+
+RAG_REPORT case=long-structured-document chunks=3 avg_runes=908.0 max_runes=1181 natural_end=3/3 (100.0%)
+RAG_REPORT case=markdown chunks=1 avg_runes=152.0 max_runes=152 natural_end=1/1 (100.0%)
+RAG_REPORT case=pdf-docx-paragraphs chunks=1 avg_runes=120.0 max_runes=120 natural_end=1/1 (100.0%)
+RAG_REPORT search_limit=20 recall_per_leg=50 final_fusion_limit=30
+RAG_REPORT search_limit=40 recall_per_leg=50 final_fusion_limit=40
+
+Chunking microbenchmarks (5 runs, arm64 workstation):
+- Markdown: approximately 3.6-4.2 us/op, about 1.6 KiB/op
+- Paragraph sample: approximately 3.4-3.6 us/op, about 0.9 KiB/op
+- Long structured document: approximately 102-116 us/op, about 69-71 KiB/op
+
+Boundary: this is a deterministic chunking/fusion smoke comparison, not a
+relevance, Recall@K, production capacity, or end-to-end model quality claim.

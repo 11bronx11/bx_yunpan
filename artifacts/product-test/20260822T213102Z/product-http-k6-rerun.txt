@@ -1,0 +1,87 @@
+
+          /\      |‾‾| /‾‾/   /‾‾/   
+     /\  /  \     |  |/  /   /  /    
+    /  \/    \    |     (   /   ‾‾\  
+   /          \   |  |\  \ |  (‾)  | 
+  / __________ \  |__| \__\ \_____/ .io
+
+     execution: local
+        script: artifacts/product-test/20260822T213102Z/product-http-performance.js
+        output: -
+
+     scenarios: (100.00%) 2 scenarios, 80 max VUs, 41s max duration (incl. graceful stop):
+              * health: 100.00 iterations/s for 10s (maxVUs: 20-40, gracefulStop: 30s)
+              * folders: 60.00 iterations/s for 10s (maxVUs: 20-40, startTime: 1s, gracefulStop: 30s)
+
+
+running (01.0s), 00/40 VUs, 100 complete and 0 interrupted iterations
+health    [  10% ] 00/20 VUs  01.0s/10s  100.00 iters/s
+folders • [   0% ] waiting    0.0s      
+
+running (02.0s), 00/40 VUs, 260 complete and 0 interrupted iterations
+health    [  20% ] 00/20 VUs  02.0s/10s  100.00 iters/s
+folders   [  10% ] 00/20 VUs  01.0s/10s  60.00 iters/s
+
+running (03.0s), 00/40 VUs, 420 complete and 0 interrupted iterations
+health    [  30% ] 00/20 VUs  03.0s/10s  100.00 iters/s
+folders   [  20% ] 00/20 VUs  02.0s/10s  60.00 iters/s
+
+running (04.0s), 00/40 VUs, 580 complete and 0 interrupted iterations
+health    [  40% ] 00/20 VUs  04.0s/10s  100.00 iters/s
+folders   [  30% ] 00/20 VUs  03.0s/10s  60.00 iters/s
+
+running (05.0s), 00/40 VUs, 740 complete and 0 interrupted iterations
+health    [  50% ] 00/20 VUs  05.0s/10s  100.00 iters/s
+folders   [  40% ] 00/20 VUs  04.0s/10s  60.00 iters/s
+
+running (06.0s), 00/40 VUs, 900 complete and 0 interrupted iterations
+health    [  60% ] 00/20 VUs  06.0s/10s  100.00 iters/s
+folders   [  50% ] 00/20 VUs  05.0s/10s  60.00 iters/s
+
+running (07.0s), 00/40 VUs, 1060 complete and 0 interrupted iterations
+health    [  70% ] 00/20 VUs  07.0s/10s  100.00 iters/s
+folders   [  60% ] 00/20 VUs  06.0s/10s  60.00 iters/s
+
+running (08.0s), 00/40 VUs, 1220 complete and 0 interrupted iterations
+health    [  80% ] 00/20 VUs  08.0s/10s  100.00 iters/s
+folders   [  70% ] 00/20 VUs  07.0s/10s  60.00 iters/s
+
+running (09.0s), 00/40 VUs, 1380 complete and 0 interrupted iterations
+health    [  90% ] 00/20 VUs  09.0s/10s  100.00 iters/s
+folders   [  80% ] 00/20 VUs  08.0s/10s  60.00 iters/s
+
+running (10.0s), 00/40 VUs, 1540 complete and 0 interrupted iterations
+health    [ 100% ] 00/20 VUs  10.0s/10s  100.00 iters/s
+folders   [  90% ] 00/20 VUs  09.0s/10s  60.00 iters/s
+
+running (11.0s), 00/40 VUs, 1600 complete and 0 interrupted iterations
+health  ✓ [ 100% ] 00/20 VUs  10s        100.00 iters/s
+folders   [ 100% ] 00/20 VUs  10.0s/10s  60.00 iters/s
+
+     ✓ health HTTP 200
+     ✓ root HTTP 200
+     ✓ children HTTP 200
+
+     checks.........................: 100.00% ✓ 2202       ✗ 0   
+     data_received..................: 1.5 MB  138 kB/s
+     data_sent......................: 708 kB  64 kB/s
+   ✓ folder_latency.................: avg=1.87ms  min=0s       med=2ms      max=8ms      p(90)=3ms      p(95)=4ms     
+     http_req_blocked...............: avg=12.7µs  min=750ns    med=3.45µs   max=1.57ms   p(90)=12.79µs  p(95)=17.45µs 
+     http_req_connecting............: avg=5.16µs  min=0s       med=0s       max=1.42ms   p(90)=0s       p(95)=0s      
+     http_req_duration..............: avg=1.23ms  min=166.11µs med=947.1µs  max=9.25ms   p(90)=2.56ms   p(95)=2.85ms  
+       { expected_response:true }...: avg=1.23ms  min=166.11µs med=947.1µs  max=9.25ms   p(90)=2.56ms   p(95)=2.85ms  
+   ✓ http_req_failed................: 0.00%   ✓ 0          ✗ 2202
+     http_req_receiving.............: avg=61.4µs  min=9.66µs   med=40.64µs  max=1.63ms   p(90)=128.47µs p(95)=148.78µs
+     http_req_sending...............: avg=30.39µs min=3.2µs    med=20.2µs   max=976.96µs p(90)=58.07µs  p(95)=75.11µs 
+     http_req_tls_handshaking.......: avg=0s      min=0s       med=0s       max=0s       p(90)=0s       p(95)=0s      
+     http_req_waiting...............: avg=1.13ms  min=130.24µs med=843.02µs max=9.17ms   p(90)=2.41ms   p(95)=2.7ms   
+     http_reqs......................: 2202    200.062295/s
+     iteration_duration.............: avg=2.02ms  min=224.28µs med=1.31ms   max=15.54ms  p(90)=5.43ms   p(95)=6.1ms   
+     iterations.....................: 1601    145.458553/s
+     vus............................: 0       min=0        max=0 
+     vus_max........................: 40      min=40       max=40
+
+
+running (11.0s), 00/40 VUs, 1601 complete and 0 interrupted iterations
+health  ✓ [ 100% ] 00/20 VUs  10s  100.00 iters/s
+folders ✓ [ 100% ] 00/20 VUs  10s  60.00 iters/s

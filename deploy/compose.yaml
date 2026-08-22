@@ -57,6 +57,12 @@ x-app-environment: &app-environment
   AI_CHAT_MODEL: ${AI_CHAT_MODEL:-qwen-plus}
   AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-text-embedding-v4}
   AI_VISION_MODEL: ${AI_VISION_MODEL:-qwen-vl-plus}
+  AI_RERANK_ENABLED: ${AI_RERANK_ENABLED:-false}
+  AI_RERANK_BASE_URL: ${AI_RERANK_BASE_URL:-}
+  AI_RERANK_MODEL: ${AI_RERANK_MODEL:-qwen3-rerank}
+  AI_RERANK_CANDIDATES: ${AI_RERANK_CANDIDATES:-30}
+  AI_RERANK_TOP_K: ${AI_RERANK_TOP_K:-8}
+  AI_RERANK_TIMEOUT: ${AI_RERANK_TIMEOUT:-30s}
   # migrations use vector(1024); deploy/up.sh rejects a mismatched value early
   AI_EMBEDDING_DIMENSION: ${AI_EMBEDDING_DIMENSION:-1024}
   AI_MAX_OBJECT_MIB: ${AI_MAX_OBJECT_MIB:-32}

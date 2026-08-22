@@ -1,0 +1,27 @@
+2026年 08月 22日 星期六 21:37:49 UTC
+--- uname
+Linux u-bronx 6.8.0-137-generic #137-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 17 19:15:13 UTC 2026 aarch64 aarch64 aarch64 GNU/Linux
+--- cpu
+Core(s) per cluster:                     4
+--- memory
+               total        used        free      shared  buff/cache   available
+内存：         5.2Gi       2.0Gi       982Mi        21Mi       2.4Gi       3.2Gi
+交换：         3.8Gi       2.0Gi       1.8Gi
+--- disk
+文件系统                           大小  已用  可用 已用% 挂载点
+/dev/mapper/ubuntu--vg-ubuntu--lv   59G   49G  8.0G   86% /
+--- docker stats
+bx-yunpan-aisvc-1	2.19%	15.85MiB / 5.188GiB	0.30%
+bx-yunpan-aisvc-3	2.72%	18.32MiB / 5.188GiB	0.34%
+bx-yunpan-api-1	0.02%	31.82MiB / 5.188GiB	0.60%
+bx-yunpan-aisvc-2	2.42%	17MiB / 5.188GiB	0.32%
+bx-yunpan-worker-1	0.36%	14.89MiB / 5.188GiB	0.28%
+bx-yunpan-grafana-1	1.22%	148MiB / 5.188GiB	2.79%
+bx-yunpan-otel-collector-1	0.24%	62.48MiB / 5.188GiB	1.18%
+bx-yunpan-jaeger-1	0.03%	103.9MiB / 5.188GiB	1.96%
+bx-yunpan-prometheus-1	0.59%	48.77MiB / 5.188GiB	0.92%
+bx-yunpan-web-1	0.00%	4.668MiB / 5.188GiB	0.09%
+bx-yunpan-redis-1	0.55%	7.75MiB / 5.188GiB	0.15%
+bx-yunpan-postgres-1	1.65%	55.3MiB / 5.188GiB	1.04%
+bx-yunpan-etcd-1	0.65%	18.78MiB / 5.188GiB	0.35%
+bx-yunpan-minio-1	10.51%	94.9MiB / 5.188GiB	1.79%

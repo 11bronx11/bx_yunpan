@@ -406,6 +406,7 @@ type AskRequest struct {
 type AskResponse struct {
 	Answer    string     `json:"answer"`
 	Citations []Citation `json:"citations"`
+	Grounded  bool       `json:"grounded"`
 }
 
 // AuthResponse defines model for AuthResponse.

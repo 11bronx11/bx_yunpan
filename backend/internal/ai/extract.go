@@ -18,6 +18,8 @@ import (
 
 	pdf "github.com/ledongthuc/pdf"
 	"golang.org/x/text/encoding/simplifiedchinese"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/ai/rag"
 )
 
 var (
@@ -35,17 +37,8 @@ const (
 	maxPDFPages           = 1000
 )
 
-type extractedSection struct {
-	Text       string
-	PageNumber *int
-	Section    string
-}
-
-type chunkInput struct {
-	Content    string
-	PageNumber *int
-	Section    string
-}
+type extractedSection = rag.Section
+type chunkInput = rag.Chunk
 
 func extract(ctx context.Context, provider Provider, mimeType string, data []byte) ([]extractedSection, error) {
 	select {
@@ -212,7 +205,7 @@ func extractPDF(data []byte) ([]extractedSection, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: extract PDF page %d: %v", errInvalidInput, pageNumber, err)
 		}
-		text = strings.Join(strings.Fields(text), " ")
+		text = normalizeParagraphText(text)
 		if text == "" {
 			continue
 		}
@@ -269,7 +262,9 @@ func extractDOCX(data []byte) ([]extractedSection, error) {
 				text.WriteString(value)
 				text.WriteByte(' ')
 			case "p":
-				text.WriteByte('\n')
+				// Keep an empty line between Word paragraphs so the chunker can
+				// preserve paragraph boundaries after XML whitespace is normalized.
+				text.WriteString("\n\n")
 			}
 			if text.Len() > maxExtractedTextBytes {
 				return nil, fmt.Errorf("%w: DOCX extracted text is too large", errInvalidInput)
@@ -283,29 +278,27 @@ func extractDOCX(data []byte) ([]extractedSection, error) {
 	return nil, fmt.Errorf("%w: DOCX document.xml not found", errInvalidInput)
 }
 
-func makeChunks(sections []extractedSection) []chunkInput {
-	const size = 1200
-	const overlap = 160
-	result := make([]chunkInput, 0)
-	for _, section := range sections {
-		clean := strings.Join(strings.Fields(section.Text), " ")
-		runes := []rune(clean)
-		for start := 0; start < len(runes); {
-			if len(result) == maxChunksPerDocument {
-				return result
+func normalizeParagraphText(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	blocks := strings.Split(text, "\n\n")
+	paragraphs := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		lines := strings.Split(block, "\n")
+		clean := make([]string, 0, len(lines))
+		for _, line := range lines {
+			line = strings.Join(strings.Fields(line), " ")
+			if line != "" {
+				clean = append(clean, line)
 			}
-			end := start + size
-			if end > len(runes) {
-				end = len(runes)
-			}
-			result = append(result, chunkInput{
-				Content: string(runes[start:end]), PageNumber: section.PageNumber, Section: section.Section,
-			})
-			if end == len(runes) {
-				break
-			}
-			start = end - overlap
+		}
+		if len(clean) > 0 {
+			paragraphs = append(paragraphs, strings.Join(clean, " "))
 		}
 	}
-	return result
+	return strings.Join(paragraphs, "\n\n")
+}
+
+func makeChunks(sections []extractedSection) []chunkInput {
+	return rag.MakeChunks(sections)
 }

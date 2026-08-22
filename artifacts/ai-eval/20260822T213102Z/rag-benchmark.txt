@@ -1,0 +1,45 @@
+RAG_REPORT case=markdown chunks=1 avg_runes=152.0 max_runes=152 natural_end=1/1 (100.0%)
+RAG_REPORT case=pdf-docx-paragraphs chunks=1 avg_runes=120.0 max_runes=120 natural_end=1/1 (100.0%)
+RAG_REPORT case=long-structured-document chunks=3 avg_runes=908.0 max_runes=1181 natural_end=3/3 (100.0%)
+RAG_REPORT search_limit=20 recall_per_leg=50 final_fusion_limit=30
+RAG_REPORT search_limit=40 recall_per_leg=50 final_fusion_limit=40
+RAG_REPORT case=long-structured-document chunks=3 avg_runes=908.0 max_runes=1181 natural_end=3/3 (100.0%)
+RAG_REPORT case=markdown chunks=1 avg_runes=152.0 max_runes=152 natural_end=1/1 (100.0%)
+RAG_REPORT case=pdf-docx-paragraphs chunks=1 avg_runes=120.0 max_runes=120 natural_end=1/1 (100.0%)
+RAG_REPORT search_limit=20 recall_per_leg=50 final_fusion_limit=30
+RAG_REPORT search_limit=40 recall_per_leg=50 final_fusion_limit=40
+RAG_REPORT case=markdown chunks=1 avg_runes=152.0 max_runes=152 natural_end=1/1 (100.0%)
+RAG_REPORT case=pdf-docx-paragraphs chunks=1 avg_runes=120.0 max_runes=120 natural_end=1/1 (100.0%)
+RAG_REPORT case=long-structured-document chunks=3 avg_runes=908.0 max_runes=1181 natural_end=3/3 (100.0%)
+RAG_REPORT search_limit=20 recall_per_leg=50 final_fusion_limit=30
+RAG_REPORT search_limit=40 recall_per_leg=50 final_fusion_limit=40
+RAG_REPORT case=pdf-docx-paragraphs chunks=1 avg_runes=120.0 max_runes=120 natural_end=1/1 (100.0%)
+RAG_REPORT case=long-structured-document chunks=3 avg_runes=908.0 max_runes=1181 natural_end=3/3 (100.0%)
+RAG_REPORT case=markdown chunks=1 avg_runes=152.0 max_runes=152 natural_end=1/1 (100.0%)
+RAG_REPORT search_limit=20 recall_per_leg=50 final_fusion_limit=30
+RAG_REPORT search_limit=40 recall_per_leg=50 final_fusion_limit=40
+RAG_REPORT case=markdown chunks=1 avg_runes=152.0 max_runes=152 natural_end=1/1 (100.0%)
+RAG_REPORT case=pdf-docx-paragraphs chunks=1 avg_runes=120.0 max_runes=120 natural_end=1/1 (100.0%)
+RAG_REPORT case=long-structured-document chunks=3 avg_runes=908.0 max_runes=1181 natural_end=3/3 (100.0%)
+RAG_REPORT search_limit=20 recall_per_leg=50 final_fusion_limit=30
+RAG_REPORT search_limit=40 recall_per_leg=50 final_fusion_limit=40
+goos: linux
+goarch: arm64
+pkg: github.com/11bronx11/bx_yunpan/backend/internal/ai/ragtest
+BenchmarkChunkingMarkdown-4       	  289866	      3753 ns/op	    1599 B/op	      22 allocs/op
+BenchmarkChunkingMarkdown-4       	  295208	      3979 ns/op	    1601 B/op	      22 allocs/op
+BenchmarkChunkingMarkdown-4       	  320870	      4154 ns/op	    1600 B/op	      22 allocs/op
+BenchmarkChunkingMarkdown-4       	  312056	      3983 ns/op	    1600 B/op	      22 allocs/op
+BenchmarkChunkingMarkdown-4       	  310316	      3769 ns/op	    1600 B/op	      22 allocs/op
+BenchmarkChunkingParagraphs-4     	  280672	      3605 ns/op	     885 B/op	      14 allocs/op
+BenchmarkChunkingParagraphs-4     	  327121	      3648 ns/op	     884 B/op	      14 allocs/op
+BenchmarkChunkingParagraphs-4     	  330728	      3609 ns/op	     885 B/op	      14 allocs/op
+BenchmarkChunkingParagraphs-4     	  339432	      3570 ns/op	     885 B/op	      14 allocs/op
+BenchmarkChunkingParagraphs-4     	  330135	      3604 ns/op	     885 B/op	      14 allocs/op
+BenchmarkChunkingLongDocument-4   	   10000	    111114 ns/op	   70947 B/op	     242 allocs/op
+BenchmarkChunkingLongDocument-4   	   10000	    104698 ns/op	   71055 B/op	     242 allocs/op
+BenchmarkChunkingLongDocument-4   	   10693	    104704 ns/op	   71045 B/op	     242 allocs/op
+BenchmarkChunkingLongDocument-4   	   10000	    109477 ns/op	   71107 B/op	     242 allocs/op
+BenchmarkChunkingLongDocument-4   	   10000	    108916 ns/op	   71077 B/op	     242 allocs/op
+PASS
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/ragtest	20.574s

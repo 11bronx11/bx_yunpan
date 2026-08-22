@@ -41,11 +41,12 @@ type Service struct {
 	objects  *objectstore.Service
 	storage  *minio.Client
 	provider Provider
+	reranker Reranker
 	config   config.AI
 }
 
 func NewService(db *gorm.DB, driveService *drive.Service, objects *objectstore.Service, storage *minio.Client, cfg config.AI) *Service {
-	return &Service{db: db, drive: driveService, objects: objects, storage: storage, provider: NewProvider(cfg), config: cfg}
+	return &Service{db: db, drive: driveService, objects: objects, storage: storage, provider: NewProvider(cfg), reranker: NewReranker(cfg), config: cfg}
 }
 
 func (s *Service) ProcessObject(ctx context.Context, objectID uuid.UUID) error {

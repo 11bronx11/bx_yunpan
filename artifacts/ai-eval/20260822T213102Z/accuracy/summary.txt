@@ -1,0 +1,5 @@
+account=rageval20260822T213102Z
+indexed_fixtures=4
+search_hit_at_1=4/4
+search_expected_present=4/4
+ask_valid_grounding_or_refusal=4/5

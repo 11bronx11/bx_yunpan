@@ -47,7 +47,9 @@ type SearchInput struct {
 	FolderID          *uuid.UUID
 	IncludeSubfolders bool
 	MimeTypes         []string
-	Limit             int
+	// FileIDs is an internal Ask scope. Empty means all files authorized by owner/folder.
+	FileIDs []uuid.UUID
+	Limit   int
 }
 
 type Citation struct {
@@ -64,4 +66,7 @@ type SearchHit struct {
 	Score     float64        `json:"score"`
 	MatchType string         `json:"match_type"`
 	Citations []Citation     `json:"citations"`
+	// Candidates stays inside aisvc. It carries full chunks for Ask/reranking;
+	// gRPC/HTTP conversion only exposes the public citation excerpt.
+	candidates []searchCandidate
 }

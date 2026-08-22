@@ -1,0 +1,9 @@
+=== RUN   TestReport
+RAG_REPORT case=markdown chunks=1 avg_runes=152.0 max_runes=152 natural_end=1/1 (100.0%)
+RAG_REPORT case=pdf-docx-paragraphs chunks=1 avg_runes=120.0 max_runes=120 natural_end=1/1 (100.0%)
+RAG_REPORT case=long-structured-document chunks=3 avg_runes=908.0 max_runes=1181 natural_end=3/3 (100.0%)
+RAG_REPORT search_limit=20 recall_per_leg=50 final_fusion_limit=30
+RAG_REPORT search_limit=40 recall_per_leg=50 final_fusion_limit=40
+--- PASS: TestReport (0.00s)
+PASS
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/ragtest	0.011s

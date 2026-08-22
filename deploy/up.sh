@@ -93,6 +93,34 @@ if [[ "$ai_enabled" == true ]]; then
     echo "AI_EMBEDDING_DIMENSION must be 1024 to match the pgvector schema." >&2
     exit 1
   fi
+
+  rerank_enabled=$(env_value AI_RERANK_ENABLED)
+  rerank_enabled=${rerank_enabled:-false}
+  if [[ "$rerank_enabled" != "true" && "$rerank_enabled" != "false" ]]; then
+    echo "AI_RERANK_ENABLED must be true or false." >&2
+    exit 1
+  fi
+  if [[ "$rerank_enabled" == true ]]; then
+    rerank_model=$(env_value AI_RERANK_MODEL)
+    rerank_model=${rerank_model:-qwen3-rerank}
+    rerank_base_url=$(env_value AI_RERANK_BASE_URL)
+    rerank_candidates=$(env_value AI_RERANK_CANDIDATES)
+    rerank_candidates=${rerank_candidates:-30}
+    rerank_top_k=$(env_value AI_RERANK_TOP_K)
+    rerank_top_k=${rerank_top_k:-8}
+    if [[ -z "$rerank_model" ]]; then
+      echo "AI_RERANK_MODEL is required when AI_RERANK_ENABLED=true." >&2
+      exit 1
+    fi
+    if [[ "$ai_provider" == dashscope && -z "$rerank_base_url" ]]; then
+      echo "AI_RERANK_BASE_URL is required for DashScope reranking." >&2
+      exit 1
+    fi
+    if [[ ! "$rerank_candidates" =~ ^[1-9][0-9]*$ || ! "$rerank_top_k" =~ ^[1-9][0-9]*$ || "$rerank_top_k" -gt "$rerank_candidates" ]]; then
+      echo "AI_RERANK_CANDIDATES and AI_RERANK_TOP_K must be positive, with TOP_K <= CANDIDATES." >&2
+      exit 1
+    fi
+  fi
 fi
 
 s3_public_path_prefix=$(env_value S3_PUBLIC_PATH_PREFIX)

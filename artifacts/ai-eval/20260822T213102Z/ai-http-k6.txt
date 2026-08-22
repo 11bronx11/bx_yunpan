@@ -1,0 +1,75 @@
+
+          /\      |‾‾| /‾‾/   /‾‾/   
+     /\  /  \     |  |/  /   /  /    
+    /  \/    \    |     (   /   ‾‾\  
+   /          \   |  |\  \ |  (‾)  | 
+  / __________ \  |__| \__\ \_____/ .io
+
+     execution: local
+        script: artifacts/ai-eval/20260822T213102Z/ai-http-performance.js
+        output: -
+
+     scenarios: (100.00%) 2 scenarios, 6 max VUs, 3m32s max duration (incl. graceful stop):
+              * search: 12 iterations shared among 3 VUs (maxDuration: 1m30s, gracefulStop: 30s)
+              * ask: 5 iterations shared among 3 VUs (maxDuration: 3m0s, startTime: 2s, gracefulStop: 30s)
+
+
+running (0m01.0s), 3/6 VUs, 0 complete and 0 interrupted iterations
+search   [   0% ] 3 VUs    0m01.0s/1m30s  00/12 shared iters
+ask    • [   0% ] waiting  1.0s          
+
+running (0m02.0s), 3/6 VUs, 3 complete and 0 interrupted iterations
+search   [  25% ] 3 VUs    0m02.0s/1m30s  03/12 shared iters
+ask    • [   0% ] waiting  0.0s          
+
+running (0m03.0s), 6/6 VUs, 6 complete and 0 interrupted iterations
+search   [  50% ] 3 VUs  0m03.0s/1m30s  06/12 shared iters
+ask      [   0% ] 3 VUs  0m01.0s/3m0s   0/5 shared iters
+
+running (0m04.0s), 3/6 VUs, 12 complete and 0 interrupted iterations
+search ✓ [ 100% ] 3 VUs  0m03.7s/1m30s  12/12 shared iters
+ask      [   0% ] 3 VUs  0m02.0s/3m0s   0/5 shared iters
+
+running (0m05.0s), 3/6 VUs, 13 complete and 0 interrupted iterations
+search ✓ [ 100% ] 3 VUs  0m03.7s/1m30s  12/12 shared iters
+ask      [  20% ] 3 VUs  0m03.0s/3m0s   1/5 shared iters
+
+running (0m06.0s), 3/6 VUs, 13 complete and 0 interrupted iterations
+search ✓ [ 100% ] 3 VUs  0m03.7s/1m30s  12/12 shared iters
+ask      [  20% ] 3 VUs  0m04.0s/3m0s   1/5 shared iters
+
+running (0m07.0s), 2/6 VUs, 15 complete and 0 interrupted iterations
+search ✓ [ 100% ] 3 VUs  0m03.7s/1m30s  12/12 shared iters
+ask      [  60% ] 3 VUs  0m05.0s/3m0s   3/5 shared iters
+
+running (0m08.0s), 1/6 VUs, 16 complete and 0 interrupted iterations
+search ✓ [ 100% ] 3 VUs  0m03.7s/1m30s  12/12 shared iters
+ask      [  80% ] 3 VUs  0m06.0s/3m0s   4/5 shared iters
+
+     ✓ AI search HTTP 200
+     ✓ AI ask HTTP 200
+
+   ✓ ai_ask_latency.................: avg=3.25s    min=2.05s    med=2.14s    max=5.02s  p(90)=4.98s    p(95)=5s    
+   ✓ ai_search_latency..............: avg=918.5ms  min=614ms    med=651ms    max=1.73s  p(90)=1.72s    p(95)=1.73s 
+     checks.........................: 100.00% ✓ 17       ✗ 0  
+     data_received..................: 19 kB   2.2 kB/s
+     data_sent......................: 10 kB   1.2 kB/s
+     http_req_blocked...............: avg=1.08ms   min=2.25µs   med=14.41µs  max=4.58ms p(90)=3.46ms   p(95)=3.88ms
+     http_req_connecting............: avg=488.99µs min=0s       med=0s       max=1.88ms p(90)=1.88ms   p(95)=1.88ms
+     http_req_duration..............: avg=1.6s     min=613.46ms med=698.44ms max=5.02s  p(90)=3.25s    p(95)=4.93s 
+       { expected_response:true }...: avg=1.6s     min=613.46ms med=698.44ms max=5.02s  p(90)=3.25s    p(95)=4.93s 
+   ✓ http_req_failed................: 0.00%   ✓ 0        ✗ 17 
+     http_req_receiving.............: avg=354.89µs min=63.78µs  med=245.9µs  max=1.26ms p(90)=732.03µs p(95)=1ms   
+     http_req_sending...............: avg=251.15µs min=19.54µs  med=103.91µs max=1.36ms p(90)=705.34µs p(95)=1.35ms
+     http_req_tls_handshaking.......: avg=0s       min=0s       med=0s       max=0s     p(90)=0s       p(95)=0s    
+     http_req_waiting...............: avg=1.6s     min=613.11ms med=698.09ms max=5.02s  p(90)=3.25s    p(95)=4.93s 
+     http_reqs......................: 17      2.037769/s
+     iteration_duration.............: avg=1.6s     min=614.26ms med=698.81ms max=5.02s  p(90)=3.25s    p(95)=4.94s 
+     iterations.....................: 17      2.037769/s
+     vus............................: 1       min=1      max=6
+     vus_max........................: 6       min=6      max=6
+
+
+running (0m08.3s), 0/6 VUs, 17 complete and 0 interrupted iterations
+search ✓ [ 100% ] 3 VUs  0m03.7s/1m30s  12/12 shared iters
+ask    ✓ [ 100% ] 3 VUs  0m06.3s/3m0s   5/5 shared iters

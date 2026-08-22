@@ -311,6 +311,12 @@ Docker Compose 和宿主机开发脚本都从 `deploy/.env` 读取配置。不�
 | `AI_CHAT_MODEL` | `qwen-plus` | 问答模型 |
 | `AI_EMBEDDING_MODEL` | `text-embedding-v4` | 向量模型 |
 | `AI_VISION_MODEL` | `qwen-vl-plus` | 图片理解/OCR 模型 |
+| `AI_RERANK_ENABLED` | `false` | 是否在 Ask 中启用二阶段 Reranker；只影响问答，不影响普通搜索 |
+| `AI_RERANK_BASE_URL` | 空 | DashScope Reranker 的 `compatible-api/v1` 根地址；不要追加 `/reranks` |
+| `AI_RERANK_MODEL` | `qwen3-rerank` | Reranker 模型 |
+| `AI_RERANK_CANDIDATES` | `30` | 送入 Reranker 的 RRF 候选 Chunk 数 |
+| `AI_RERANK_TOP_K` | `8` | Reranker 后送入 LLM 的最多 Chunk 数 |
+| `AI_RERANK_TIMEOUT` | `30s` | Reranker HTTP 请求超时 |
 | `AI_EMBEDDING_DIMENSION` | `1024` | 向量维度，数据库列固定为 `vector(1024)` |
 | `AI_MAX_OBJECT_MIB` | `32` | AI 抽取单文件大小上限 |
 | `AI_REQUEST_TIMEOUT` | `90s` | 单次 AI Provider HTTP 请求超时 |
@@ -319,6 +325,18 @@ Docker Compose 和宿主机开发脚本都从 `deploy/.env` 读取配置。不�
 | `AI_RATE_LIMIT_ASK_PER_MINUTE` | `10` | 每个用户每分钟 AI 问答次数 |
 | `AI_RATE_LIMIT_REPROCESS_PER_MINUTE` | `3` | 每个用户每分钟重建索引次数 |
 | `AISVC_REPLICAS` | `1` | `up.sh` 启动的 aisvc 副本数；AI 开启时必须为正整数，仅 `AI_ENABLED=false` 时可设为 `0` |
+| `AISVC_GRPC_ADDR` | `:8082` | aisvc 监听地址 |
+| `AISVC_GRPC_TARGET` | `aisvc:8082` | API 直连 aisvc 的目标；启用 etcd 后由 resolver 发现 |
+| `AISVC_CALL_TIMEOUT` | `120s` | API 到 aisvc 的总调用预算，不得短于 `AI_REQUEST_TIMEOUT` |
+| `AISVC_SEARCH_MAX_ATTEMPTS` | `3` | aisvc 搜索调用最大尝试次数 |
+| `AISVC_REPROCESS_MAX_ATTEMPTS` | `3` | aisvc 重建索引调用最大尝试次数 |
+| `AISVC_RETRY_BASE_BACKOFF` | `20ms` | gRPC 重试初始退避 |
+| `AISVC_RETRY_MAX_BACKOFF` | `1s` | gRPC 重试最大退避 |
+| `AISVC_BREAKER_WINDOW` | `10s` | aisvc 客户端熔断统计窗口 |
+| `AISVC_BREAKER_MIN_REQUESTS` | `20` | 触发熔断前的最少请求数 |
+| `AISVC_BREAKER_FAILURE_RATE` | `0.5` | 熔断失败率阈值 |
+| `AISVC_BREAKER_OPEN_TIMEOUT` | `5s` | 熔断打开后的等待时间 |
+| `AISVC_BREAKER_HALF_OPEN_PROBES` | `3` | 半开状态探测请求数 |
 | `GO_BUILD_PARALLELISM` | `1` | Docker 内 `go build -p`，限制同时编译的包数 |
 | `GO_BUILD_MAX_PROCS` | `2` | Docker 内 Go 编译器可使用的最大 CPU 线程数 |
 | `COMPOSE_PARALLEL_LIMIT` | `1` | `up.sh` 同时执行的 Compose 构建/启动任务数 |
@@ -335,7 +353,10 @@ Docker Compose 和宿主机开发脚本都从 `deploy/.env` 读取配置。不�
 | `ETCD_ENDPOINTS` | `etcd:2379` | etcd 客户端地址列表 |
 | `ETCD_USERNAME` | 空 | 外部 etcd 用户名；内置 etcd 不启用认证 |
 | `ETCD_PASSWORD` | 空 | 外部 etcd 密码；内置 etcd 不启用认证 |
+| `ETCD_DIAL_TIMEOUT` | `5s` | etcd 客户端连接超时 |
+| `ETCD_SERVICE_PREFIX` | `/services/aisvc` | aisvc 注册键前缀 |
 | `ETCD_LEASE_TTL` | `10s` | aisvc 注册租约时长 |
+| `AISVC_ADVERTISE_ADDR` | 空 | 写入 etcd 的 aisvc 可达地址；留空时由容器 hostname 推断 |
 | `OUTBOX_LEADER_LOCK_ENABLED` | `true` | 是否启用 dispatcher Redis 选主 |
 | `OUTBOX_LEADER_LOCK_TTL` | `15s` | dispatcher 锁 TTL，由 watchdog 续期 |
 | `OTEL_TRACES_ENABLED` | `false` | 是否导出应用 trace |

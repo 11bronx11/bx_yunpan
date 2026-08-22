@@ -109,7 +109,7 @@ func (h *HTTP) ask(c *gin.Context) {
 		FolderID *uuid.UUID  `json:"folder_id"`
 		FileIDs  []uuid.UUID `json:"file_ids"`
 	}
-	if err := c.ShouldBindJSON(&request); err != nil || len(request.FileIDs) > 50 {
+	if err := c.ShouldBindJSON(&request); err != nil || len(request.FileIDs) > maxAskFileIDs {
 		h.writeError(c, ErrInvalid)
 		return
 	}
@@ -119,7 +119,7 @@ func (h *HTTP) ask(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"answer": answer, "citations": citations})
+	c.JSON(http.StatusOK, gin.H{"answer": answer, "grounded": len(citations) > 0, "citations": citations})
 }
 
 func (h *HTTP) getTask(c *gin.Context) {

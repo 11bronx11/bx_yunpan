@@ -1,0 +1,88 @@
+
+          /\      |‾‾| /‾‾/   /‾‾/   
+     /\  /  \     |  |/  /   /  /    
+    /  \/    \    |     (   /   ‾‾\  
+   /          \   |  |\  \ |  (‾)  | 
+  / __________ \  |__| \__\ \_____/ .io
+
+     execution: local
+        script: artifacts/product-test/20260822T213102Z/product-core-performance.js
+        output: -
+
+     scenarios: (100.00%) 1 scenario, 60 max VUs, 45s max duration (incl. graceful stop):
+              * core: 40.00 iterations/s for 15s (maxVUs: 20-60, gracefulStop: 30s)
+
+
+running (01.0s), 00/20 VUs, 40 complete and 0 interrupted iterations
+core   [   7% ] 00/20 VUs  01.0s/15s  40.00 iters/s
+
+running (02.0s), 00/20 VUs, 80 complete and 0 interrupted iterations
+core   [  13% ] 00/20 VUs  02.0s/15s  40.00 iters/s
+
+running (03.0s), 00/20 VUs, 120 complete and 0 interrupted iterations
+core   [  20% ] 00/20 VUs  03.0s/15s  40.00 iters/s
+
+running (04.0s), 00/20 VUs, 160 complete and 0 interrupted iterations
+core   [  27% ] 00/20 VUs  04.0s/15s  40.00 iters/s
+
+running (05.0s), 00/20 VUs, 200 complete and 0 interrupted iterations
+core   [  33% ] 00/20 VUs  05.0s/15s  40.00 iters/s
+
+running (06.0s), 00/20 VUs, 240 complete and 0 interrupted iterations
+core   [  40% ] 00/20 VUs  06.0s/15s  40.00 iters/s
+
+running (07.0s), 00/20 VUs, 280 complete and 0 interrupted iterations
+core   [  47% ] 00/20 VUs  07.0s/15s  40.00 iters/s
+
+running (08.0s), 00/20 VUs, 320 complete and 0 interrupted iterations
+core   [  53% ] 00/20 VUs  08.0s/15s  40.00 iters/s
+
+running (09.0s), 00/20 VUs, 360 complete and 0 interrupted iterations
+core   [  60% ] 00/20 VUs  09.0s/15s  40.00 iters/s
+
+running (10.0s), 00/20 VUs, 400 complete and 0 interrupted iterations
+core   [  67% ] 00/20 VUs  10.0s/15s  40.00 iters/s
+
+running (11.0s), 00/20 VUs, 440 complete and 0 interrupted iterations
+core   [  73% ] 00/20 VUs  11.0s/15s  40.00 iters/s
+
+running (12.0s), 00/20 VUs, 480 complete and 0 interrupted iterations
+core   [  80% ] 00/20 VUs  12.0s/15s  40.00 iters/s
+
+running (13.0s), 00/20 VUs, 520 complete and 0 interrupted iterations
+core   [  87% ] 00/20 VUs  13.0s/15s  40.00 iters/s
+
+running (14.0s), 00/20 VUs, 560 complete and 0 interrupted iterations
+core   [  93% ] 00/20 VUs  14.0s/15s  40.00 iters/s
+
+running (15.0s), 00/20 VUs, 600 complete and 0 interrupted iterations
+core   [ 100% ] 00/20 VUs  15.0s/15s  40.00 iters/s
+
+     ✓ root 200
+     ✓ children 200
+     ✓ quota 200
+     ✓ uploads 200
+     ✓ shares 200
+
+     checks.........................: 100.00% ✓ 3005       ✗ 0   
+     data_received..................: 1.7 MB  114 kB/s
+     data_sent......................: 1.5 MB  101 kB/s
+     http_req_blocked...............: avg=6.47µs  min=583ns    med=1.5µs    max=3.59ms  p(90)=8.81µs  p(95)=13.41µs 
+     http_req_connecting............: avg=2.44µs  min=0s       med=0s       max=3.48ms  p(90)=0s      p(95)=0s      
+     http_req_duration..............: avg=1.16ms  min=342.65µs med=781.34µs max=20.83ms p(90)=2.41ms  p(95)=2.92ms  
+       { expected_response:true }...: avg=1.16ms  min=342.65µs med=781.34µs max=20.83ms p(90)=2.41ms  p(95)=2.92ms  
+   ✓ http_req_failed................: 0.00%   ✓ 0          ✗ 3005
+     http_req_receiving.............: avg=49.38µs min=10.91µs  med=32.45µs  max=2.41ms  p(90)=91.64µs p(95)=134.12µs
+     http_req_sending...............: avg=18.1µs  min=2.91µs   med=8µs      max=1.26ms  p(90)=38.92µs p(95)=54.91µs 
+     http_req_tls_handshaking.......: avg=0s      min=0s       med=0s       max=0s      p(90)=0s      p(95)=0s      
+     http_req_waiting...............: avg=1.1ms   min=326.07µs med=736.34µs max=20.67ms p(90)=2.25ms  p(95)=2.73ms  
+     http_reqs......................: 3005    200.250092/s
+     iteration_duration.............: avg=6.66ms  min=2.7ms    med=5.31ms   max=50.24ms p(90)=9.81ms  p(95)=11.53ms 
+     iterations.....................: 601     40.050018/s
+   ✓ product_endpoint_latency.......: avg=1.26ms  min=0s       med=1ms      max=21ms    p(90)=3ms     p(95)=3ms     
+     vus............................: 0       min=0        max=0 
+     vus_max........................: 20      min=20       max=20
+
+
+running (15.0s), 00/20 VUs, 601 complete and 0 interrupted iterations
+core ✓ [ 100% ] 00/20 VUs  15s  40.00 iters/s

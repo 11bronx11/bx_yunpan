@@ -1,0 +1,6 @@
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai	0.467s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcclient	0.071s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcserver	0.038s
+?   	github.com/11bronx11/bx_yunpan/backend/internal/ai/pb	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/rag	0.006s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/ragtest	0.004s
