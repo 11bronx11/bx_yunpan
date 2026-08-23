@@ -12,6 +12,7 @@ import { deleteFile, getBreadcrumb, getDownloadURL, getRoot, renameFile } from '
 import { createShare } from '../services/share';
 import { FileTypeBadge, fileTypeLabel, StatusTag } from './design/ProductUI';
 import MoveFileModal from './MoveFileModal';
+import { startDownload } from '../utils/download';
 
 const FileIntro = styled.div`
   display: grid;
@@ -89,11 +90,7 @@ const SearchResultModal = ({ hit, open, onClose, onChanged }) => {
     setLoading('download');
     try {
       const value = await getDownloadURL(file.id);
-      const link = document.createElement('a');
-      link.href = value.url;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.click();
+      startDownload(value.url, file.name);
     } catch (error) {
       message.error(error.message || '下载地址获取失败');
     } finally {

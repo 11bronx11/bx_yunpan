@@ -370,13 +370,92 @@ Docker Compose 和宿主机开发脚本都从 `deploy/.env` 读取配置。不�
 
 ```dotenv
 APP_ENV=production
-APP_BIND_IP=0.0.0.0
+APP_BIND_IP=127.0.0.1
 S3_PUBLIC_ENDPOINT=drive.example.com
 S3_PUBLIC_SECURE=true
 AUTH_COOKIE_SECURE=true
 ```
 
-TLS 建议由宿主机 Caddy、Nginx 或云负载均衡终止，不要直接暴露 PostgreSQL、Redis 和 MinIO 数据端口。
+TLS 建议由 VM 宿主机 Caddy、Nginx 或云负载均衡终止。Docker 内 Web Nginx 继续监听
+`80`，Compose 将 VM 的 `127.0.0.1:3000` 映射到容器 `80`；公网只开放 `80/443`，
+不要直接暴露 PostgreSQL、Redis、MinIO 或应用的 `3000/8081` 端口。
+
+### 公网 HTTPS 部署（VM 宿主机终止 TLS）
+
+推荐的请求链路是：
+
+```text
+浏览器 https://drive.example.com:443
+  -> VM 宿主机 Nginx/Caddy（证书和 TLS 终止）
+  -> http://127.0.0.1:3000
+  -> Docker Web Nginx :80
+  -> /api 转 API，/storage 转 MinIO
+```
+
+按以下顺序部署：
+
+1. 将域名的 DNS A/AAAA 记录指向 VM 公网 IP，并在云安全组和 VM 防火墙放行 TCP
+   `80`、`443`。应用的 `3000`、`8081` 只允许本机访问。
+2. 在 VM 宿主机配置证书（例如使用 Certbot/Let's Encrypt 或云证书），证书文件放在
+   宿主机，由宿主机 Nginx/Caddy读取，不需要挂载到 Docker Web 容器。
+3. 修改 VM 上不提交到 Git 的 `deploy/.env`：
+
+   ```dotenv
+   APP_ENV=production
+   APP_BIND_IP=127.0.0.1
+   WEB_PORT=3000
+   S3_PUBLIC_ENDPOINT=drive.example.com
+   S3_PUBLIC_PATH_PREFIX=/storage
+   S3_PUBLIC_SECURE=true
+   AUTH_COOKIE_SECURE=true
+   ```
+
+   `S3_PUBLIC_ENDPOINT` 只写域名，不写 `https://`。它必须与浏览器访问的公网 Host
+   一致，因为上传、下载的 S3 预签名 URL 会使用它。
+4. 启动或重启应用，使 API 重新读取签名和 Cookie 配置：
+
+   ```bash
+   ./deploy/up.sh
+   ./deploy/config-check.sh
+   ```
+
+5. 在 VM 宿主机 Nginx 配置 HTTP 跳转和 HTTPS 反代。核心配置如下，证书路径按实际环境替换：
+
+   ```nginx
+   server {
+       listen 80;
+       server_name drive.example.com;
+       return 301 https://$host$request_uri;
+   }
+
+   server {
+       listen 443 ssl;
+       server_name drive.example.com;
+
+       ssl_certificate     /path/to/fullchain.pem;
+       ssl_certificate_key /path/to/privkey.pem;
+
+       client_max_body_size 0;
+
+       location / {
+           proxy_pass http://127.0.0.1:3000;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto https;
+           proxy_request_buffering off;
+           proxy_buffering off;
+           proxy_read_timeout 300s;
+           proxy_send_timeout 300s;
+       }
+   }
+   ```
+
+   `Host` 必须保留为公网域名，否则对象存储预签名 URL 可能出现签名不匹配；上传分片
+   默认约 `10MB`，因此宿主机反代不能使用默认的 `1MB` 请求体限制。
+6. 重载宿主机 Nginx/Caddy 后验证 `https://drive.example.com` 的登录、Token 刷新、上传、
+   下载和分享流程。上传时确认 `/api/v1/uploads/.../parts/presign` 返回的 URL 以
+   `https://drive.example.com/storage/` 开头。
 
 ### 远程开发端口转发
 
@@ -391,6 +470,19 @@ ssh -N \
 ```
 
 浏览器仍访问 `http://127.0.0.1:3000`，预签名 URL 的 Host 与 `S3_PUBLIC_ENDPOINT` 保持一致。
+
+默认配置下，SSH 本地监听端口必须和 `S3_PUBLIC_ENDPOINT` 中的端口一致，都是 `3000`。
+不要只改成 `-L 3001:127.0.0.1:3000` 后从 `http://127.0.0.1:3001` 访问：登录、检索等
+相对路径 API 仍可用，但分片上传会直接请求后端按 `S3_PUBLIC_ENDPOINT` 生成的
+`http://127.0.0.1:3000/storage/...` 预签名 URL，可能因端口不可达或跨源限制失败。
+
+如果 Mac 的 `3000` 端口无法使用，需要同时将 `S3_PUBLIC_ENDPOINT` 改为
+`127.0.0.1:<本地转发端口>`，重启 API，并让浏览器访问相同的 Host 和端口；不能在
+前端直接替换预签名 URL 的端口，因为 Host 参与 S3 签名。
+
+Linux 本机部署按默认配置从 `http://127.0.0.1:3000` 访问没有该问题。若浏览器运行在
+其他机器上，则 `127.0.0.1` 指向浏览器所在机器，必须把 `S3_PUBLIC_ENDPOINT` 配置为
+浏览器实际可达且与页面同源的域名或 `IP:端口`。
 
 ## AI 模式
 

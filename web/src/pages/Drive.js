@@ -11,6 +11,7 @@ import MoveFileModal from '../components/MoveFileModal';
 import AIIndexModal from '../components/AIIndexModal';
 import FileSummaryModal from '../components/FileSummaryModal';
 import { supportsAISummary } from '../utils/fileCapabilities';
+import { startDownload } from '../utils/download';
 import styled from '@emotion/styled';
 
 const Workspace = styled.div`display: grid; min-width: 0; gap: 16px;`;
@@ -149,8 +150,7 @@ const Drive = () => {
   const handleDownload = async file => {
     try {
       const value = await getDownloadURL(file.id);
-      const link = document.createElement('a');
-      link.href = value.url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.click();
+      startDownload(value.url, file.name);
     } catch (error) {
       message.error(error.message || '下载地址获取失败');
     }

@@ -3,8 +3,9 @@ import { App as AntApp } from 'antd';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Drive from './Drive';
-import { deleteFolder, getBreadcrumb, getChildren, getRoot } from '../services/drive';
+import { deleteFolder, getBreadcrumb, getChildren, getDownloadURL, getRoot } from '../services/drive';
 import { getFileAI } from '../services/ai';
+import { startDownload } from '../utils/download';
 
 const mockLogout = jest.fn();
 const mockEnqueueUploads = jest.fn();
@@ -31,6 +32,7 @@ jest.mock('../services/ai', () => ({
   getFileAI: jest.fn(),
   reprocessFileAI: jest.fn(),
 }));
+jest.mock('../utils/download', () => ({ startDownload: jest.fn() }));
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -67,4 +69,18 @@ test('opens the stored AI summary for an octet-stream source file', async () => 
 
   await waitFor(() => expect(getFileAI).toHaveBeenCalledWith('file-1', expect.objectContaining({ signal: expect.any(AbortSignal) })));
   expect(await screen.findByText('一个包含程序入口的 C++ 示例。')).toBeInTheDocument();
+});
+
+test('downloads a file without opening a new window', async () => {
+  getChildren.mockResolvedValue({
+    items: [{ id: 'file-1', type: 'file', name: 'report.pdf', mime_type: 'application/pdf', size_bytes: 42, version: 1 }],
+  });
+  getDownloadURL.mockResolvedValue({ url: 'https://example.test/report.pdf' });
+
+  render(<AntApp><MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><Drive /></MemoryRouter></AntApp>);
+
+  fireEvent.click(await screen.findByRole('button', { name: '管理 report.pdf' }));
+  fireEvent.click(await screen.findByText('下载'));
+
+  await waitFor(() => expect(startDownload).toHaveBeenCalledWith('https://example.test/report.pdf', 'report.pdf'));
 });

@@ -12,6 +12,7 @@ import {
   renameFile,
 } from '../services/drive';
 import { createShare } from '../services/share';
+import { startDownload } from '../utils/download';
 
 jest.mock('../services/drive', () => ({
   deleteFile: jest.fn(),
@@ -23,6 +24,7 @@ jest.mock('../services/drive', () => ({
   renameFile: jest.fn(),
 }));
 jest.mock('../services/share', () => ({ createShare: jest.fn() }));
+jest.mock('../utils/download', () => ({ startDownload: jest.fn() }));
 
 const hit = {
   file: {
@@ -64,6 +66,14 @@ test('shows file context and all drive actions', async () => {
   for (const name of ['下载', '分享', '移动到', '重命名', '删除']) {
     expect(screen.getByRole('button', { name })).toBeInTheDocument();
   }
+});
+
+test('downloads a search result without opening a new window', async () => {
+  renderModal();
+
+  fireEvent.click(screen.getByRole('button', { name: '下载' }));
+
+  await waitFor(() => expect(startDownload).toHaveBeenCalledWith('https://example.test/report.pdf', 'report.pdf'));
 });
 
 test('renames a search result and refreshes the search', async () => {
