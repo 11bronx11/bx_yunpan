@@ -2,7 +2,7 @@
 
 BX YunPan 是一个 React 18 + Go Gin 的智能私有云盘。项目以网盘核心链路为主，覆盖目录化文件管理、S3 Multipart 上传、断点恢复、SHA-256 秒传、Share Key 导入、异步缩略图，以及混合检索和有证据约束的 RAG 问答。
 
-**技术栈定位：模块化单体 + AI 服务独立部署。** 后端主体是模块化单体，按 Identity、Drive、Upload、Object、Sharing 等业务边界组织代码，共享一个本地事务边界；只有 AI 模块（文本抽取、OCR/Vision、Embedding）因为 CPU/IO 密集、请求特征与 API 显著不同，被拆成独立进程 `aisvc`，经 gRPC 调用并独立扩容。这不是完整的微服务架构：`ai_*` 表由 aisvc 独占写入，但 drive 的 `file_entries` / `folders` / `file_objects` 保持只读共享，以保留把权限过滤下推到 SQL 的检索设计。取舍理由见「架构取舍」。
+**技术栈定位：模块化单体 + AI 服务独立部署。** 后端主体是模块化单体，按 Identity、Drive、Upload、Object、Sharing 等业务边界组织代码，共享一个本地事务边界；只有 AI 模块（文本抽取、OCR/Vision、Embedding、检索、Reranker、RAG 问答）因为 CPU/IO 密集、请求特征与 API 显著不同，被拆成独立进程 `aisvc`，经 gRPC 调用并独立扩容。这不是完整的微服务架构：`ai_*` 表由 aisvc 独占写入，但 drive 的 `file_entries` / `folders` / `file_objects` 保持只读共享，以保留把权限过滤下推到 SQL 的检索设计。取舍理由见「架构取舍」。
 
 ## 核心能力
 
@@ -12,8 +12,8 @@ BX YunPan 是一个 React 18 + Go Gin 的智能私有云盘。项目以网盘核
 - FileEntry 与 FileObject 分离，使用 SHA-256 + 文件大小进行内容寻址；同一用户全盘内容唯一，跨用户上传不暴露去重命中，授权 Share Key 可直接复用对象。
 - 图片缩略图、对象延迟 GC、Transactional Outbox 和 Redis/Asynq Worker。
 - 可选 AI 模式支持 TXT、Markdown、常见源码/配置文件、PDF、DOCX 文本抽取，以及 JPG/PNG 的可插拔 OCR/Vision Provider；二进制 MIME 的源码可按文件名安全回退，并受控兼容 UTF-8 与 GB18030 文本。
-- 可选 AI 模式支持文件名精确、前缀和模糊匹配分级排序，以及 PostgreSQL FTS + pgvector + Reciprocal Rank Fusion 混合检索。
-- 可选 AI 模式的 RAG 最多选取 8 个证据片段、每文件最多 2 个；模型结构化返回 Grounded 判断和证据 ID，后端再按授权证据白名单校验 Citation。
+- 可选 AI 模式支持文件名精确、前缀和模糊匹配分级排序，以及 PostgreSQL FTS + pgvector + Reciprocal Rank Fusion 混合检索；Ask 可选在 RRF 后使用 Reranker 二阶段重排。
+- 可选 AI 模式的 RAG 先为每路检索保留最多 50 个候选，再形成最多 30 个 Chunk 的融合池；启用 Reranker 时再取最多 8 个片段、每文件最多 2 个送入 LLM。模型结构化返回 Grounded 判断和证据 ID，后端再按授权证据白名单校验 Citation。
 - 证据不足时保留模型回答但不附带无关引用；文件、段落和页码 Citation 始终受当前用户文件权限约束。上述 AI 能力仅在 `AI_ENABLED=true` 时可用。
 - 结构化日志、Request ID、Prometheus 指标、存活和依赖就绪探针。
 
@@ -66,7 +66,7 @@ API 保持无状态，文件内容使用对象存储承载，异步任务通过�
 
 ### 本轮实测
 
-在 4 vCPU、5.2 GiB 内存、Docker Compose、`AI_PROVIDER=fake`、52 个 active 文件和 629 个 AI chunk 的本机环境中，已实测整栈健康、上传→索引→检索→问答、Jaeger 跨 api/worker/aisvc trace，以及 `aisvc=2` 的均衡和实例摘除。性能数字和限制见 [`/benchmark.md`](/benchmark.md)，上传 trace 截图见 [`/jaeger-upload-trace.png`](/jaeger-upload-trace.png)。这些是小数据集 smoke 基线，不是生产容量承诺。
+本机已分别保留历史 fake Provider smoke 基线和本轮真实 DashScope/Reranker 性能结果。当前结果目录记录了 3 个 aisvc 副本下的 RAG 切块微基准、Hybrid Search、Ask（含 Reranker）和网盘核心读路径/Multipart 性能；这些是单机小数据集快照，不是生产容量承诺。历史单接口基线见 [`/benchmark.md`](/benchmark.md)，本轮 AI 报告见 [`/artifacts/ai-eval/20260822T213102Z/PERFORMANCE.md`](/artifacts/ai-eval/20260822T213102Z/PERFORMANCE.md)，产品报告见 [`/artifacts/product-test/20260822T213102Z/PERFORMANCE.md`](/artifacts/product-test/20260822T213102Z/PERFORMANCE.md)。
 
 ![Jaeger 中跨 api、worker、aisvc 的上传索引链路](jaeger-upload-trace.png)
 
@@ -346,8 +346,6 @@ Docker Compose 和宿主机开发脚本都从 `deploy/.env` 读取配置。不�
 | `BUILD_MIN_AVAILABLE_MB` | `1536` | 开始下一个镜像前要求的宿主机可用内存 |
 | `YUNPAN_MIN_FREE_GB` | `6` | 构建前要求的磁盘最小剩余空间 |
 | `YUNPAN_UP_ATTEMPTS` | `3` | Compose 启动失败时的最大尝试次数 |
-| `AISVC_GRPC_TARGET` | `aisvc:8082` | API 直连目标；启用 etcd 后改由 resolver 发现 |
-| `AISVC_CALL_TIMEOUT` | `120s` | API→aisvc 总预算，不得短于 `AI_REQUEST_TIMEOUT` |
 | `ETCD_ENABLED` | `true` | 是否启用 aisvc 注册发现 |
 | `ETCD_IMAGE` | `quay.io/coreos/etcd:v3.6.6` | 内置 etcd 镜像 |
 | `ETCD_ENDPOINTS` | `etcd:2379` | etcd 客户端地址列表 |
@@ -402,7 +400,7 @@ ssh -N \
 - `AI_ENABLED=true + AI_PROVIDER=fake`：默认离线 AI 模式，使用确定性本地 Embedding 和摘要，不依赖外部 Key，适合演示和自动化测试。
 - `AI_ENABLED=true + AI_PROVIDER=dashscope`：真实模型模式，需要 DashScope API Key。
 
-文件完成异步索引后，文件名搜索会优先返回精确和前缀匹配；混合检索使用全文排名与向量排名做 RRF 融合。问答阶段从授权结果中选取最多 8 个片段，并限制每个文件最多 2 个，避免单一文档占满上下文。DashScope 以 JSON 返回回答、Grounded 判断和证据 ID，后端只接受本次检索证据集合中的 ID；证据不足或引用无效时，响应中的 `citations` 为空。
+文件完成异步索引后，文件名搜索会优先返回精确和前缀匹配；混合检索使用全文排名与向量排名做 RRF 融合。设置 `AI_RERANK_ENABLED=true` 后，Ask 会把 RRF 融合池（默认最多 30 个 Chunk）发送到 Reranker，再将最多 8 个重排结果交给 LLM；关闭时直接使用 RRF 结果，不额外调用 Reranker。DashScope 的 `qwen3-rerank` 使用 `AI_RERANK_BASE_URL` 的 `compatible-api/v1` 根地址，客户端自动请求 `/reranks`，不要把 `/reranks` 写进配置。问答阶段每个文件最多提供 2 个片段，避免单一文档占满上下文。DashScope 以 JSON 返回回答、Grounded 判断和证据 ID，后端只接受本次检索证据集合中的 ID；证据不足或引用无效时，响应中的 `citations` 为空。
 
 启用 DashScope：
 
@@ -412,6 +410,12 @@ DASHSCOPE_API_KEY=sk-...
 AI_CHAT_MODEL=qwen-plus
 AI_EMBEDDING_MODEL=text-embedding-v4
 AI_VISION_MODEL=qwen-vl-plus
+AI_RERANK_ENABLED=true
+AI_RERANK_BASE_URL=https://dashscope.aliyuncs.com/compatible-api/v1
+AI_RERANK_MODEL=qwen3-rerank
+AI_RERANK_CANDIDATES=30
+AI_RERANK_TOP_K=8
+AI_RERANK_TIMEOUT=30s
 AI_REQUEST_TIMEOUT=90s
 AI_RATE_LIMIT_ENABLED=true
 AI_RATE_LIMIT_SEARCH_PER_MINUTE=30
@@ -475,7 +479,7 @@ backend/internal/upload      Multipart、断点恢复、校验与配额
 backend/internal/objectstore 内容寻址对象、引用计数与 GC
 backend/internal/sharing     Share Key 与授权导入
 backend/internal/media       图片缩略图
-backend/internal/ai          抽取、Embedding、RRF 与 RAG
+backend/internal/ai          抽取、Embedding、RRF、Reranker 与 RAG
 backend/internal/outbox      Transactional Outbox
 backend/migrations           PostgreSQL/pgvector Schema
 web/src                      React 云盘工作台

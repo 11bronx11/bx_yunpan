@@ -1,4 +1,6 @@
-# BX YunPan 本机性能基线
+# BX YunPan 历史本机性能基线
+
+> 这是 2026-08-17 的历史 smoke 基线。RAG/Reranker 优化后的最新性能结果请看 [`artifacts/ai-eval/20260822T213102Z/PERFORMANCE.md`](artifacts/ai-eval/20260822T213102Z/PERFORMANCE.md) 和 [`artifacts/product-test/20260822T213102Z/PERFORMANCE.md`](artifacts/product-test/20260822T213102Z/PERFORMANCE.md)。
 
 - 日期：2026-08-17
 - 环境：4 vCPU、5.2 GiB 内存、Docker Compose，本地 MinIO/PostgreSQL 17/Redis/etcd
