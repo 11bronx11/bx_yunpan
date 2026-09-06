@@ -1,0 +1,4 @@
+migration=19:false
+outbox_pending=0
+outbox_delivery_pending=0
+storage_non_terminal=0

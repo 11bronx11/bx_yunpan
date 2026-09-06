@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	dsn := env("POSTGRES_DSN", "postgres://yunpan:yunpan@127.0.0.1:5432/yunpan?sslmode=disable")
+	dsn := env("POSTGRES_PRIMARY_DSN", env("POSTGRES_DSN", "postgres://yunpan:yunpan@127.0.0.1:5432/yunpan?sslmode=disable"))
 	source := env("MIGRATIONS_SOURCE", "file://migrations")
 	command := "up"
 	if len(os.Args) > 1 {

@@ -1,0 +1,2 @@
+database=yunpan_upgrade_probe_20260905
+isolated_database_dropped=true

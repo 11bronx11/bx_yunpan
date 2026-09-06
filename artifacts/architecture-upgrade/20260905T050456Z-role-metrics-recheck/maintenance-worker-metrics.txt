@@ -1,0 +1,10 @@
+# HELP yunpan_worker_queue_size Current total task count in an Asynq queue.
+# TYPE yunpan_worker_queue_size gauge
+yunpan_worker_queue_size{queue="maintenance",role="maintenance-worker"} 0
+# HELP yunpan_worker_queue_state Asynq queue state values: pending, active, retry, failed, latency_seconds.
+# TYPE yunpan_worker_queue_state gauge
+yunpan_worker_queue_state{queue="maintenance",role="maintenance-worker",state="active"} 0
+yunpan_worker_queue_state{queue="maintenance",role="maintenance-worker",state="failed"} 0
+yunpan_worker_queue_state{queue="maintenance",role="maintenance-worker",state="latency_seconds"} 0
+yunpan_worker_queue_state{queue="maintenance",role="maintenance-worker",state="pending"} 0
+yunpan_worker_queue_state{queue="maintenance",role="maintenance-worker",state="retry"} 0

@@ -1,0 +1,4 @@
+schema_migration|9|false
+delivery_rows|45
+delivery_status|published|asynq|45
+unrouted_pending|0

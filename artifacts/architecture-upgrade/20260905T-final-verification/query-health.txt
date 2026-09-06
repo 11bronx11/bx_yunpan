@@ -1,0 +1,2 @@
+grpc.health.v1: SERVING
+Command: AISVC_GRPC_ADDR=127.0.0.1:18082 /tmp/bx-yunpan-aisvc-current healthcheck

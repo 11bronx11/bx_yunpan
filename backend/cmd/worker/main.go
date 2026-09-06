@@ -19,7 +19,7 @@ func main() {
 		slog.Error("load config", "error", err)
 		os.Exit(1)
 	}
-	logger := logging.New(cfg.App.LogLevel, cfg.App.Env).With("process", "worker")
+	logger := logging.New(cfg.App.LogLevel, cfg.App.Env).With("process", "worker", "instance_id", cfg.App.InstanceID)
 	slog.SetDefault(logger)
 
 	// 走 run 而不是直接 os.Exit：os.Exit 不执行 defer，会吞掉 trace flush。

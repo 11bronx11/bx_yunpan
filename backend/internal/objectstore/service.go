@@ -9,6 +9,8 @@ import (
 	"github.com/minio/minio-go/v7"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
 )
 
 type Object struct {
@@ -20,6 +22,7 @@ type Object struct {
 	ObjectKey      string
 	Status         string
 	ReferenceCount int64
+	Version        int64
 	VerifiedAt     *time.Time
 	DeletedAt      *time.Time
 	CreatedAt      time.Time
@@ -54,7 +57,7 @@ func (s *Service) GarbageCollect(ctx context.Context, storage GCStorage, objectI
 	}
 	result := s.db.Model(&Object{}).
 		Where("id = ? AND reference_count = 0 AND status IN ?", objectID, []string{"ready", "deleting"}).
-		Update("status", "deleting")
+		Updates(map[string]any{"status": "deleting", "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -62,16 +65,35 @@ func (s *Service) GarbageCollect(ctx context.Context, storage GCStorage, objectI
 		return nil
 	}
 
+	operation, err := storageops.Enqueue(s.db, storageops.Input{
+		OperationType: storageops.ObjectDelete, IdempotencyKey: "object.delete:" + objectID.String(),
+		ObjectID: &objectID, SourceBucket: object.Bucket, SourceKey: object.ObjectKey,
+	})
+	if err != nil {
+		return err
+	}
+	if operation.State == storageops.StateSucceeded {
+		return nil
+	}
+	started, leaseToken, err := storageops.TryStartWithToken(s.db, operation.ID, 5*time.Minute)
+	if err != nil {
+		return err
+	}
+	if !started {
+		return nil
+	}
 	var variants []objectVariant
 	if err := s.db.Where("object_id = ?", objectID).Find(&variants).Error; err != nil {
 		return err
 	}
 	for _, variant := range variants {
 		if err := storage.RemoveObject(ctx, object.Bucket, variant.ObjectKey, minio.RemoveObjectOptions{}); err != nil {
+			_ = storageops.MarkFailedOwned(s.db, operation.ID, leaseToken, err, time.Second)
 			return err
 		}
 	}
 	if err := storage.RemoveObject(ctx, object.Bucket, object.ObjectKey, minio.RemoveObjectOptions{}); err != nil {
+		_ = storageops.MarkFailedOwned(s.db, operation.ID, leaseToken, err, time.Second)
 		return err
 	}
 	now := time.Now().UTC()
@@ -84,18 +106,136 @@ func (s *Service) GarbageCollect(ctx context.Context, storage GCStorage, objectI
 		}
 		result := tx.Model(&Object{}).
 			Where("id = ? AND reference_count = 0 AND status = 'deleting'", objectID).
-			Updates(map[string]any{"status": "deleted", "deleted_at": now, "updated_at": now})
+			Updates(map[string]any{"status": "deleted", "deleted_at": now, "version": gorm.Expr("version + 1"), "updated_at": now})
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
 			return errors.New("object reference changed during garbage collection")
 		}
-		return nil
+		return storageops.MarkSucceededOwned(tx, operation.ID, leaseToken)
 	})
 }
 
+// ReconcileObjectDeletes completes object.delete operations claimed after a
+// worker crash. It rechecks references immediately before the final database
+// transition, so a stale operation cannot delete a newly referenced object.
+func (s *Service) ReconcileObjectDeletes(ctx context.Context, storage GCStorage, limit int) (int, error) {
+	operations, err := storageops.ClaimTypes(ctx, s.db, limit, 5*time.Minute, storageops.ObjectDelete)
+	if err != nil {
+		return 0, err
+	}
+	completed := 0
+	for _, operation := range operations {
+		if err := s.reconcileObjectDelete(ctx, storage, operation); err != nil {
+			if operation.LeaseToken != nil {
+				_ = storageops.MarkFailedOwned(s.db, operation.ID, *operation.LeaseToken, err, time.Second)
+			}
+			return completed, err
+		}
+		completed++
+	}
+	return completed, nil
+}
+
+// ReconcileObjectDeleteOperation is the single-operation form used by the
+// broker-loss recovery event. Claiming is lease-fenced and therefore safe to
+// invoke repeatedly from multiple maintenance workers.
+func (s *Service) ReconcileObjectDeleteOperation(ctx context.Context, storage GCStorage, operationID uuid.UUID) error {
+	operation, err := storageops.Get(s.db, operationID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if operation.State == storageops.StateSucceeded {
+		return nil
+	}
+	claimed, token, err := storageops.TryStartWithToken(s.db, operation.ID, 5*time.Minute)
+	if err != nil || !claimed {
+		return err
+	}
+	operation.LeaseToken = &token
+	if err := s.reconcileObjectDelete(ctx, storage, operation); err != nil {
+		_ = storageops.MarkFailedOwned(s.db, operation.ID, token, err, time.Second)
+		return err
+	}
+	return nil
+}
+
+func (s *Service) reconcileObjectDelete(ctx context.Context, storage GCStorage, operation storageops.Operation) error {
+	if operation.ObjectID == nil {
+		return errors.New("object delete operation has no object")
+	}
+	var object Object
+	if err := s.db.First(&object, "id = ?", *operation.ObjectID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return storageops.MarkSucceededOwned(s.db, operation.ID, operationLeaseToken(operation))
+		}
+		return err
+	}
+	var references int64
+	if err := s.db.Table("file_entries").Where("object_id = ? AND deleted_at IS NULL", object.ID).Count(&references).Error; err != nil {
+		return err
+	}
+	if references > 0 || object.ReferenceCount > 0 || object.Status == "deleted" {
+		return storageops.MarkSucceededOwned(s.db, operation.ID, operationLeaseToken(operation))
+	}
+	var variants []objectVariant
+	if err := s.db.Where("object_id = ?", object.ID).Find(&variants).Error; err != nil {
+		return err
+	}
+	for _, variant := range variants {
+		if err := storage.RemoveObject(ctx, object.Bucket, variant.ObjectKey, minio.RemoveObjectOptions{}); err != nil {
+			return err
+		}
+	}
+	if err := storage.RemoveObject(ctx, object.Bucket, object.ObjectKey, minio.RemoveObjectOptions{}); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var latest Object
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&latest, "id = ?", object.ID).Error; err != nil {
+			return err
+		}
+		var remaining int64
+		if err := tx.Table("file_entries").Where("object_id = ? AND deleted_at IS NULL", object.ID).Count(&remaining).Error; err != nil {
+			return err
+		}
+		if remaining > 0 || latest.ReferenceCount > 0 {
+			return errors.New("object reference changed during delete reconciliation")
+		}
+		if err := tx.Where("object_id = ?", object.ID).Delete(&objectVariant{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec("DELETE FROM ai_documents WHERE object_id = ?", object.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&Object{}).Where("id = ? AND status = 'deleting' AND reference_count = 0", object.ID).
+			Updates(map[string]any{"status": "deleted", "deleted_at": now, "version": gorm.Expr("version + 1"), "updated_at": now}).Error; err != nil {
+			return err
+		}
+		return storageops.MarkSucceededOwned(tx, operation.ID, operationLeaseToken(operation))
+	})
+}
+
+func operationLeaseToken(operation storageops.Operation) uuid.UUID {
+	if operation.LeaseToken == nil {
+		return uuid.Nil
+	}
+	return *operation.LeaseToken
+}
+
 func (Object) TableName() string { return "file_objects" }
+
+func (o *Object) BeforeCreate(_ *gorm.DB) error {
+	if o.Version == 0 {
+		o.Version = 1
+	}
+	return nil
+}
 
 type Service struct {
 	db *gorm.DB
@@ -143,6 +283,9 @@ func (s *Service) FindByHashWith(db *gorm.DB, sha256 string, size int64) (Object
 }
 
 func (s *Service) CreateOrGet(tx *gorm.DB, object Object) (Object, error) {
+	if object.Version == 0 {
+		object.Version = 1
+	}
 	result := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "sha256"}, {Name: "size_bytes"}}, DoNothing: true}).Create(&object)
 	if result.Error != nil {
 		return Object{}, result.Error
@@ -159,7 +302,7 @@ func (s *Service) CreateOrGet(tx *gorm.DB, object Object) (Object, error) {
 
 func (s *Service) AddReference(tx *gorm.DB, objectID uuid.UUID) error {
 	result := tx.Model(&Object{}).Where("id = ? AND status = 'ready'", objectID).
-		Update("reference_count", gorm.Expr("reference_count + 1"))
+		Updates(map[string]any{"reference_count": gorm.Expr("reference_count + 1"), "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -171,7 +314,7 @@ func (s *Service) AddReference(tx *gorm.DB, objectID uuid.UUID) error {
 
 func (s *Service) ReleaseReference(tx *gorm.DB, objectID uuid.UUID) (int64, error) {
 	if err := tx.Model(&Object{}).Where("id = ? AND reference_count > 0", objectID).
-		Update("reference_count", gorm.Expr("reference_count - 1")).Error; err != nil {
+		Updates(map[string]any{"reference_count": gorm.Expr("reference_count - 1"), "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()}).Error; err != nil {
 		return 0, err
 	}
 	var object Object

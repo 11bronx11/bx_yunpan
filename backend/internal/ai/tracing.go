@@ -2,7 +2,10 @@ package ai
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"strconv"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
@@ -54,7 +57,7 @@ func (s *Service) makeChunksTraced(ctx context.Context, sections []extractedSect
 
 // embedTexts 分批向量化。父 span 记总量，每批一个子 span 记批大小与 token 数，
 // 这样既能看整体耗时，也能定位是哪一批卡住。
-func (s *Service) embedTexts(ctx context.Context, documentID uuid.UUID, texts []string) ([][]float32, error) {
+func (s *Service) embedTexts(ctx context.Context, versionID uuid.UUID, leaseToken *uuid.UUID, texts []string) ([][]float32, error) {
 	ctx, span := startSpan(ctx, "ai.embed",
 		attribute.Int("ai.chunk_count", len(texts)),
 		attribute.Int("ai.batch_size", embeddingBatchSize),
@@ -72,7 +75,7 @@ func (s *Service) embedTexts(ctx context.Context, documentID uuid.UUID, texts []
 		}
 		embeddings = append(embeddings, batch...)
 		// 每批结束续租，避免长文档被租约超时判定为僵死任务。
-		if err := s.touchDocument(ctx, documentID); err != nil {
+		if err := s.touchDocumentVersion(ctx, versionID, leaseToken); err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
 			return nil, err
@@ -162,7 +165,21 @@ func (s *Service) embedQuery(ctx context.Context, query string) ([][]float32, er
 	ctx, span := startSpan(ctx, "ai.embed.query",
 		attribute.Int("ai.estimated_tokens", len([]rune(query))/2),
 	)
+	cacheKey := ""
+	if s.embeddingCache != nil {
+		digest := sha256.Sum256([]byte(query))
+		cacheKey = "embed:" + s.config.EmbeddingModel + ":" + strconv.Itoa(s.config.Dimension) + ":" + hex.EncodeToString(digest[:])
+		if value, ok, cacheErr := s.embeddingCache.Get(ctx, cacheKey); cacheErr == nil && ok {
+			endSpan(span, nil)
+			return [][]float32{value}, nil
+		}
+	}
 	embeddings, err := s.provider.Embeddings(ctx, []string{query})
+	if err == nil && len(embeddings) == 1 && cacheKey != "" {
+		// A cache write failure must not turn a successful provider response into
+		// a failed search; the vector is derived data and can be recomputed.
+		_ = s.embeddingCache.Set(ctx, cacheKey, embeddings[0])
+	}
 	endSpan(span, err)
 	return embeddings, err
 }

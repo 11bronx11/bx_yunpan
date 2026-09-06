@@ -1,0 +1,11 @@
+gofmt=0
+go_test=0
+go_vet=0
+web_test=0
+shell_syntax=0
+diff_check=0
+status=1
+build_outbox_relay=1
+postgres_facts=0
+focused_postgres=0
+focused_postgres_full=0

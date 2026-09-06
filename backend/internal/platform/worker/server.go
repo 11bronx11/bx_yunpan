@@ -23,31 +23,49 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, handlers m
 		}
 		queues[name] = weight
 	}
-	return run(ctx, cfg, queues, logger, handlers)
+	return run(ctx, cfg, queues, logger, handlers, nil)
+}
+
+// RunWithMetrics is the combined worker entry point with role metrics.
+func RunWithMetrics(ctx context.Context, cfg config.Config, logger *slog.Logger, handlers map[string]asynq.HandlerFunc, metrics *Metrics) error {
+	queues := QueuesForRole(RoleCombined, cfg.Worker.Queues)
+	return run(ctx, cfg, queues, logger, handlers, metrics)
 }
 
 // RunQueues 只消费指定队列，供 aisvc 独占 ai 队列使用。
 // 进程只能消费自己注册了 handler 的队列，否则 Asynq 取到任务却找不到
 // handler，任务会一路重试到进死信队列。
 func RunQueues(ctx context.Context, cfg config.Config, queues map[string]int, logger *slog.Logger, handlers map[string]asynq.HandlerFunc) error {
-	return run(ctx, cfg, queues, logger, handlers)
+	return run(ctx, cfg, queues, logger, handlers, nil)
 }
 
-func run(ctx context.Context, cfg config.Config, queues map[string]int, logger *slog.Logger, handlers map[string]asynq.HandlerFunc) error {
+// RunQueuesWithMetrics is used by independently deployable queue roles.
+func RunQueuesWithMetrics(ctx context.Context, cfg config.Config, queues map[string]int, logger *slog.Logger, handlers map[string]asynq.HandlerFunc, metrics *Metrics) error {
+	return run(ctx, cfg, queues, logger, handlers, metrics)
+}
+
+func run(ctx context.Context, cfg config.Config, queues map[string]int, logger *slog.Logger, handlers map[string]asynq.HandlerFunc, metrics *Metrics) error {
 	server := asynq.NewServer(
 		asynq.RedisClientOpt{
-			Addr:     cfg.Redis.Addr,
-			Password: cfg.Redis.Password,
-			DB:       cfg.Redis.DB,
+			Addr:     cfg.Redis.BrokerAddr,
+			Password: cfg.Redis.BrokerPassword,
+			DB:       cfg.Redis.BrokerDB,
 		},
 		asynq.Config{
 			Concurrency: cfg.Worker.Concurrency,
 			Queues:      queues,
 			Logger:      asynqLogger{logger: logger},
+			ErrorHandler: asynq.ErrorHandlerFunc(func(ctx context.Context, task *asynq.Task, err error) {
+				logger.ErrorContext(ctx, "asynq task failed", "task_type", task.Type(), "error", err)
+			}),
 		},
 	)
 	mux := asynq.NewServeMux()
 	mux.Use(TracingMiddleware())
+	if metrics != nil {
+		metrics.StartQueueObserver(ctx)
+		mux.Use(metrics.Middleware())
+	}
 	mux.HandleFunc(TaskSystemPing, func(ctx context.Context, _ *asynq.Task) error {
 		logger.DebugContext(ctx, "worker ping handled")
 		return nil

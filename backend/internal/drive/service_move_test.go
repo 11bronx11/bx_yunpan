@@ -1,6 +1,7 @@
 package drive
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -10,7 +11,14 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
+	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 )
+
+type noOpLogicalUsage struct{}
+
+func (noOpLogicalUsage) RemoveLogicalUsage(*gorm.DB, uuid.UUID, int64) error { return nil }
 
 type moveFixture struct {
 	service *Service
@@ -160,5 +168,21 @@ func TestMoveFileRejectsStaleVersionAndUnknownTarget(t *testing.T) {
 	}
 	if _, err := fixture.service.MoveFile(fixture.ownerID, fixture.file.ID, uuid.New(), fixture.file.Version); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown target error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestDeleteFileGCEventUsesCommittedObjectVersion(t *testing.T) {
+	fixture := newMoveFixture(t)
+	manager := NewFileManager(fixture.service, objectstore.NewService(fixture.db), noOpLogicalUsage{}, nil, nil, 0)
+	if err := manager.Delete(context.Background(), fixture.ownerID, fixture.file.ID, fixture.file.Version); err != nil {
+		t.Fatalf("delete file: %v", err)
+	}
+	var event outbox.Event
+	if err := fixture.db.Where("event_type = ? AND aggregate_id = ?", outbox.EventObjectGCRequested, fixture.object).
+		Order("created_at DESC").First(&event).Error; err != nil {
+		t.Fatalf("load GC event: %v", err)
+	}
+	if event.AggregateVersion == nil || *event.AggregateVersion != 2 {
+		t.Fatalf("GC aggregate version = %v, want 2", event.AggregateVersion)
 	}
 }

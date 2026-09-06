@@ -1,0 +1,1819 @@
+name: bx-yunpan
+services:
+  ai-indexer:
+    profiles:
+      - ai-split
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+        required: true
+      minio-init:
+        condition: service_completed_successfully
+        required: true
+      redis:
+        condition: service_healthy
+        required: true
+    environment:
+      AI_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+      AI_CHAT_MODEL: qwen-plus
+      AI_EMBEDDING_DIMENSION: "1024"
+      AI_EMBEDDING_MODEL: qwen3.7-text-embedding
+      AI_ENABLED: "true"
+      AI_MAX_OBJECT_MIB: "32"
+      AI_PROVIDER: dashscope
+      AI_RATE_LIMIT_ASK_PER_MINUTE: "10"
+      AI_RATE_LIMIT_ENABLED: "true"
+      AI_RATE_LIMIT_REPROCESS_PER_MINUTE: "3"
+      AI_RATE_LIMIT_SEARCH_PER_MINUTE: "30"
+      AI_REQUEST_TIMEOUT: 90s
+      AI_RERANK_BASE_URL: https://ws-oc7xvkddl5eapgbk.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+      AI_RERANK_CANDIDATES: "30"
+      AI_RERANK_ENABLED: "false"
+      AI_RERANK_MODEL: qwen3-rerank
+      AI_RERANK_TIMEOUT: 30s
+      AI_RERANK_TOP_K: "8"
+      AI_SERVICE_ROLE: indexer
+      AI_VISION_MODEL: qwen-vl-plus
+      AISVC_ADVERTISE_ADDR: ""
+      AISVC_BREAKER_FAILURE_RATE: "0.5"
+      AISVC_BREAKER_HALF_OPEN_PROBES: "3"
+      AISVC_BREAKER_MIN_REQUESTS: "20"
+      AISVC_BREAKER_OPEN_TIMEOUT: 5s
+      AISVC_BREAKER_WINDOW: 10s
+      AISVC_CALL_TIMEOUT: 120s
+      AISVC_GRPC_ADDR: :8082
+      AISVC_GRPC_TARGET: aisvc:8082
+      AISVC_REPROCESS_MAX_ATTEMPTS: "3"
+      AISVC_RETRY_BASE_BACKOFF: 20ms
+      AISVC_RETRY_MAX_BACKOFF: 1s
+      AISVC_SEARCH_MAX_ATTEMPTS: "3"
+      APP_ENV: development
+      AUTH_ACCESS_TTL: 15m
+      AUTH_COOKIE_DOMAIN: ""
+      AUTH_COOKIE_SECURE: "false"
+      AUTH_ISSUER: bx-yunpan
+      AUTH_REFRESH_TTL: 720h
+      AUTH_SIGNING_SEED: b8707b23d58e5912192fcdf2127f90da9082980287b18361dcd240647c173718
+      CACHE_ENABLED: "true"
+      CACHE_L1_MAX_ITEMS: "512"
+      CACHE_TTL: 5m
+      DASHSCOPE_API_KEY: sk-ws-H.EYLLDXY.Gw7u.MEUCIQDR-7OB2syAE87UOvorppJWT_bRam85Y2v-s2CY52BydQIgGJEp7uWYgdOwU0oaMgeq4ExzDGhkVQD0eyNrmUIADoM
+      ETCD_DIAL_TIMEOUT: 5s
+      ETCD_ENABLED: "true"
+      ETCD_ENDPOINTS: etcd:2379
+      ETCD_LEASE_TTL: 10s
+      ETCD_PASSWORD: ""
+      ETCD_SERVICE_PREFIX: /services/aisvc
+      ETCD_USERNAME: ""
+      HTTP_IDLE_TIMEOUT: 60s
+      HTTP_MAX_BODY_BYTES: "1048576"
+      HTTP_MAX_HEADER_BYTES: "65536"
+      HTTP_PROBE_TIMEOUT: 2s
+      HTTP_READ_HEADER_TIMEOUT: 5s
+      HTTP_SHUTDOWN_TIMEOUT: 10s
+      LOG_LEVEL: info
+      OBJECT_GC_DELAY: 24h
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_TRACES_ENABLED: "false"
+      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      OUTBOX_BATCH_SIZE: "20"
+      OUTBOX_LEADER_LOCK_ENABLED: "true"
+      OUTBOX_LEADER_LOCK_KEY: yunpan:outbox:dispatcher:leader
+      OUTBOX_LEADER_LOCK_TTL: 15s
+      OUTBOX_POLL_INTERVAL: 1s
+      OUTBOX_TASK_MAX_RETRY: "8"
+      OUTBOX_TASK_TIMEOUT: 30m
+      OUTBOX_V2_EVENTS_ENABLED: "false"
+      POSTGRES_CONN_MAX_IDLE_TIME: 5m
+      POSTGRES_CONN_MAX_LIFETIME: 30m
+      POSTGRES_DSN: postgres://yunpan:fce82291dc16193eeb4960c9b97e53497c918bec69a7e53bfb9af55f0759e2b4@postgres:5432/yunpan?sslmode=disable
+      POSTGRES_MAX_IDLE_CONNS: "8"
+      POSTGRES_MAX_OPEN_CONNS: "32"
+      REDIS_ADDR: redis:6379
+      REDIS_BROKER_ADDR: redis:6379
+      REDIS_BROKER_DB: "0"
+      REDIS_BROKER_PASSWORD: ""
+      REDIS_CACHE_ADDR: redis:6379
+      REDIS_CACHE_DB: "0"
+      REDIS_CACHE_PASSWORD: ""
+      REDIS_COORDINATION_ADDR: redis:6379
+      REDIS_COORDINATION_DB: "0"
+      REDIS_COORDINATION_PASSWORD: ""
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ""
+      S3_ACCESS_KEY: yunpan
+      S3_BUCKET: yunpan
+      S3_ENDPOINT: minio:9000
+      S3_PUBLIC_ENDPOINT: 127.0.0.1:3000
+      S3_PUBLIC_PATH_PREFIX: /storage
+      S3_PUBLIC_SECURE: "false"
+      S3_READ_URL_TTL: 10m
+      S3_REGION: us-east-1
+      S3_SECRET_KEY: d49c454fba1e94bf638e7de98d4d3505b8136e64d1b205f0640a516f5822ae81
+      S3_SECURE: "false"
+      SHARE_ACCESS_TTL: 15m
+      SHARE_SECRET: c9b378f0127cce8053852fb677f6b2ddab8b8927147bdbb23ffc7d2b0e124456
+      UPLOAD_CLEANUP_BATCH: "100"
+      UPLOAD_CLEANUP_INTERVAL: 5m
+      UPLOAD_PART_URL_TTL: 15m
+      UPLOAD_SESSION_TTL: 24h
+      USER_DEFAULT_QUOTA_BYTES: "10737418240"
+      WORKER_CONCURRENCY: "8"
+      WORKER_METRICS_ADDR: :8083
+      WORKER_QUEUE_AI: "4"
+      WORKER_QUEUE_MAINTENANCE: "1"
+      WORKER_QUEUE_MEDIA: "4"
+      WORKER_QUEUE_OBJECT: "2"
+    expose:
+      - "8083"
+    image: bx-yunpan-aisvc:local
+    init: true
+    networks:
+      default: null
+    restart: unless-stopped
+    stop_grace_period: 30s
+  ai-query:
+    profiles:
+      - ai-split
+    depends_on:
+      etcd:
+        condition: service_healthy
+        required: true
+      migrate:
+        condition: service_completed_successfully
+        required: true
+      minio-init:
+        condition: service_completed_successfully
+        required: true
+      redis:
+        condition: service_healthy
+        required: true
+    environment:
+      AI_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+      AI_CHAT_MODEL: qwen-plus
+      AI_EMBEDDING_DIMENSION: "1024"
+      AI_EMBEDDING_MODEL: qwen3.7-text-embedding
+      AI_ENABLED: "true"
+      AI_MAX_OBJECT_MIB: "32"
+      AI_PROVIDER: dashscope
+      AI_RATE_LIMIT_ASK_PER_MINUTE: "10"
+      AI_RATE_LIMIT_ENABLED: "true"
+      AI_RATE_LIMIT_REPROCESS_PER_MINUTE: "3"
+      AI_RATE_LIMIT_SEARCH_PER_MINUTE: "30"
+      AI_REQUEST_TIMEOUT: 90s
+      AI_RERANK_BASE_URL: https://ws-oc7xvkddl5eapgbk.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+      AI_RERANK_CANDIDATES: "30"
+      AI_RERANK_ENABLED: "false"
+      AI_RERANK_MODEL: qwen3-rerank
+      AI_RERANK_TIMEOUT: 30s
+      AI_RERANK_TOP_K: "8"
+      AI_SERVICE_ROLE: query
+      AI_VISION_MODEL: qwen-vl-plus
+      AISVC_ADVERTISE_ADDR: ""
+      AISVC_BREAKER_FAILURE_RATE: "0.5"
+      AISVC_BREAKER_HALF_OPEN_PROBES: "3"
+      AISVC_BREAKER_MIN_REQUESTS: "20"
+      AISVC_BREAKER_OPEN_TIMEOUT: 5s
+      AISVC_BREAKER_WINDOW: 10s
+      AISVC_CALL_TIMEOUT: 120s
+      AISVC_GRPC_ADDR: :8082
+      AISVC_GRPC_TARGET: aisvc:8082
+      AISVC_REPROCESS_MAX_ATTEMPTS: "3"
+      AISVC_RETRY_BASE_BACKOFF: 20ms
+      AISVC_RETRY_MAX_BACKOFF: 1s
+      AISVC_SEARCH_MAX_ATTEMPTS: "3"
+      APP_ENV: development
+      AUTH_ACCESS_TTL: 15m
+      AUTH_COOKIE_DOMAIN: ""
+      AUTH_COOKIE_SECURE: "false"
+      AUTH_ISSUER: bx-yunpan
+      AUTH_REFRESH_TTL: 720h
+      AUTH_SIGNING_SEED: b8707b23d58e5912192fcdf2127f90da9082980287b18361dcd240647c173718
+      CACHE_ENABLED: "true"
+      CACHE_L1_MAX_ITEMS: "512"
+      CACHE_TTL: 5m
+      DASHSCOPE_API_KEY: sk-ws-H.EYLLDXY.Gw7u.MEUCIQDR-7OB2syAE87UOvorppJWT_bRam85Y2v-s2CY52BydQIgGJEp7uWYgdOwU0oaMgeq4ExzDGhkVQD0eyNrmUIADoM
+      ETCD_DIAL_TIMEOUT: 5s
+      ETCD_ENABLED: "true"
+      ETCD_ENDPOINTS: etcd:2379
+      ETCD_LEASE_TTL: 10s
+      ETCD_PASSWORD: ""
+      ETCD_SERVICE_PREFIX: /services/aisvc
+      ETCD_USERNAME: ""
+      HTTP_IDLE_TIMEOUT: 60s
+      HTTP_MAX_BODY_BYTES: "1048576"
+      HTTP_MAX_HEADER_BYTES: "65536"
+      HTTP_PROBE_TIMEOUT: 2s
+      HTTP_READ_HEADER_TIMEOUT: 5s
+      HTTP_SHUTDOWN_TIMEOUT: 10s
+      LOG_LEVEL: info
+      OBJECT_GC_DELAY: 24h
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_TRACES_ENABLED: "false"
+      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      OUTBOX_BATCH_SIZE: "20"
+      OUTBOX_LEADER_LOCK_ENABLED: "true"
+      OUTBOX_LEADER_LOCK_KEY: yunpan:outbox:dispatcher:leader
+      OUTBOX_LEADER_LOCK_TTL: 15s
+      OUTBOX_POLL_INTERVAL: 1s
+      OUTBOX_TASK_MAX_RETRY: "8"
+      OUTBOX_TASK_TIMEOUT: 30m
+      OUTBOX_V2_EVENTS_ENABLED: "false"
+      POSTGRES_CONN_MAX_IDLE_TIME: 5m
+      POSTGRES_CONN_MAX_LIFETIME: 30m
+      POSTGRES_DSN: postgres://yunpan:fce82291dc16193eeb4960c9b97e53497c918bec69a7e53bfb9af55f0759e2b4@postgres:5432/yunpan?sslmode=disable
+      POSTGRES_MAX_IDLE_CONNS: "8"
+      POSTGRES_MAX_OPEN_CONNS: "32"
+      REDIS_ADDR: redis:6379
+      REDIS_BROKER_ADDR: redis:6379
+      REDIS_BROKER_DB: "0"
+      REDIS_BROKER_PASSWORD: ""
+      REDIS_CACHE_ADDR: redis:6379
+      REDIS_CACHE_DB: "0"
+      REDIS_CACHE_PASSWORD: ""
+      REDIS_COORDINATION_ADDR: redis:6379
+      REDIS_COORDINATION_DB: "0"
+      REDIS_COORDINATION_PASSWORD: ""
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ""
+      S3_ACCESS_KEY: yunpan
+      S3_BUCKET: yunpan
+      S3_ENDPOINT: minio:9000
+      S3_PUBLIC_ENDPOINT: 127.0.0.1:3000
+      S3_PUBLIC_PATH_PREFIX: /storage
+      S3_PUBLIC_SECURE: "false"
+      S3_READ_URL_TTL: 10m
+      S3_REGION: us-east-1
+      S3_SECRET_KEY: d49c454fba1e94bf638e7de98d4d3505b8136e64d1b205f0640a516f5822ae81
+      S3_SECURE: "false"
+      SHARE_ACCESS_TTL: 15m
+      SHARE_SECRET: c9b378f0127cce8053852fb677f6b2ddab8b8927147bdbb23ffc7d2b0e124456
+      UPLOAD_CLEANUP_BATCH: "100"
+      UPLOAD_CLEANUP_INTERVAL: 5m
+      UPLOAD_PART_URL_TTL: 15m
+      UPLOAD_SESSION_TTL: 24h
+      USER_DEFAULT_QUOTA_BYTES: "10737418240"
+      WORKER_CONCURRENCY: "8"
+      WORKER_METRICS_ADDR: :8083
+      WORKER_QUEUE_AI: "4"
+      WORKER_QUEUE_MAINTENANCE: "1"
+      WORKER_QUEUE_MEDIA: "4"
+      WORKER_QUEUE_OBJECT: "2"
+    expose:
+      - "8083"
+      - "8082"
+    healthcheck:
+      test:
+        - CMD
+        - /app/service
+        - healthcheck
+      timeout: 3s
+      interval: 5s
+      retries: 20
+      start_period: 10s
+    image: bx-yunpan-aisvc:local
+    init: true
+    networks:
+      default: null
+    restart: unless-stopped
+    stop_grace_period: 30s
+  aisvc:
+    profiles:
+      - ai
+    build:
+      context: /home/bronx/remote/bx_yunpan/backend
+      dockerfile: Dockerfile
+      args:
+        DOCKER_REGISTRY: docker.io
+        GO_BUILD_MAX_PROCS: "2"
+        GO_BUILD_PARALLELISM: "1"
+        GO_PROXY: https://proxy.golang.org,direct
+        GO_VERSION: 1.25.13
+        TARGET: aisvc
+    depends_on:
+      etcd:
+        condition: service_healthy
+        required: true
+      migrate:
+        condition: service_completed_successfully
+        required: true
+      minio-init:
+        condition: service_completed_successfully
+        required: true
+      redis:
+        condition: service_healthy
+        required: true
+    environment:
+      AI_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+      AI_CHAT_MODEL: qwen-plus
+      AI_EMBEDDING_DIMENSION: "1024"
+      AI_EMBEDDING_MODEL: qwen3.7-text-embedding
+      AI_ENABLED: "true"
+      AI_MAX_OBJECT_MIB: "32"
+      AI_PROVIDER: dashscope
+      AI_RATE_LIMIT_ASK_PER_MINUTE: "10"
+      AI_RATE_LIMIT_ENABLED: "true"
+      AI_RATE_LIMIT_REPROCESS_PER_MINUTE: "3"
+      AI_RATE_LIMIT_SEARCH_PER_MINUTE: "30"
+      AI_REQUEST_TIMEOUT: 90s
+      AI_RERANK_BASE_URL: https://ws-oc7xvkddl5eapgbk.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+      AI_RERANK_CANDIDATES: "30"
+      AI_RERANK_ENABLED: "false"
+      AI_RERANK_MODEL: qwen3-rerank
+      AI_RERANK_TIMEOUT: 30s
+      AI_RERANK_TOP_K: "8"
+      AI_SERVICE_ROLE: combined
+      AI_VISION_MODEL: qwen-vl-plus
+      AISVC_ADVERTISE_ADDR: ""
+      AISVC_BREAKER_FAILURE_RATE: "0.5"
+      AISVC_BREAKER_HALF_OPEN_PROBES: "3"
+      AISVC_BREAKER_MIN_REQUESTS: "20"
+      AISVC_BREAKER_OPEN_TIMEOUT: 5s
+      AISVC_BREAKER_WINDOW: 10s
+      AISVC_CALL_TIMEOUT: 120s
+      AISVC_GRPC_ADDR: :8082
+      AISVC_GRPC_TARGET: aisvc:8082
+      AISVC_REPROCESS_MAX_ATTEMPTS: "3"
+      AISVC_RETRY_BASE_BACKOFF: 20ms
+      AISVC_RETRY_MAX_BACKOFF: 1s
+      AISVC_SEARCH_MAX_ATTEMPTS: "3"
+      APP_ENV: development
+      AUTH_ACCESS_TTL: 15m
+      AUTH_COOKIE_DOMAIN: ""
+      AUTH_COOKIE_SECURE: "false"
+      AUTH_ISSUER: bx-yunpan
+      AUTH_REFRESH_TTL: 720h
+      AUTH_SIGNING_SEED: b8707b23d58e5912192fcdf2127f90da9082980287b18361dcd240647c173718
+      CACHE_ENABLED: "true"
+      CACHE_L1_MAX_ITEMS: "512"
+      CACHE_TTL: 5m
+      DASHSCOPE_API_KEY: sk-ws-H.EYLLDXY.Gw7u.MEUCIQDR-7OB2syAE87UOvorppJWT_bRam85Y2v-s2CY52BydQIgGJEp7uWYgdOwU0oaMgeq4ExzDGhkVQD0eyNrmUIADoM
+      ETCD_DIAL_TIMEOUT: 5s
+      ETCD_ENABLED: "true"
+      ETCD_ENDPOINTS: etcd:2379
+      ETCD_LEASE_TTL: 10s
+      ETCD_PASSWORD: ""
+      ETCD_SERVICE_PREFIX: /services/aisvc
+      ETCD_USERNAME: ""
+      HTTP_IDLE_TIMEOUT: 60s
+      HTTP_MAX_BODY_BYTES: "1048576"
+      HTTP_MAX_HEADER_BYTES: "65536"
+      HTTP_PROBE_TIMEOUT: 2s
+      HTTP_READ_HEADER_TIMEOUT: 5s
+      HTTP_SHUTDOWN_TIMEOUT: 10s
+      LOG_LEVEL: info
+      OBJECT_GC_DELAY: 24h
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_TRACES_ENABLED: "false"
+      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      OUTBOX_BATCH_SIZE: "20"
+      OUTBOX_LEADER_LOCK_ENABLED: "true"
+      OUTBOX_LEADER_LOCK_KEY: yunpan:outbox:dispatcher:leader
+      OUTBOX_LEADER_LOCK_TTL: 15s
+      OUTBOX_POLL_INTERVAL: 1s
+      OUTBOX_TASK_MAX_RETRY: "8"
+      OUTBOX_TASK_TIMEOUT: 30m
+      OUTBOX_V2_EVENTS_ENABLED: "false"
+      POSTGRES_CONN_MAX_IDLE_TIME: 5m
+      POSTGRES_CONN_MAX_LIFETIME: 30m
+      POSTGRES_DSN: postgres://yunpan:fce82291dc16193eeb4960c9b97e53497c918bec69a7e53bfb9af55f0759e2b4@postgres:5432/yunpan?sslmode=disable
+      POSTGRES_MAX_IDLE_CONNS: "8"
+      POSTGRES_MAX_OPEN_CONNS: "32"
+      REDIS_ADDR: redis:6379
+      REDIS_BROKER_ADDR: redis:6379
+      REDIS_BROKER_DB: "0"
+      REDIS_BROKER_PASSWORD: ""
+      REDIS_CACHE_ADDR: redis:6379
+      REDIS_CACHE_DB: "0"
+      REDIS_CACHE_PASSWORD: ""
+      REDIS_COORDINATION_ADDR: redis:6379
+      REDIS_COORDINATION_DB: "0"
+      REDIS_COORDINATION_PASSWORD: ""
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ""
+      S3_ACCESS_KEY: yunpan
+      S3_BUCKET: yunpan
+      S3_ENDPOINT: minio:9000
+      S3_PUBLIC_ENDPOINT: 127.0.0.1:3000
+      S3_PUBLIC_PATH_PREFIX: /storage
+      S3_PUBLIC_SECURE: "false"
+      S3_READ_URL_TTL: 10m
+      S3_REGION: us-east-1
+      S3_SECRET_KEY: d49c454fba1e94bf638e7de98d4d3505b8136e64d1b205f0640a516f5822ae81
+      S3_SECURE: "false"
+      SHARE_ACCESS_TTL: 15m
+      SHARE_SECRET: c9b378f0127cce8053852fb677f6b2ddab8b8927147bdbb23ffc7d2b0e124456
+      UPLOAD_CLEANUP_BATCH: "100"
+      UPLOAD_CLEANUP_INTERVAL: 5m
+      UPLOAD_PART_URL_TTL: 15m
+      UPLOAD_SESSION_TTL: 24h
+      USER_DEFAULT_QUOTA_BYTES: "10737418240"
+      WORKER_CONCURRENCY: "8"
+      WORKER_METRICS_ADDR: :8083
+      WORKER_QUEUE_AI: "4"
+      WORKER_QUEUE_MAINTENANCE: "1"
+      WORKER_QUEUE_MEDIA: "4"
+      WORKER_QUEUE_OBJECT: "2"
+    healthcheck:
+      test:
+        - CMD
+        - /app/service
+        - healthcheck
+      timeout: 3s
+      interval: 5s
+      retries: 20
+      start_period: 10s
+    image: bx-yunpan-aisvc:local
+    init: true
+    networks:
+      default: null
+    restart: unless-stopped
+    stop_grace_period: 30s
+  api:
+    profiles:
+      - app
+    build:
+      context: /home/bronx/remote/bx_yunpan/backend
+      dockerfile: Dockerfile
+      args:
+        DOCKER_REGISTRY: docker.io
+        GO_BUILD_MAX_PROCS: "2"
+        GO_BUILD_PARALLELISM: "1"
+        GO_PROXY: https://proxy.golang.org,direct
+        GO_VERSION: 1.25.13
+        TARGET: api
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+        required: true
+      minio-init:
+        condition: service_completed_successfully
+        required: true
+      redis:
+        condition: service_healthy
+        required: true
+    environment:
+      AI_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+      AI_CHAT_MODEL: qwen-plus
+      AI_EMBEDDING_DIMENSION: "1024"
+      AI_EMBEDDING_MODEL: qwen3.7-text-embedding
+      AI_ENABLED: "true"
+      AI_MAX_OBJECT_MIB: "32"
+      AI_PROVIDER: dashscope
+      AI_RATE_LIMIT_ASK_PER_MINUTE: "10"
+      AI_RATE_LIMIT_ENABLED: "true"
+      AI_RATE_LIMIT_REPROCESS_PER_MINUTE: "3"
+      AI_RATE_LIMIT_SEARCH_PER_MINUTE: "30"
+      AI_REQUEST_TIMEOUT: 90s
+      AI_RERANK_BASE_URL: https://ws-oc7xvkddl5eapgbk.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+      AI_RERANK_CANDIDATES: "30"
+      AI_RERANK_ENABLED: "false"
+      AI_RERANK_MODEL: qwen3-rerank
+      AI_RERANK_TIMEOUT: 30s
+      AI_RERANK_TOP_K: "8"
+      AI_SERVICE_ROLE: combined
+      AI_VISION_MODEL: qwen-vl-plus
+      AISVC_ADVERTISE_ADDR: ""
+      AISVC_BREAKER_FAILURE_RATE: "0.5"
+      AISVC_BREAKER_HALF_OPEN_PROBES: "3"
+      AISVC_BREAKER_MIN_REQUESTS: "20"
+      AISVC_BREAKER_OPEN_TIMEOUT: 5s
+      AISVC_BREAKER_WINDOW: 10s
+      AISVC_CALL_TIMEOUT: 120s
+      AISVC_GRPC_ADDR: :8082
+      AISVC_GRPC_TARGET: aisvc:8082
+      AISVC_REPROCESS_MAX_ATTEMPTS: "3"
+      AISVC_RETRY_BASE_BACKOFF: 20ms
+      AISVC_RETRY_MAX_BACKOFF: 1s
+      AISVC_SEARCH_MAX_ATTEMPTS: "3"
+      APP_ENV: development
+      AUTH_ACCESS_TTL: 15m
+      AUTH_COOKIE_DOMAIN: ""
+      AUTH_COOKIE_SECURE: "false"
+      AUTH_ISSUER: bx-yunpan
+      AUTH_REFRESH_TTL: 720h
+      AUTH_SIGNING_SEED: b8707b23d58e5912192fcdf2127f90da9082980287b18361dcd240647c173718
+      CACHE_ENABLED: "true"
+      CACHE_L1_MAX_ITEMS: "512"
+      CACHE_TTL: 5m
+      DASHSCOPE_API_KEY: sk-ws-H.EYLLDXY.Gw7u.MEUCIQDR-7OB2syAE87UOvorppJWT_bRam85Y2v-s2CY52BydQIgGJEp7uWYgdOwU0oaMgeq4ExzDGhkVQD0eyNrmUIADoM
+      ETCD_DIAL_TIMEOUT: 5s
+      ETCD_ENABLED: "true"
+      ETCD_ENDPOINTS: etcd:2379
+      ETCD_LEASE_TTL: 10s
+      ETCD_PASSWORD: ""
+      ETCD_SERVICE_PREFIX: /services/aisvc
+      ETCD_USERNAME: ""
+      HTTP_ADDR: :8081
+      HTTP_IDLE_TIMEOUT: 60s
+      HTTP_MAX_BODY_BYTES: "1048576"
+      HTTP_MAX_HEADER_BYTES: "65536"
+      HTTP_PROBE_TIMEOUT: 2s
+      HTTP_READ_HEADER_TIMEOUT: 5s
+      HTTP_SHUTDOWN_TIMEOUT: 10s
+      LOG_LEVEL: info
+      OBJECT_GC_DELAY: 24h
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_TRACES_ENABLED: "false"
+      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      OUTBOX_BATCH_SIZE: "20"
+      OUTBOX_LEADER_LOCK_ENABLED: "true"
+      OUTBOX_LEADER_LOCK_KEY: yunpan:outbox:dispatcher:leader
+      OUTBOX_LEADER_LOCK_TTL: 15s
+      OUTBOX_POLL_INTERVAL: 1s
+      OUTBOX_TASK_MAX_RETRY: "8"
+      OUTBOX_TASK_TIMEOUT: 30m
+      OUTBOX_V2_EVENTS_ENABLED: "false"
+      POSTGRES_CONN_MAX_IDLE_TIME: 5m
+      POSTGRES_CONN_MAX_LIFETIME: 30m
+      POSTGRES_DSN: postgres://yunpan:fce82291dc16193eeb4960c9b97e53497c918bec69a7e53bfb9af55f0759e2b4@postgres:5432/yunpan?sslmode=disable
+      POSTGRES_MAX_IDLE_CONNS: "8"
+      POSTGRES_MAX_OPEN_CONNS: "32"
+      REDIS_ADDR: redis:6379
+      REDIS_BROKER_ADDR: redis:6379
+      REDIS_BROKER_DB: "0"
+      REDIS_BROKER_PASSWORD: ""
+      REDIS_CACHE_ADDR: redis:6379
+      REDIS_CACHE_DB: "0"
+      REDIS_CACHE_PASSWORD: ""
+      REDIS_COORDINATION_ADDR: redis:6379
+      REDIS_COORDINATION_DB: "0"
+      REDIS_COORDINATION_PASSWORD: ""
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ""
+      S3_ACCESS_KEY: yunpan
+      S3_BUCKET: yunpan
+      S3_ENDPOINT: minio:9000
+      S3_PUBLIC_ENDPOINT: 127.0.0.1:3000
+      S3_PUBLIC_PATH_PREFIX: /storage
+      S3_PUBLIC_SECURE: "false"
+      S3_READ_URL_TTL: 10m
+      S3_REGION: us-east-1
+      S3_SECRET_KEY: d49c454fba1e94bf638e7de98d4d3505b8136e64d1b205f0640a516f5822ae81
+      S3_SECURE: "false"
+      SHARE_ACCESS_TTL: 15m
+      SHARE_SECRET: c9b378f0127cce8053852fb677f6b2ddab8b8927147bdbb23ffc7d2b0e124456
+      UPLOAD_CLEANUP_BATCH: "100"
+      UPLOAD_CLEANUP_INTERVAL: 5m
+      UPLOAD_PART_URL_TTL: 15m
+      UPLOAD_SESSION_TTL: 24h
+      USER_DEFAULT_QUOTA_BYTES: "10737418240"
+      WORKER_CONCURRENCY: "8"
+      WORKER_METRICS_ADDR: :8083
+      WORKER_QUEUE_AI: "4"
+      WORKER_QUEUE_MAINTENANCE: "1"
+      WORKER_QUEUE_MEDIA: "4"
+      WORKER_QUEUE_OBJECT: "2"
+    expose:
+      - "8081"
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - -O
+        - '-'
+        - http://127.0.0.1:8081/health/live
+      timeout: 3s
+      interval: 5s
+      retries: 20
+      start_period: 10s
+    image: bx-yunpan-api:local
+    init: true
+    networks:
+      default: null
+    restart: unless-stopped
+    stop_grace_period: 15s
+  etcd:
+    profiles:
+      - ai
+      - ai-split
+    command:
+      - /usr/local/bin/etcd
+    environment:
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
+      ETCD_DATA_DIR: /etcd-data
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://etcd:2380
+      ETCD_INITIAL_CLUSTER: yunpan-etcd=http://etcd:2380
+      ETCD_INITIAL_CLUSTER_STATE: new
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+      ETCD_NAME: yunpan-etcd
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/etcdctl
+        - endpoint
+        - health
+      timeout: 3s
+      interval: 3s
+      retries: 20
+      start_period: 5s
+    image: quay.io/coreos/etcd:v3.6.6
+    networks:
+      default: null
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: etcd-data
+        target: /etcd-data
+        volume: {}
+  maintenance-worker:
+    profiles:
+      - distributed
+    build:
+      context: /home/bronx/remote/bx_yunpan/backend
+      dockerfile: Dockerfile
+      args:
+        DOCKER_REGISTRY: docker.io
+        GO_BUILD_MAX_PROCS: "2"
+        GO_BUILD_PARALLELISM: "1"
+        GO_PROXY: https://proxy.golang.org,direct
+        GO_VERSION: 1.25.13
+        TARGET: maintenance-worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+        required: true
+      minio-init:
+        condition: service_completed_successfully
+        required: true
+      redis:
+        condition: service_healthy
+        required: true
+    environment:
+      AI_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+      AI_CHAT_MODEL: qwen-plus
+      AI_EMBEDDING_DIMENSION: "1024"
+      AI_EMBEDDING_MODEL: qwen3.7-text-embedding
+      AI_ENABLED: "true"
+      AI_MAX_OBJECT_MIB: "32"
+      AI_PROVIDER: dashscope
+      AI_RATE_LIMIT_ASK_PER_MINUTE: "10"
+      AI_RATE_LIMIT_ENABLED: "true"
+      AI_RATE_LIMIT_REPROCESS_PER_MINUTE: "3"
+      AI_RATE_LIMIT_SEARCH_PER_MINUTE: "30"
+      AI_REQUEST_TIMEOUT: 90s
+      AI_RERANK_BASE_URL: https://ws-oc7xvkddl5eapgbk.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+      AI_RERANK_CANDIDATES: "30"
+      AI_RERANK_ENABLED: "false"
+      AI_RERANK_MODEL: qwen3-rerank
+      AI_RERANK_TIMEOUT: 30s
+      AI_RERANK_TOP_K: "8"
+      AI_SERVICE_ROLE: combined
+      AI_VISION_MODEL: qwen-vl-plus
+      AISVC_ADVERTISE_ADDR: ""
+      AISVC_BREAKER_FAILURE_RATE: "0.5"
+      AISVC_BREAKER_HALF_OPEN_PROBES: "3"
+      AISVC_BREAKER_MIN_REQUESTS: "20"
+      AISVC_BREAKER_OPEN_TIMEOUT: 5s
+      AISVC_BREAKER_WINDOW: 10s
+      AISVC_CALL_TIMEOUT: 120s
+      AISVC_GRPC_ADDR: :8082
+      AISVC_GRPC_TARGET: aisvc:8082
+      AISVC_REPROCESS_MAX_ATTEMPTS: "3"
+      AISVC_RETRY_BASE_BACKOFF: 20ms
+      AISVC_RETRY_MAX_BACKOFF: 1s
+      AISVC_SEARCH_MAX_ATTEMPTS: "3"
+      APP_ENV: development
+      AUTH_ACCESS_TTL: 15m
+      AUTH_COOKIE_DOMAIN: ""
+      AUTH_COOKIE_SECURE: "false"
+      AUTH_ISSUER: bx-yunpan
+      AUTH_REFRESH_TTL: 720h
+      AUTH_SIGNING_SEED: b8707b23d58e5912192fcdf2127f90da9082980287b18361dcd240647c173718
+      CACHE_ENABLED: "true"
+      CACHE_L1_MAX_ITEMS: "512"
+      CACHE_TTL: 5m
+      DASHSCOPE_API_KEY: sk-ws-H.EYLLDXY.Gw7u.MEUCIQDR-7OB2syAE87UOvorppJWT_bRam85Y2v-s2CY52BydQIgGJEp7uWYgdOwU0oaMgeq4ExzDGhkVQD0eyNrmUIADoM
+      ETCD_DIAL_TIMEOUT: 5s
+      ETCD_ENABLED: "true"
+      ETCD_ENDPOINTS: etcd:2379
+      ETCD_LEASE_TTL: 10s
+      ETCD_PASSWORD: ""
+      ETCD_SERVICE_PREFIX: /services/aisvc
+      ETCD_USERNAME: ""
+      HTTP_IDLE_TIMEOUT: 60s
+      HTTP_MAX_BODY_BYTES: "1048576"
+      HTTP_MAX_HEADER_BYTES: "65536"
+      HTTP_PROBE_TIMEOUT: 2s
+      HTTP_READ_HEADER_TIMEOUT: 5s
+      HTTP_SHUTDOWN_TIMEOUT: 10s
+      LOG_LEVEL: info
+      OBJECT_GC_DELAY: 24h
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_TRACES_ENABLED: "false"
+      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      OUTBOX_BATCH_SIZE: "20"
+      OUTBOX_LEADER_LOCK_ENABLED: "true"
+      OUTBOX_LEADER_LOCK_KEY: yunpan:outbox:dispatcher:leader
+      OUTBOX_LEADER_LOCK_TTL: 15s
+      OUTBOX_POLL_INTERVAL: 1s
+      OUTBOX_TASK_MAX_RETRY: "8"
+      OUTBOX_TASK_TIMEOUT: 30m
+      OUTBOX_V2_EVENTS_ENABLED: "false"
+      POSTGRES_CONN_MAX_IDLE_TIME: 5m
+      POSTGRES_CONN_MAX_LIFETIME: 30m
+      POSTGRES_DSN: postgres://yunpan:fce82291dc16193eeb4960c9b97e53497c918bec69a7e53bfb9af55f0759e2b4@postgres:5432/yunpan?sslmode=disable
+      POSTGRES_MAX_IDLE_CONNS: "8"
+      POSTGRES_MAX_OPEN_CONNS: "32"
+      REDIS_ADDR: redis:6379
+      REDIS_BROKER_ADDR: redis:6379
+      REDIS_BROKER_DB: "0"
+      REDIS_BROKER_PASSWORD: ""
+      REDIS_CACHE_ADDR: redis:6379
+      REDIS_CACHE_DB: "0"
+      REDIS_CACHE_PASSWORD: ""
+      REDIS_COORDINATION_ADDR: redis:6379
+      REDIS_COORDINATION_DB: "0"
+      REDIS_COORDINATION_PASSWORD: ""
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ""
+      S3_ACCESS_KEY: yunpan
+      S3_BUCKET: yunpan
+      S3_ENDPOINT: minio:9000
+      S3_PUBLIC_ENDPOINT: 127.0.0.1:3000
+      S3_PUBLIC_PATH_PREFIX: /storage
+      S3_PUBLIC_SECURE: "false"
+      S3_READ_URL_TTL: 10m
+      S3_REGION: us-east-1
+      S3_SECRET_KEY: d49c454fba1e94bf638e7de98d4d3505b8136e64d1b205f0640a516f5822ae81
+      S3_SECURE: "false"
+      SHARE_ACCESS_TTL: 15m
+      SHARE_SECRET: c9b378f0127cce8053852fb677f6b2ddab8b8927147bdbb23ffc7d2b0e124456
+      UPLOAD_CLEANUP_BATCH: "100"
+      UPLOAD_CLEANUP_INTERVAL: 5m
+      UPLOAD_PART_URL_TTL: 15m
+      UPLOAD_SESSION_TTL: 24h
+      USER_DEFAULT_QUOTA_BYTES: "10737418240"
+      WORKER_CONCURRENCY: "8"
+      WORKER_METRICS_ADDR: :8083
+      WORKER_QUEUE_AI: "4"
+      WORKER_QUEUE_MAINTENANCE: "1"
+      WORKER_QUEUE_MEDIA: "4"
+      WORKER_QUEUE_OBJECT: "2"
+    expose:
+      - "8083"
+    image: bx-yunpan-maintenance-worker:local
+    init: true
+    networks:
+      default: null
+    restart: unless-stopped
+    stop_grace_period: 30s
+  media-worker:
+    profiles:
+      - distributed
+    build:
+      context: /home/bronx/remote/bx_yunpan/backend
+      dockerfile: Dockerfile
+      args:
+        DOCKER_REGISTRY: docker.io
+        GO_BUILD_MAX_PROCS: "2"
+        GO_BUILD_PARALLELISM: "1"
+        GO_PROXY: https://proxy.golang.org,direct
+        GO_VERSION: 1.25.13
+        TARGET: media-worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+        required: true
+      minio-init:
+        condition: service_completed_successfully
+        required: true
+      redis:
+        condition: service_healthy
+        required: true
+    environment:
+      AI_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+      AI_CHAT_MODEL: qwen-plus
+      AI_EMBEDDING_DIMENSION: "1024"
+      AI_EMBEDDING_MODEL: qwen3.7-text-embedding
+      AI_ENABLED: "true"
+      AI_MAX_OBJECT_MIB: "32"
+      AI_PROVIDER: dashscope
+      AI_RATE_LIMIT_ASK_PER_MINUTE: "10"
+      AI_RATE_LIMIT_ENABLED: "true"
+      AI_RATE_LIMIT_REPROCESS_PER_MINUTE: "3"
+      AI_RATE_LIMIT_SEARCH_PER_MINUTE: "30"
+      AI_REQUEST_TIMEOUT: 90s
+      AI_RERANK_BASE_URL: https://ws-oc7xvkddl5eapgbk.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+      AI_RERANK_CANDIDATES: "30"
+      AI_RERANK_ENABLED: "false"
+      AI_RERANK_MODEL: qwen3-rerank
+      AI_RERANK_TIMEOUT: 30s
+      AI_RERANK_TOP_K: "8"
+      AI_SERVICE_ROLE: combined
+      AI_VISION_MODEL: qwen-vl-plus
+      AISVC_ADVERTISE_ADDR: ""
+      AISVC_BREAKER_FAILURE_RATE: "0.5"
+      AISVC_BREAKER_HALF_OPEN_PROBES: "3"
+      AISVC_BREAKER_MIN_REQUESTS: "20"
+      AISVC_BREAKER_OPEN_TIMEOUT: 5s
+      AISVC_BREAKER_WINDOW: 10s
+      AISVC_CALL_TIMEOUT: 120s
+      AISVC_GRPC_ADDR: :8082
+      AISVC_GRPC_TARGET: aisvc:8082
+      AISVC_REPROCESS_MAX_ATTEMPTS: "3"
+      AISVC_RETRY_BASE_BACKOFF: 20ms
+      AISVC_RETRY_MAX_BACKOFF: 1s
+      AISVC_SEARCH_MAX_ATTEMPTS: "3"
+      APP_ENV: development
+      AUTH_ACCESS_TTL: 15m
+      AUTH_COOKIE_DOMAIN: ""
+      AUTH_COOKIE_SECURE: "false"
+      AUTH_ISSUER: bx-yunpan
+      AUTH_REFRESH_TTL: 720h
+      AUTH_SIGNING_SEED: b8707b23d58e5912192fcdf2127f90da9082980287b18361dcd240647c173718
+      CACHE_ENABLED: "true"
+      CACHE_L1_MAX_ITEMS: "512"
+      CACHE_TTL: 5m
+      DASHSCOPE_API_KEY: sk-ws-H.EYLLDXY.Gw7u.MEUCIQDR-7OB2syAE87UOvorppJWT_bRam85Y2v-s2CY52BydQIgGJEp7uWYgdOwU0oaMgeq4ExzDGhkVQD0eyNrmUIADoM
+      ETCD_DIAL_TIMEOUT: 5s
+      ETCD_ENABLED: "true"
+      ETCD_ENDPOINTS: etcd:2379
+      ETCD_LEASE_TTL: 10s
+      ETCD_PASSWORD: ""
+      ETCD_SERVICE_PREFIX: /services/aisvc
+      ETCD_USERNAME: ""
+      HTTP_IDLE_TIMEOUT: 60s
+      HTTP_MAX_BODY_BYTES: "1048576"
+      HTTP_MAX_HEADER_BYTES: "65536"
+      HTTP_PROBE_TIMEOUT: 2s
+      HTTP_READ_HEADER_TIMEOUT: 5s
+      HTTP_SHUTDOWN_TIMEOUT: 10s
+      LOG_LEVEL: info
+      OBJECT_GC_DELAY: 24h
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_TRACES_ENABLED: "false"
+      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      OUTBOX_BATCH_SIZE: "20"
+      OUTBOX_LEADER_LOCK_ENABLED: "true"
+      OUTBOX_LEADER_LOCK_KEY: yunpan:outbox:dispatcher:leader
+      OUTBOX_LEADER_LOCK_TTL: 15s
+      OUTBOX_POLL_INTERVAL: 1s
+      OUTBOX_TASK_MAX_RETRY: "8"
+      OUTBOX_TASK_TIMEOUT: 30m
+      OUTBOX_V2_EVENTS_ENABLED: "false"
+      POSTGRES_CONN_MAX_IDLE_TIME: 5m
+      POSTGRES_CONN_MAX_LIFETIME: 30m
+      POSTGRES_DSN: postgres://yunpan:fce82291dc16193eeb4960c9b97e53497c918bec69a7e53bfb9af55f0759e2b4@postgres:5432/yunpan?sslmode=disable
+      POSTGRES_MAX_IDLE_CONNS: "8"
+      POSTGRES_MAX_OPEN_CONNS: "32"
+      REDIS_ADDR: redis:6379
+      REDIS_BROKER_ADDR: redis:6379
+      REDIS_BROKER_DB: "0"
+      REDIS_BROKER_PASSWORD: ""
+      REDIS_CACHE_ADDR: redis:6379
+      REDIS_CACHE_DB: "0"
+      REDIS_CACHE_PASSWORD: ""
+      REDIS_COORDINATION_ADDR: redis:6379
+      REDIS_COORDINATION_DB: "0"
+      REDIS_COORDINATION_PASSWORD: ""
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ""
+      S3_ACCESS_KEY: yunpan
+      S3_BUCKET: yunpan
+      S3_ENDPOINT: minio:9000
+      S3_PUBLIC_ENDPOINT: 127.0.0.1:3000
+      S3_PUBLIC_PATH_PREFIX: /storage
+      S3_PUBLIC_SECURE: "false"
+      S3_READ_URL_TTL: 10m
+      S3_REGION: us-east-1
+      S3_SECRET_KEY: d49c454fba1e94bf638e7de98d4d3505b8136e64d1b205f0640a516f5822ae81
+      S3_SECURE: "false"
+      SHARE_ACCESS_TTL: 15m
+      SHARE_SECRET: c9b378f0127cce8053852fb677f6b2ddab8b8927147bdbb23ffc7d2b0e124456
+      UPLOAD_CLEANUP_BATCH: "100"
+      UPLOAD_CLEANUP_INTERVAL: 5m
+      UPLOAD_PART_URL_TTL: 15m
+      UPLOAD_SESSION_TTL: 24h
+      USER_DEFAULT_QUOTA_BYTES: "10737418240"
+      WORKER_CONCURRENCY: "8"
+      WORKER_METRICS_ADDR: :8083
+      WORKER_QUEUE_AI: "4"
+      WORKER_QUEUE_MAINTENANCE: "1"
+      WORKER_QUEUE_MEDIA: "4"
+      WORKER_QUEUE_OBJECT: "2"
+    expose:
+      - "8083"
+    image: bx-yunpan-media-worker:local
+    init: true
+    networks:
+      default: null
+    restart: unless-stopped
+    stop_grace_period: 30s
+  migrate:
+    profiles:
+      - app
+    build:
+      context: /home/bronx/remote/bx_yunpan/backend
+      dockerfile: Dockerfile
+      args:
+        DOCKER_REGISTRY: docker.io
+        GO_BUILD_MAX_PROCS: "2"
+        GO_BUILD_PARALLELISM: "1"
+        GO_PROXY: https://proxy.golang.org,direct
+        GO_VERSION: 1.25.13
+        TARGET: migrate
+    command:
+      - up
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: true
+    environment:
+      AI_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+      AI_CHAT_MODEL: qwen-plus
+      AI_EMBEDDING_DIMENSION: "1024"
+      AI_EMBEDDING_MODEL: qwen3.7-text-embedding
+      AI_ENABLED: "true"
+      AI_MAX_OBJECT_MIB: "32"
+      AI_PROVIDER: dashscope
+      AI_RATE_LIMIT_ASK_PER_MINUTE: "10"
+      AI_RATE_LIMIT_ENABLED: "true"
+      AI_RATE_LIMIT_REPROCESS_PER_MINUTE: "3"
+      AI_RATE_LIMIT_SEARCH_PER_MINUTE: "30"
+      AI_REQUEST_TIMEOUT: 90s
+      AI_RERANK_BASE_URL: https://ws-oc7xvkddl5eapgbk.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+      AI_RERANK_CANDIDATES: "30"
+      AI_RERANK_ENABLED: "false"
+      AI_RERANK_MODEL: qwen3-rerank
+      AI_RERANK_TIMEOUT: 30s
+      AI_RERANK_TOP_K: "8"
+      AI_SERVICE_ROLE: combined
+      AI_VISION_MODEL: qwen-vl-plus
+      AISVC_ADVERTISE_ADDR: ""
+      AISVC_BREAKER_FAILURE_RATE: "0.5"
+      AISVC_BREAKER_HALF_OPEN_PROBES: "3"
+      AISVC_BREAKER_MIN_REQUESTS: "20"
+      AISVC_BREAKER_OPEN_TIMEOUT: 5s
+      AISVC_BREAKER_WINDOW: 10s
+      AISVC_CALL_TIMEOUT: 120s
+      AISVC_GRPC_ADDR: :8082
+      AISVC_GRPC_TARGET: aisvc:8082
+      AISVC_REPROCESS_MAX_ATTEMPTS: "3"
+      AISVC_RETRY_BASE_BACKOFF: 20ms
+      AISVC_RETRY_MAX_BACKOFF: 1s
+      AISVC_SEARCH_MAX_ATTEMPTS: "3"
+      APP_ENV: development
+      AUTH_ACCESS_TTL: 15m
+      AUTH_COOKIE_DOMAIN: ""
+      AUTH_COOKIE_SECURE: "false"
+      AUTH_ISSUER: bx-yunpan
+      AUTH_REFRESH_TTL: 720h
+      AUTH_SIGNING_SEED: b8707b23d58e5912192fcdf2127f90da9082980287b18361dcd240647c173718
+      CACHE_ENABLED: "true"
+      CACHE_L1_MAX_ITEMS: "512"
+      CACHE_TTL: 5m
+      DASHSCOPE_API_KEY: sk-ws-H.EYLLDXY.Gw7u.MEUCIQDR-7OB2syAE87UOvorppJWT_bRam85Y2v-s2CY52BydQIgGJEp7uWYgdOwU0oaMgeq4ExzDGhkVQD0eyNrmUIADoM
+      ETCD_DIAL_TIMEOUT: 5s
+      ETCD_ENABLED: "true"
+      ETCD_ENDPOINTS: etcd:2379
+      ETCD_LEASE_TTL: 10s
+      ETCD_PASSWORD: ""
+      ETCD_SERVICE_PREFIX: /services/aisvc
+      ETCD_USERNAME: ""
+      HTTP_IDLE_TIMEOUT: 60s
+      HTTP_MAX_BODY_BYTES: "1048576"
+      HTTP_MAX_HEADER_BYTES: "65536"
+      HTTP_PROBE_TIMEOUT: 2s
+      HTTP_READ_HEADER_TIMEOUT: 5s
+      HTTP_SHUTDOWN_TIMEOUT: 10s
+      LOG_LEVEL: info
+      OBJECT_GC_DELAY: 24h
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_TRACES_ENABLED: "false"
+      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      OUTBOX_BATCH_SIZE: "20"
+      OUTBOX_LEADER_LOCK_ENABLED: "true"
+      OUTBOX_LEADER_LOCK_KEY: yunpan:outbox:dispatcher:leader
+      OUTBOX_LEADER_LOCK_TTL: 15s
+      OUTBOX_POLL_INTERVAL: 1s
+      OUTBOX_TASK_MAX_RETRY: "8"
+      OUTBOX_TASK_TIMEOUT: 30m
+      OUTBOX_V2_EVENTS_ENABLED: "false"
+      POSTGRES_CONN_MAX_IDLE_TIME: 5m
+      POSTGRES_CONN_MAX_LIFETIME: 30m
+      POSTGRES_DSN: postgres://yunpan:fce82291dc16193eeb4960c9b97e53497c918bec69a7e53bfb9af55f0759e2b4@postgres:5432/yunpan?sslmode=disable
+      POSTGRES_MAX_IDLE_CONNS: "8"
+      POSTGRES_MAX_OPEN_CONNS: "32"
+      REDIS_ADDR: redis:6379
+      REDIS_BROKER_ADDR: redis:6379
+      REDIS_BROKER_DB: "0"
+      REDIS_BROKER_PASSWORD: ""
+      REDIS_CACHE_ADDR: redis:6379
+      REDIS_CACHE_DB: "0"
+      REDIS_CACHE_PASSWORD: ""
+      REDIS_COORDINATION_ADDR: redis:6379
+      REDIS_COORDINATION_DB: "0"
+      REDIS_COORDINATION_PASSWORD: ""
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ""
+      S3_ACCESS_KEY: yunpan
+      S3_BUCKET: yunpan
+      S3_ENDPOINT: minio:9000
+      S3_PUBLIC_ENDPOINT: 127.0.0.1:3000
+      S3_PUBLIC_PATH_PREFIX: /storage
+      S3_PUBLIC_SECURE: "false"
+      S3_READ_URL_TTL: 10m
+      S3_REGION: us-east-1
+      S3_SECRET_KEY: d49c454fba1e94bf638e7de98d4d3505b8136e64d1b205f0640a516f5822ae81
+      S3_SECURE: "false"
+      SHARE_ACCESS_TTL: 15m
+      SHARE_SECRET: c9b378f0127cce8053852fb677f6b2ddab8b8927147bdbb23ffc7d2b0e124456
+      UPLOAD_CLEANUP_BATCH: "100"
+      UPLOAD_CLEANUP_INTERVAL: 5m
+      UPLOAD_PART_URL_TTL: 15m
+      UPLOAD_SESSION_TTL: 24h
+      USER_DEFAULT_QUOTA_BYTES: "10737418240"
+      WORKER_CONCURRENCY: "8"
+      WORKER_METRICS_ADDR: :8083
+      WORKER_QUEUE_AI: "4"
+      WORKER_QUEUE_MAINTENANCE: "1"
+      WORKER_QUEUE_MEDIA: "4"
+      WORKER_QUEUE_OBJECT: "2"
+    image: bx-yunpan-migrate:local
+    networks:
+      default: null
+    restart: "no"
+  minio:
+    command:
+      - server
+      - /data
+      - --console-address
+      - :9001
+    environment:
+      MINIO_ROOT_PASSWORD: d49c454fba1e94bf638e7de98d4d3505b8136e64d1b205f0640a516f5822ae81
+      MINIO_ROOT_USER: yunpan
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - http://127.0.0.1:9000/minio/health/live
+      timeout: 3s
+      interval: 3s
+      retries: 20
+      start_period: 5s
+    image: docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 9000
+        published: "9000"
+        protocol: tcp
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 9001
+        published: "9001"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: minio-data
+        target: /data
+        volume: {}
+  minio-init:
+    command:
+      - mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" && mc mb --ignore-existing "local/$${S3_BUCKET}" && mc anonymous set none "local/$${S3_BUCKET}"
+    depends_on:
+      minio:
+        condition: service_healthy
+        required: true
+    entrypoint:
+      - /bin/sh
+      - -c
+    environment:
+      MINIO_ROOT_PASSWORD: d49c454fba1e94bf638e7de98d4d3505b8136e64d1b205f0640a516f5822ae81
+      MINIO_ROOT_USER: yunpan
+      S3_BUCKET: yunpan
+    image: docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    networks:
+      default: null
+    restart: "no"
+  object-worker:
+    profiles:
+      - distributed
+    build:
+      context: /home/bronx/remote/bx_yunpan/backend
+      dockerfile: Dockerfile
+      args:
+        DOCKER_REGISTRY: docker.io
+        GO_BUILD_MAX_PROCS: "2"
+        GO_BUILD_PARALLELISM: "1"
+        GO_PROXY: https://proxy.golang.org,direct
+        GO_VERSION: 1.25.13
+        TARGET: object-worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+        required: true
+      minio-init:
+        condition: service_completed_successfully
+        required: true
+      redis:
+        condition: service_healthy
+        required: true
+    environment:
+      AI_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+      AI_CHAT_MODEL: qwen-plus
+      AI_EMBEDDING_DIMENSION: "1024"
+      AI_EMBEDDING_MODEL: qwen3.7-text-embedding
+      AI_ENABLED: "true"
+      AI_MAX_OBJECT_MIB: "32"
+      AI_PROVIDER: dashscope
+      AI_RATE_LIMIT_ASK_PER_MINUTE: "10"
+      AI_RATE_LIMIT_ENABLED: "true"
+      AI_RATE_LIMIT_REPROCESS_PER_MINUTE: "3"
+      AI_RATE_LIMIT_SEARCH_PER_MINUTE: "30"
+      AI_REQUEST_TIMEOUT: 90s
+      AI_RERANK_BASE_URL: https://ws-oc7xvkddl5eapgbk.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+      AI_RERANK_CANDIDATES: "30"
+      AI_RERANK_ENABLED: "false"
+      AI_RERANK_MODEL: qwen3-rerank
+      AI_RERANK_TIMEOUT: 30s
+      AI_RERANK_TOP_K: "8"
+      AI_SERVICE_ROLE: combined
+      AI_VISION_MODEL: qwen-vl-plus
+      AISVC_ADVERTISE_ADDR: ""
+      AISVC_BREAKER_FAILURE_RATE: "0.5"
+      AISVC_BREAKER_HALF_OPEN_PROBES: "3"
+      AISVC_BREAKER_MIN_REQUESTS: "20"
+      AISVC_BREAKER_OPEN_TIMEOUT: 5s
+      AISVC_BREAKER_WINDOW: 10s
+      AISVC_CALL_TIMEOUT: 120s
+      AISVC_GRPC_ADDR: :8082
+      AISVC_GRPC_TARGET: aisvc:8082
+      AISVC_REPROCESS_MAX_ATTEMPTS: "3"
+      AISVC_RETRY_BASE_BACKOFF: 20ms
+      AISVC_RETRY_MAX_BACKOFF: 1s
+      AISVC_SEARCH_MAX_ATTEMPTS: "3"
+      APP_ENV: development
+      AUTH_ACCESS_TTL: 15m
+      AUTH_COOKIE_DOMAIN: ""
+      AUTH_COOKIE_SECURE: "false"
+      AUTH_ISSUER: bx-yunpan
+      AUTH_REFRESH_TTL: 720h
+      AUTH_SIGNING_SEED: b8707b23d58e5912192fcdf2127f90da9082980287b18361dcd240647c173718
+      CACHE_ENABLED: "true"
+      CACHE_L1_MAX_ITEMS: "512"
+      CACHE_TTL: 5m
+      DASHSCOPE_API_KEY: sk-ws-H.EYLLDXY.Gw7u.MEUCIQDR-7OB2syAE87UOvorppJWT_bRam85Y2v-s2CY52BydQIgGJEp7uWYgdOwU0oaMgeq4ExzDGhkVQD0eyNrmUIADoM
+      ETCD_DIAL_TIMEOUT: 5s
+      ETCD_ENABLED: "true"
+      ETCD_ENDPOINTS: etcd:2379
+      ETCD_LEASE_TTL: 10s
+      ETCD_PASSWORD: ""
+      ETCD_SERVICE_PREFIX: /services/aisvc
+      ETCD_USERNAME: ""
+      HTTP_IDLE_TIMEOUT: 60s
+      HTTP_MAX_BODY_BYTES: "1048576"
+      HTTP_MAX_HEADER_BYTES: "65536"
+      HTTP_PROBE_TIMEOUT: 2s
+      HTTP_READ_HEADER_TIMEOUT: 5s
+      HTTP_SHUTDOWN_TIMEOUT: 10s
+      LOG_LEVEL: info
+      OBJECT_GC_DELAY: 24h
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_TRACES_ENABLED: "false"
+      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      OUTBOX_BATCH_SIZE: "20"
+      OUTBOX_LEADER_LOCK_ENABLED: "true"
+      OUTBOX_LEADER_LOCK_KEY: yunpan:outbox:dispatcher:leader
+      OUTBOX_LEADER_LOCK_TTL: 15s
+      OUTBOX_POLL_INTERVAL: 1s
+      OUTBOX_TASK_MAX_RETRY: "8"
+      OUTBOX_TASK_TIMEOUT: 30m
+      OUTBOX_V2_EVENTS_ENABLED: "false"
+      POSTGRES_CONN_MAX_IDLE_TIME: 5m
+      POSTGRES_CONN_MAX_LIFETIME: 30m
+      POSTGRES_DSN: postgres://yunpan:fce82291dc16193eeb4960c9b97e53497c918bec69a7e53bfb9af55f0759e2b4@postgres:5432/yunpan?sslmode=disable
+      POSTGRES_MAX_IDLE_CONNS: "8"
+      POSTGRES_MAX_OPEN_CONNS: "32"
+      REDIS_ADDR: redis:6379
+      REDIS_BROKER_ADDR: redis:6379
+      REDIS_BROKER_DB: "0"
+      REDIS_BROKER_PASSWORD: ""
+      REDIS_CACHE_ADDR: redis:6379
+      REDIS_CACHE_DB: "0"
+      REDIS_CACHE_PASSWORD: ""
+      REDIS_COORDINATION_ADDR: redis:6379
+      REDIS_COORDINATION_DB: "0"
+      REDIS_COORDINATION_PASSWORD: ""
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ""
+      S3_ACCESS_KEY: yunpan
+      S3_BUCKET: yunpan
+      S3_ENDPOINT: minio:9000
+      S3_PUBLIC_ENDPOINT: 127.0.0.1:3000
+      S3_PUBLIC_PATH_PREFIX: /storage
+      S3_PUBLIC_SECURE: "false"
+      S3_READ_URL_TTL: 10m
+      S3_REGION: us-east-1
+      S3_SECRET_KEY: d49c454fba1e94bf638e7de98d4d3505b8136e64d1b205f0640a516f5822ae81
+      S3_SECURE: "false"
+      SHARE_ACCESS_TTL: 15m
+      SHARE_SECRET: c9b378f0127cce8053852fb677f6b2ddab8b8927147bdbb23ffc7d2b0e124456
+      UPLOAD_CLEANUP_BATCH: "100"
+      UPLOAD_CLEANUP_INTERVAL: 5m
+      UPLOAD_PART_URL_TTL: 15m
+      UPLOAD_SESSION_TTL: 24h
+      USER_DEFAULT_QUOTA_BYTES: "10737418240"
+      WORKER_CONCURRENCY: "8"
+      WORKER_METRICS_ADDR: :8083
+      WORKER_QUEUE_AI: "4"
+      WORKER_QUEUE_MAINTENANCE: "1"
+      WORKER_QUEUE_MEDIA: "4"
+      WORKER_QUEUE_OBJECT: "2"
+    expose:
+      - "8083"
+    image: bx-yunpan-object-worker:local
+    init: true
+    networks:
+      default: null
+    restart: unless-stopped
+    stop_grace_period: 30s
+  outbox-relay:
+    profiles:
+      - distributed
+    build:
+      context: /home/bronx/remote/bx_yunpan/backend
+      dockerfile: Dockerfile
+      args:
+        DOCKER_REGISTRY: docker.io
+        GO_BUILD_MAX_PROCS: "2"
+        GO_BUILD_PARALLELISM: "1"
+        GO_PROXY: https://proxy.golang.org,direct
+        GO_VERSION: 1.25.13
+        TARGET: outbox-relay
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+        required: true
+      minio-init:
+        condition: service_completed_successfully
+        required: true
+      redis:
+        condition: service_healthy
+        required: true
+    environment:
+      AI_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+      AI_CHAT_MODEL: qwen-plus
+      AI_EMBEDDING_DIMENSION: "1024"
+      AI_EMBEDDING_MODEL: qwen3.7-text-embedding
+      AI_ENABLED: "true"
+      AI_MAX_OBJECT_MIB: "32"
+      AI_PROVIDER: dashscope
+      AI_RATE_LIMIT_ASK_PER_MINUTE: "10"
+      AI_RATE_LIMIT_ENABLED: "true"
+      AI_RATE_LIMIT_REPROCESS_PER_MINUTE: "3"
+      AI_RATE_LIMIT_SEARCH_PER_MINUTE: "30"
+      AI_REQUEST_TIMEOUT: 90s
+      AI_RERANK_BASE_URL: https://ws-oc7xvkddl5eapgbk.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+      AI_RERANK_CANDIDATES: "30"
+      AI_RERANK_ENABLED: "false"
+      AI_RERANK_MODEL: qwen3-rerank
+      AI_RERANK_TIMEOUT: 30s
+      AI_RERANK_TOP_K: "8"
+      AI_SERVICE_ROLE: combined
+      AI_VISION_MODEL: qwen-vl-plus
+      AISVC_ADVERTISE_ADDR: ""
+      AISVC_BREAKER_FAILURE_RATE: "0.5"
+      AISVC_BREAKER_HALF_OPEN_PROBES: "3"
+      AISVC_BREAKER_MIN_REQUESTS: "20"
+      AISVC_BREAKER_OPEN_TIMEOUT: 5s
+      AISVC_BREAKER_WINDOW: 10s
+      AISVC_CALL_TIMEOUT: 120s
+      AISVC_GRPC_ADDR: :8082
+      AISVC_GRPC_TARGET: aisvc:8082
+      AISVC_REPROCESS_MAX_ATTEMPTS: "3"
+      AISVC_RETRY_BASE_BACKOFF: 20ms
+      AISVC_RETRY_MAX_BACKOFF: 1s
+      AISVC_SEARCH_MAX_ATTEMPTS: "3"
+      APP_ENV: development
+      AUTH_ACCESS_TTL: 15m
+      AUTH_COOKIE_DOMAIN: ""
+      AUTH_COOKIE_SECURE: "false"
+      AUTH_ISSUER: bx-yunpan
+      AUTH_REFRESH_TTL: 720h
+      AUTH_SIGNING_SEED: b8707b23d58e5912192fcdf2127f90da9082980287b18361dcd240647c173718
+      CACHE_ENABLED: "true"
+      CACHE_L1_MAX_ITEMS: "512"
+      CACHE_TTL: 5m
+      DASHSCOPE_API_KEY: sk-ws-H.EYLLDXY.Gw7u.MEUCIQDR-7OB2syAE87UOvorppJWT_bRam85Y2v-s2CY52BydQIgGJEp7uWYgdOwU0oaMgeq4ExzDGhkVQD0eyNrmUIADoM
+      ETCD_DIAL_TIMEOUT: 5s
+      ETCD_ENABLED: "true"
+      ETCD_ENDPOINTS: etcd:2379
+      ETCD_LEASE_TTL: 10s
+      ETCD_PASSWORD: ""
+      ETCD_SERVICE_PREFIX: /services/aisvc
+      ETCD_USERNAME: ""
+      HTTP_IDLE_TIMEOUT: 60s
+      HTTP_MAX_BODY_BYTES: "1048576"
+      HTTP_MAX_HEADER_BYTES: "65536"
+      HTTP_PROBE_TIMEOUT: 2s
+      HTTP_READ_HEADER_TIMEOUT: 5s
+      HTTP_SHUTDOWN_TIMEOUT: 10s
+      LOG_LEVEL: info
+      OBJECT_GC_DELAY: 24h
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_TRACES_ENABLED: "false"
+      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      OUTBOX_BATCH_SIZE: "20"
+      OUTBOX_LEADER_LOCK_ENABLED: "true"
+      OUTBOX_LEADER_LOCK_KEY: yunpan:outbox:dispatcher:leader
+      OUTBOX_LEADER_LOCK_TTL: 15s
+      OUTBOX_POLL_INTERVAL: 1s
+      OUTBOX_TASK_MAX_RETRY: "8"
+      OUTBOX_TASK_TIMEOUT: 30m
+      OUTBOX_V2_EVENTS_ENABLED: "false"
+      POSTGRES_CONN_MAX_IDLE_TIME: 5m
+      POSTGRES_CONN_MAX_LIFETIME: 30m
+      POSTGRES_DSN: postgres://yunpan:fce82291dc16193eeb4960c9b97e53497c918bec69a7e53bfb9af55f0759e2b4@postgres:5432/yunpan?sslmode=disable
+      POSTGRES_MAX_IDLE_CONNS: "8"
+      POSTGRES_MAX_OPEN_CONNS: "32"
+      REDIS_ADDR: redis:6379
+      REDIS_BROKER_ADDR: redis:6379
+      REDIS_BROKER_DB: "0"
+      REDIS_BROKER_PASSWORD: ""
+      REDIS_CACHE_ADDR: redis:6379
+      REDIS_CACHE_DB: "0"
+      REDIS_CACHE_PASSWORD: ""
+      REDIS_COORDINATION_ADDR: redis:6379
+      REDIS_COORDINATION_DB: "0"
+      REDIS_COORDINATION_PASSWORD: ""
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ""
+      S3_ACCESS_KEY: yunpan
+      S3_BUCKET: yunpan
+      S3_ENDPOINT: minio:9000
+      S3_PUBLIC_ENDPOINT: 127.0.0.1:3000
+      S3_PUBLIC_PATH_PREFIX: /storage
+      S3_PUBLIC_SECURE: "false"
+      S3_READ_URL_TTL: 10m
+      S3_REGION: us-east-1
+      S3_SECRET_KEY: d49c454fba1e94bf638e7de98d4d3505b8136e64d1b205f0640a516f5822ae81
+      S3_SECURE: "false"
+      SHARE_ACCESS_TTL: 15m
+      SHARE_SECRET: c9b378f0127cce8053852fb677f6b2ddab8b8927147bdbb23ffc7d2b0e124456
+      UPLOAD_CLEANUP_BATCH: "100"
+      UPLOAD_CLEANUP_INTERVAL: 5m
+      UPLOAD_PART_URL_TTL: 15m
+      UPLOAD_SESSION_TTL: 24h
+      USER_DEFAULT_QUOTA_BYTES: "10737418240"
+      WORKER_CONCURRENCY: "8"
+      WORKER_METRICS_ADDR: :8083
+      WORKER_QUEUE_AI: "4"
+      WORKER_QUEUE_MAINTENANCE: "1"
+      WORKER_QUEUE_MEDIA: "4"
+      WORKER_QUEUE_OBJECT: "2"
+    expose:
+      - "8083"
+    image: bx-yunpan-outbox-relay:local
+    init: true
+    networks:
+      default: null
+    restart: unless-stopped
+    stop_grace_period: 15s
+  postgres:
+    environment:
+      POSTGRES_DB: yunpan
+      POSTGRES_PASSWORD: fce82291dc16193eeb4960c9b97e53497c918bec69a7e53bfb9af55f0759e2b4
+      POSTGRES_USER: yunpan
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}
+      timeout: 3s
+      interval: 3s
+      retries: 20
+      start_period: 5s
+    image: docker.io/pgvector/pgvector:0.8.6-pg17
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 5432
+        published: "5432"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: postgres-data
+        target: /var/lib/postgresql/data
+        volume: {}
+  redis:
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        if [ -n "$${REDIS_PASSWORD}" ]; then
+          exec redis-server --appendonly yes --requirepass "$${REDIS_PASSWORD}"
+        fi
+        exec redis-server --appendonly yes
+    environment:
+      REDIS_PASSWORD: ""
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - if [ -n "$$REDIS_PASSWORD" ]; then redis-cli --no-auth-warning -a "$$REDIS_PASSWORD" ping; else redis-cli ping; fi
+      timeout: 3s
+      interval: 3s
+      retries: 20
+      start_period: 5s
+    image: docker.io/library/redis:8.10-alpine
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 6379
+        published: "6379"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: redis-data
+        target: /data
+        volume: {}
+  redis-broker:
+    profiles:
+      - redis-split
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        if [ -n "$${ROLE_REDIS_PASSWORD}" ]; then
+          exec redis-server --appendonly yes --requirepass "$${ROLE_REDIS_PASSWORD}"
+        fi
+        exec redis-server --appendonly yes
+    environment:
+      ROLE_REDIS_PASSWORD: ""
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - if [ -n "$$ROLE_REDIS_PASSWORD" ]; then redis-cli --no-auth-warning -a "$$ROLE_REDIS_PASSWORD" ping; else redis-cli ping; fi
+      timeout: 3s
+      interval: 3s
+      retries: 20
+      start_period: 5s
+    image: docker.io/library/redis:8.10-alpine
+    networks:
+      default: null
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: redis-broker-data
+        target: /data
+        volume: {}
+  redis-cache:
+    profiles:
+      - redis-split
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        if [ -n "$${ROLE_REDIS_PASSWORD}" ]; then
+          exec redis-server --save "" --appendonly no --requirepass "$${ROLE_REDIS_PASSWORD}"
+        fi
+        exec redis-server --save "" --appendonly no
+    environment:
+      ROLE_REDIS_PASSWORD: ""
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - if [ -n "$$ROLE_REDIS_PASSWORD" ]; then redis-cli --no-auth-warning -a "$$ROLE_REDIS_PASSWORD" ping; else redis-cli ping; fi
+      timeout: 3s
+      interval: 3s
+      retries: 20
+      start_period: 5s
+    image: docker.io/library/redis:8.10-alpine
+    networks:
+      default: null
+    restart: unless-stopped
+  redis-coordination:
+    profiles:
+      - redis-split
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        if [ -n "$${ROLE_REDIS_PASSWORD}" ]; then
+          exec redis-server --save "" --appendonly no --requirepass "$${ROLE_REDIS_PASSWORD}"
+        fi
+        exec redis-server --save "" --appendonly no
+    environment:
+      ROLE_REDIS_PASSWORD: ""
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - if [ -n "$$ROLE_REDIS_PASSWORD" ]; then redis-cli --no-auth-warning -a "$$ROLE_REDIS_PASSWORD" ping; else redis-cli ping; fi
+      timeout: 3s
+      interval: 3s
+      retries: 20
+      start_period: 5s
+    image: docker.io/library/redis:8.10-alpine
+    networks:
+      default: null
+    restart: unless-stopped
+  web:
+    profiles:
+      - app
+    build:
+      context: /home/bronx/remote/bx_yunpan/web
+      dockerfile: Dockerfile
+      args:
+        DOCKER_REGISTRY: docker.io
+        NODE_VERSION: 22.23.0
+    depends_on:
+      api:
+        condition: service_healthy
+        required: true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null http://127.0.0.1/healthz && wget -q -O /dev/null http://127.0.0.1/readyz && wget -q -O /dev/null http://127.0.0.1/storage-healthz
+      timeout: 8s
+      interval: 10s
+      retries: 12
+      start_period: 5s
+    image: bx-yunpan-web:local
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 80
+        published: "3000"
+        protocol: tcp
+    restart: unless-stopped
+  worker:
+    profiles:
+      - app
+    build:
+      context: /home/bronx/remote/bx_yunpan/backend
+      dockerfile: Dockerfile
+      args:
+        DOCKER_REGISTRY: docker.io
+        GO_BUILD_MAX_PROCS: "2"
+        GO_BUILD_PARALLELISM: "1"
+        GO_PROXY: https://proxy.golang.org,direct
+        GO_VERSION: 1.25.13
+        TARGET: worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+        required: true
+      minio-init:
+        condition: service_completed_successfully
+        required: true
+      redis:
+        condition: service_healthy
+        required: true
+    environment:
+      AI_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+      AI_CHAT_MODEL: qwen-plus
+      AI_EMBEDDING_DIMENSION: "1024"
+      AI_EMBEDDING_MODEL: qwen3.7-text-embedding
+      AI_ENABLED: "true"
+      AI_MAX_OBJECT_MIB: "32"
+      AI_PROVIDER: dashscope
+      AI_RATE_LIMIT_ASK_PER_MINUTE: "10"
+      AI_RATE_LIMIT_ENABLED: "true"
+      AI_RATE_LIMIT_REPROCESS_PER_MINUTE: "3"
+      AI_RATE_LIMIT_SEARCH_PER_MINUTE: "30"
+      AI_REQUEST_TIMEOUT: 90s
+      AI_RERANK_BASE_URL: https://ws-oc7xvkddl5eapgbk.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+      AI_RERANK_CANDIDATES: "30"
+      AI_RERANK_ENABLED: "false"
+      AI_RERANK_MODEL: qwen3-rerank
+      AI_RERANK_TIMEOUT: 30s
+      AI_RERANK_TOP_K: "8"
+      AI_SERVICE_ROLE: combined
+      AI_VISION_MODEL: qwen-vl-plus
+      AISVC_ADVERTISE_ADDR: ""
+      AISVC_BREAKER_FAILURE_RATE: "0.5"
+      AISVC_BREAKER_HALF_OPEN_PROBES: "3"
+      AISVC_BREAKER_MIN_REQUESTS: "20"
+      AISVC_BREAKER_OPEN_TIMEOUT: 5s
+      AISVC_BREAKER_WINDOW: 10s
+      AISVC_CALL_TIMEOUT: 120s
+      AISVC_GRPC_ADDR: :8082
+      AISVC_GRPC_TARGET: aisvc:8082
+      AISVC_REPROCESS_MAX_ATTEMPTS: "3"
+      AISVC_RETRY_BASE_BACKOFF: 20ms
+      AISVC_RETRY_MAX_BACKOFF: 1s
+      AISVC_SEARCH_MAX_ATTEMPTS: "3"
+      APP_ENV: development
+      AUTH_ACCESS_TTL: 15m
+      AUTH_COOKIE_DOMAIN: ""
+      AUTH_COOKIE_SECURE: "false"
+      AUTH_ISSUER: bx-yunpan
+      AUTH_REFRESH_TTL: 720h
+      AUTH_SIGNING_SEED: b8707b23d58e5912192fcdf2127f90da9082980287b18361dcd240647c173718
+      CACHE_ENABLED: "true"
+      CACHE_L1_MAX_ITEMS: "512"
+      CACHE_TTL: 5m
+      DASHSCOPE_API_KEY: sk-ws-H.EYLLDXY.Gw7u.MEUCIQDR-7OB2syAE87UOvorppJWT_bRam85Y2v-s2CY52BydQIgGJEp7uWYgdOwU0oaMgeq4ExzDGhkVQD0eyNrmUIADoM
+      ETCD_DIAL_TIMEOUT: 5s
+      ETCD_ENABLED: "true"
+      ETCD_ENDPOINTS: etcd:2379
+      ETCD_LEASE_TTL: 10s
+      ETCD_PASSWORD: ""
+      ETCD_SERVICE_PREFIX: /services/aisvc
+      ETCD_USERNAME: ""
+      HTTP_IDLE_TIMEOUT: 60s
+      HTTP_MAX_BODY_BYTES: "1048576"
+      HTTP_MAX_HEADER_BYTES: "65536"
+      HTTP_PROBE_TIMEOUT: 2s
+      HTTP_READ_HEADER_TIMEOUT: 5s
+      HTTP_SHUTDOWN_TIMEOUT: 10s
+      LOG_LEVEL: info
+      OBJECT_GC_DELAY: 24h
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_TRACES_ENABLED: "false"
+      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      OUTBOX_BATCH_SIZE: "20"
+      OUTBOX_LEADER_LOCK_ENABLED: "true"
+      OUTBOX_LEADER_LOCK_KEY: yunpan:outbox:dispatcher:leader
+      OUTBOX_LEADER_LOCK_TTL: 15s
+      OUTBOX_POLL_INTERVAL: 1s
+      OUTBOX_TASK_MAX_RETRY: "8"
+      OUTBOX_TASK_TIMEOUT: 30m
+      OUTBOX_V2_EVENTS_ENABLED: "false"
+      POSTGRES_CONN_MAX_IDLE_TIME: 5m
+      POSTGRES_CONN_MAX_LIFETIME: 30m
+      POSTGRES_DSN: postgres://yunpan:fce82291dc16193eeb4960c9b97e53497c918bec69a7e53bfb9af55f0759e2b4@postgres:5432/yunpan?sslmode=disable
+      POSTGRES_MAX_IDLE_CONNS: "8"
+      POSTGRES_MAX_OPEN_CONNS: "32"
+      REDIS_ADDR: redis:6379
+      REDIS_BROKER_ADDR: redis:6379
+      REDIS_BROKER_DB: "0"
+      REDIS_BROKER_PASSWORD: ""
+      REDIS_CACHE_ADDR: redis:6379
+      REDIS_CACHE_DB: "0"
+      REDIS_CACHE_PASSWORD: ""
+      REDIS_COORDINATION_ADDR: redis:6379
+      REDIS_COORDINATION_DB: "0"
+      REDIS_COORDINATION_PASSWORD: ""
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ""
+      S3_ACCESS_KEY: yunpan
+      S3_BUCKET: yunpan
+      S3_ENDPOINT: minio:9000
+      S3_PUBLIC_ENDPOINT: 127.0.0.1:3000
+      S3_PUBLIC_PATH_PREFIX: /storage
+      S3_PUBLIC_SECURE: "false"
+      S3_READ_URL_TTL: 10m
+      S3_REGION: us-east-1
+      S3_SECRET_KEY: d49c454fba1e94bf638e7de98d4d3505b8136e64d1b205f0640a516f5822ae81
+      S3_SECURE: "false"
+      SHARE_ACCESS_TTL: 15m
+      SHARE_SECRET: c9b378f0127cce8053852fb677f6b2ddab8b8927147bdbb23ffc7d2b0e124456
+      UPLOAD_CLEANUP_BATCH: "100"
+      UPLOAD_CLEANUP_INTERVAL: 5m
+      UPLOAD_PART_URL_TTL: 15m
+      UPLOAD_SESSION_TTL: 24h
+      USER_DEFAULT_QUOTA_BYTES: "10737418240"
+      WORKER_CONCURRENCY: "8"
+      WORKER_METRICS_ADDR: :8083
+      WORKER_QUEUE_AI: "4"
+      WORKER_QUEUE_MAINTENANCE: "1"
+      WORKER_QUEUE_MEDIA: "4"
+      WORKER_QUEUE_OBJECT: "2"
+    expose:
+      - "8083"
+    image: bx-yunpan-worker:local
+    init: true
+    networks:
+      default: null
+    restart: unless-stopped
+    stop_grace_period: 30s
+networks:
+  default:
+    name: bx-yunpan_default
+volumes:
+  etcd-data:
+    name: bx-yunpan_etcd-data
+  minio-data:
+    name: bx-yunpan_minio-data
+  postgres-data:
+    name: bx-yunpan_postgres-data
+  redis-broker-data:
+    name: bx-yunpan_redis-broker-data
+  redis-data:
+    name: bx-yunpan_redis-data
+x-app-environment:
+  AI_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+  AI_CHAT_MODEL: qwen-plus
+  AI_EMBEDDING_DIMENSION: "1024"
+  AI_EMBEDDING_MODEL: qwen3.7-text-embedding
+  AI_ENABLED: "true"
+  AI_MAX_OBJECT_MIB: "32"
+  AI_PROVIDER: dashscope
+  AI_RATE_LIMIT_ASK_PER_MINUTE: "10"
+  AI_RATE_LIMIT_ENABLED: "true"
+  AI_RATE_LIMIT_REPROCESS_PER_MINUTE: "3"
+  AI_RATE_LIMIT_SEARCH_PER_MINUTE: "30"
+  AI_REQUEST_TIMEOUT: 90s
+  AI_RERANK_BASE_URL: https://ws-oc7xvkddl5eapgbk.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+  AI_RERANK_CANDIDATES: "30"
+  AI_RERANK_ENABLED: "false"
+  AI_RERANK_MODEL: qwen3-rerank
+  AI_RERANK_TIMEOUT: 30s
+  AI_RERANK_TOP_K: "8"
+  AI_SERVICE_ROLE: combined
+  AI_VISION_MODEL: qwen-vl-plus
+  AISVC_ADVERTISE_ADDR: ""
+  AISVC_BREAKER_FAILURE_RATE: "0.5"
+  AISVC_BREAKER_HALF_OPEN_PROBES: "3"
+  AISVC_BREAKER_MIN_REQUESTS: "20"
+  AISVC_BREAKER_OPEN_TIMEOUT: 5s
+  AISVC_BREAKER_WINDOW: 10s
+  AISVC_CALL_TIMEOUT: 120s
+  AISVC_GRPC_ADDR: :8082
+  AISVC_GRPC_TARGET: aisvc:8082
+  AISVC_REPROCESS_MAX_ATTEMPTS: "3"
+  AISVC_RETRY_BASE_BACKOFF: 20ms
+  AISVC_RETRY_MAX_BACKOFF: 1s
+  AISVC_SEARCH_MAX_ATTEMPTS: "3"
+  APP_ENV: development
+  AUTH_ACCESS_TTL: 15m
+  AUTH_COOKIE_DOMAIN: ""
+  AUTH_COOKIE_SECURE: "false"
+  AUTH_ISSUER: bx-yunpan
+  AUTH_REFRESH_TTL: 720h
+  AUTH_SIGNING_SEED: b8707b23d58e5912192fcdf2127f90da9082980287b18361dcd240647c173718
+  CACHE_ENABLED: "true"
+  CACHE_L1_MAX_ITEMS: "512"
+  CACHE_TTL: 5m
+  DASHSCOPE_API_KEY: sk-ws-H.EYLLDXY.Gw7u.MEUCIQDR-7OB2syAE87UOvorppJWT_bRam85Y2v-s2CY52BydQIgGJEp7uWYgdOwU0oaMgeq4ExzDGhkVQD0eyNrmUIADoM
+  ETCD_DIAL_TIMEOUT: 5s
+  ETCD_ENABLED: "true"
+  ETCD_ENDPOINTS: etcd:2379
+  ETCD_LEASE_TTL: 10s
+  ETCD_PASSWORD: ""
+  ETCD_SERVICE_PREFIX: /services/aisvc
+  ETCD_USERNAME: ""
+  HTTP_IDLE_TIMEOUT: 60s
+  HTTP_MAX_BODY_BYTES: "1048576"
+  HTTP_MAX_HEADER_BYTES: "65536"
+  HTTP_PROBE_TIMEOUT: 2s
+  HTTP_READ_HEADER_TIMEOUT: 5s
+  HTTP_SHUTDOWN_TIMEOUT: 10s
+  LOG_LEVEL: info
+  OBJECT_GC_DELAY: 24h
+  OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+  OTEL_TRACES_ENABLED: "false"
+  OTEL_TRACES_SAMPLER_ARG: "1.0"
+  OUTBOX_BATCH_SIZE: "20"
+  OUTBOX_LEADER_LOCK_ENABLED: "true"
+  OUTBOX_LEADER_LOCK_KEY: yunpan:outbox:dispatcher:leader
+  OUTBOX_LEADER_LOCK_TTL: 15s
+  OUTBOX_POLL_INTERVAL: 1s
+  OUTBOX_TASK_MAX_RETRY: "8"
+  OUTBOX_TASK_TIMEOUT: 30m
+  OUTBOX_V2_EVENTS_ENABLED: "false"
+  POSTGRES_CONN_MAX_IDLE_TIME: 5m
+  POSTGRES_CONN_MAX_LIFETIME: 30m
+  POSTGRES_DSN: postgres://yunpan:fce82291dc16193eeb4960c9b97e53497c918bec69a7e53bfb9af55f0759e2b4@postgres:5432/yunpan?sslmode=disable
+  POSTGRES_MAX_IDLE_CONNS: "8"
+  POSTGRES_MAX_OPEN_CONNS: "32"
+  REDIS_ADDR: redis:6379
+  REDIS_BROKER_ADDR: redis:6379
+  REDIS_BROKER_DB: "0"
+  REDIS_BROKER_PASSWORD: ""
+  REDIS_CACHE_ADDR: redis:6379
+  REDIS_CACHE_DB: "0"
+  REDIS_CACHE_PASSWORD: ""
+  REDIS_COORDINATION_ADDR: redis:6379
+  REDIS_COORDINATION_DB: "0"
+  REDIS_COORDINATION_PASSWORD: ""
+  REDIS_DB: "0"
+  REDIS_PASSWORD: ""
+  S3_ACCESS_KEY: yunpan
+  S3_BUCKET: yunpan
+  S3_ENDPOINT: minio:9000
+  S3_PUBLIC_ENDPOINT: 127.0.0.1:3000
+  S3_PUBLIC_PATH_PREFIX: /storage
+  S3_PUBLIC_SECURE: "false"
+  S3_READ_URL_TTL: 10m
+  S3_REGION: us-east-1
+  S3_SECRET_KEY: d49c454fba1e94bf638e7de98d4d3505b8136e64d1b205f0640a516f5822ae81
+  S3_SECURE: "false"
+  SHARE_ACCESS_TTL: 15m
+  SHARE_SECRET: c9b378f0127cce8053852fb677f6b2ddab8b8927147bdbb23ffc7d2b0e124456
+  UPLOAD_CLEANUP_BATCH: "100"
+  UPLOAD_CLEANUP_INTERVAL: 5m
+  UPLOAD_PART_URL_TTL: 15m
+  UPLOAD_SESSION_TTL: 24h
+  USER_DEFAULT_QUOTA_BYTES: "10737418240"
+  WORKER_CONCURRENCY: "8"
+  WORKER_METRICS_ADDR: :8083
+  WORKER_QUEUE_AI: "4"
+  WORKER_QUEUE_MAINTENANCE: "1"
+  WORKER_QUEUE_MEDIA: "4"
+  WORKER_QUEUE_OBJECT: "2"

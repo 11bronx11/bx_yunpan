@@ -1,0 +1,2 @@
+metrics=failed
+indexer_exit=1

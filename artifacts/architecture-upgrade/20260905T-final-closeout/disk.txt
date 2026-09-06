@@ -1,0 +1,2 @@
+文件系统                           大小  已用  可用 已用% 挂载点
+/dev/mapper/ubuntu--vg-ubuntu--lv   67G   41G   24G   64% /

@@ -22,6 +22,7 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
+	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
 )
 
 type fakeUploadStorage struct {
@@ -368,7 +369,7 @@ func TestExpireReleasesQuotaAndMarksSession(t *testing.T) {
 	}
 }
 
-func TestVerifyRemovesCanonicalObjectWhenTransactionFails(t *testing.T) {
+func TestVerifyRetainsCanonicalObjectWhenTransactionFailsForRetry(t *testing.T) {
 	fixture := newConcurrencyFixture(t)
 	storage := newFakeUploadStorage()
 	fixture.service.storage = storage
@@ -386,8 +387,8 @@ func TestVerifyRemovesCanonicalObjectWhenTransactionFails(t *testing.T) {
 	if err == nil || err.Error() != "forced quota failure" {
 		t.Fatalf("verify error = %v", err)
 	}
-	if storage.exists(session.Bucket, canonicalKey) {
-		t.Fatal("canonical object remains after transaction rollback")
+	if !storage.exists(session.Bucket, canonicalKey) {
+		t.Fatal("canonical object was removed despite a retryable transaction failure")
 	}
 	if !storage.exists(session.Bucket, session.ObjectKey) {
 		t.Fatal("retryable verification failure removed the staging object")
@@ -397,6 +398,73 @@ func TestVerifyRemovesCanonicalObjectWhenTransactionFails(t *testing.T) {
 		Where("sha256 = ? AND size_bytes = ?", session.DeclaredSHA256, session.SizeBytes).
 		Count(&objectCount).Error; err != nil || objectCount != 0 {
 		t.Fatalf("object records = %d, err = %v", objectCount, err)
+	}
+}
+
+func TestReconcileSucceededMultipartCreateConvergesInitializingSessionWithoutRecreatingUpload(t *testing.T) {
+	fixture := newConcurrencyFixture(t)
+	session := testActiveSession(fixture, time.Now().Add(time.Hour))
+	session.Status = StatusInitializing
+	session.StorageUploadID = ""
+	if err := fixture.db.Create(&session).Error; err != nil {
+		t.Fatalf("create initializing session: %v", err)
+	}
+	uploadID := "provider-upload-id"
+	op := storageops.Operation{
+		ID: uuid.New(), OperationType: storageops.MultipartCreate, IdempotencyKey: "reconcile-create:" + session.ID.String(),
+		UploadSessionID: &session.ID, SourceBucket: session.Bucket, SourceKey: session.ObjectKey,
+		StorageUploadID: uploadID, State: storageops.StateSucceeded, AvailableAt: time.Now().UTC(),
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}
+	if err := fixture.db.Create(&op).Error; err != nil {
+		t.Fatalf("create succeeded operation: %v", err)
+	}
+	count, err := fixture.service.ReconcileStorageOperations(context.Background(), 10)
+	if err != nil || count != 1 {
+		t.Fatalf("reconcile count = %d, err = %v", count, err)
+	}
+	stored, err := fixture.service.Get(fixture.userID, session.ID)
+	if err != nil || stored.Status != StatusCreated || stored.StorageUploadID != uploadID {
+		t.Fatalf("reconciled session = %#v, err = %v", stored, err)
+	}
+	newCalls, _ := fixture.storage.calls()
+	if newCalls != 0 {
+		t.Fatalf("reconciler recreated an already durable multipart upload: %d calls", newCalls)
+	}
+}
+
+func TestReconcileSucceededMultipartCompleteEmitsVerifyOnce(t *testing.T) {
+	fixture := newConcurrencyFixture(t)
+	session := testActiveSession(fixture, time.Now().Add(time.Hour))
+	session.Status = StatusCompleting
+	session.StorageUploadID = "provider-upload-id"
+	if err := fixture.db.Create(&session).Error; err != nil {
+		t.Fatalf("create completing session: %v", err)
+	}
+	op := storageops.Operation{
+		ID: uuid.New(), OperationType: storageops.MultipartComplete, IdempotencyKey: "reconcile-complete:" + session.ID.String(),
+		UploadSessionID: &session.ID, SourceBucket: session.Bucket, SourceKey: session.ObjectKey,
+		StorageUploadID: session.StorageUploadID, State: storageops.StateSucceeded, AvailableAt: time.Now().UTC(),
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}
+	if err := fixture.db.Create(&op).Error; err != nil {
+		t.Fatalf("create succeeded operation: %v", err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := fixture.service.ReconcileStorageOperations(context.Background(), 10); err != nil {
+			t.Fatalf("reconcile attempt %d: %v", attempt+1, err)
+		}
+	}
+	stored, err := fixture.service.Get(fixture.userID, session.ID)
+	if err != nil || stored.Status != StatusVerifying {
+		t.Fatalf("reconciled session = %#v, err = %v", stored, err)
+	}
+	var eventCount int64
+	if err := fixture.db.Table("outbox_events").Where("aggregate_id = ? AND event_type = ?", session.ID, outbox.EventObjectVerifyRequested).Count(&eventCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 1 {
+		t.Fatalf("verification events = %d, want 1", eventCount)
 	}
 }
 

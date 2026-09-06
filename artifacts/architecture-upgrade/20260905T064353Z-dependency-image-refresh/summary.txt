@@ -1,0 +1,25 @@
+BX YunPan dependency and image refresh verification
+
+Dependencies:
+- Go modules downloaded successfully with temporary GOPROXY=https://goproxy.cn,direct.
+- Web lockfile dependencies installed with temporary npm registry=https://registry.npmmirror.com.
+- npm ls --depth=0 reports no problems.
+
+Images:
+- Official Docker Hub pulls remain unavailable from this VM due TLS timeout.
+- Public mirror registry probes were unauthorized or unavailable.
+- Local images were refreshed serially from newly compiled static Go binaries and the existing verified Alpine/Nginx runtime layers; repository defaults were not changed.
+- Compose recreated the requested distributed topology with --no-build.
+
+Runtime and quality gates:
+- deploy/status.sh: PASS.
+- deploy/config-check.sh: PASS.
+- Database migration: 16|false; migrate exited 0.
+- Container binary SHA-256 values match the corresponding host-built target for api x2, aisvc/query x2, ai-indexer, outbox-relay, object-worker, media-worker, and maintenance-worker.
+- Go tests: 118 passed in 41 packages; go vet: PASS.
+- Frontend tests: 14 suites / 36 tests; direct ESLint: PASS; production build: PASS.
+- Compose render, shell syntax, and git diff check: PASS.
+
+Boundary:
+- This is a single-host development verification. It is not production HA/capacity evidence.
+- No data volumes, databases, object storage, caches, or repository defaults were deleted or changed.

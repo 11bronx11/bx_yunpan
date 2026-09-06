@@ -27,28 +27,61 @@ if [[ "$AI_ENABLED" != "true" && "$AI_ENABLED" != "false" ]]; then
   exit 1
 fi
 
+OUTBOX_V2_EVENTS_ENABLED="${OUTBOX_V2_EVENTS_ENABLED:-false}"
+if [[ "$OUTBOX_V2_EVENTS_ENABLED" != "true" && "$OUTBOX_V2_EVENTS_ENABLED" != "false" ]]; then
+  echo "OUTBOX_V2_EVENTS_ENABLED must be true or false." >&2
+  exit 1
+fi
+
 # These two values are derived by x-app-environment in compose.yaml.
 S3_ACCESS_KEY="${S3_ACCESS_KEY:-${MINIO_ROOT_USER:-yunpan}}"
 S3_SECRET_KEY="${S3_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-yunpan-dev-secret}}"
+POSTGRES_PRIMARY_DSN="${POSTGRES_PRIMARY_DSN:-${POSTGRES_DSN:-postgres://${POSTGRES_USER:-yunpan}:${POSTGRES_PASSWORD:-yunpan}@postgres:5432/${POSTGRES_DB:-yunpan}?sslmode=disable}}"
+POSTGRES_DSN="${POSTGRES_DSN:-$POSTGRES_PRIMARY_DSN}"
+REDIS_BROKER_ADDR="${REDIS_BROKER_ADDR:-redis:6379}"
+REDIS_BROKER_PASSWORD="${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}"
+REDIS_BROKER_DB="${REDIS_BROKER_DB:-${REDIS_DB:-0}}"
+REDIS_COORDINATION_ADDR="${REDIS_COORDINATION_ADDR:-redis:6379}"
+REDIS_COORDINATION_PASSWORD="${REDIS_COORDINATION_PASSWORD:-${REDIS_PASSWORD:-}}"
+REDIS_COORDINATION_DB="${REDIS_COORDINATION_DB:-${REDIS_DB:-0}}"
+REDIS_CACHE_ADDR="${REDIS_CACHE_ADDR:-redis:6379}"
+REDIS_CACHE_PASSWORD="${REDIS_CACHE_PASSWORD:-${REDIS_PASSWORD:-}}"
+REDIS_CACHE_DB="${REDIS_CACHE_DB:-${REDIS_DB:-0}}"
+CACHE_ENABLED="${CACHE_ENABLED:-true}"
+CACHE_TTL="${CACHE_TTL:-5m}"
+CACHE_L1_MAX_ITEMS="${CACHE_L1_MAX_ITEMS:-512}"
+AI_SERVICE_ROLE="${AI_SERVICE_ROLE:-combined}"
+SEARCH_INDEX_ENABLED="${SEARCH_INDEX_ENABLED:-false}"
+SEARCH_WRITE_BACKENDS="${SEARCH_WRITE_BACKENDS:-postgres}"
+SEARCH_READ_BACKEND="${SEARCH_READ_BACKEND:-postgres}"
+SEARCH_SHADOW_SAMPLE_RATE="${SEARCH_SHADOW_SAMPLE_RATE:-0}"
+SEARCH_INDEX_EPOCH="${SEARCH_INDEX_EPOCH:-v1}"
+KAFKA_ENABLED="${KAFKA_ENABLED:-false}"
+KAFKA_BROKERS="${KAFKA_BROKERS:-kafka:9092}"
 
 keys=(
   APP_ENV LOG_LEVEL AI_ENABLED
   HTTP_MAX_BODY_BYTES HTTP_MAX_HEADER_BYTES HTTP_SHUTDOWN_TIMEOUT HTTP_PROBE_TIMEOUT
   HTTP_READ_HEADER_TIMEOUT HTTP_IDLE_TIMEOUT
+  POSTGRES_PRIMARY_DSN POSTGRES_DSN
   POSTGRES_MAX_OPEN_CONNS POSTGRES_MAX_IDLE_CONNS POSTGRES_CONN_MAX_LIFETIME POSTGRES_CONN_MAX_IDLE_TIME
   REDIS_PASSWORD REDIS_DB
+  REDIS_BROKER_ADDR REDIS_BROKER_PASSWORD REDIS_BROKER_DB
+  REDIS_COORDINATION_ADDR REDIS_COORDINATION_PASSWORD REDIS_COORDINATION_DB
+  REDIS_CACHE_ADDR REDIS_CACHE_PASSWORD REDIS_CACHE_DB
+  CACHE_ENABLED CACHE_TTL CACHE_L1_MAX_ITEMS
   S3_PUBLIC_ENDPOINT S3_PUBLIC_PATH_PREFIX S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET S3_REGION
   S3_SECURE S3_PUBLIC_SECURE S3_READ_URL_TTL
   AUTH_SIGNING_SEED AUTH_COOKIE_SECURE USER_DEFAULT_QUOTA_BYTES AUTH_ISSUER
   AUTH_ACCESS_TTL AUTH_REFRESH_TTL AUTH_COOKIE_DOMAIN SHARE_SECRET SHARE_ACCESS_TTL
   UPLOAD_SESSION_TTL UPLOAD_PART_URL_TTL UPLOAD_CLEANUP_INTERVAL UPLOAD_CLEANUP_BATCH
-  OUTBOX_POLL_INTERVAL OUTBOX_BATCH_SIZE OUTBOX_TASK_MAX_RETRY OUTBOX_TASK_TIMEOUT OBJECT_GC_DELAY
-  WORKER_CONCURRENCY WORKER_QUEUE_AI WORKER_QUEUE_MEDIA WORKER_QUEUE_OBJECT WORKER_QUEUE_MAINTENANCE
+  OUTBOX_POLL_INTERVAL OUTBOX_BATCH_SIZE OUTBOX_TASK_MAX_RETRY OUTBOX_TASK_TIMEOUT OUTBOX_V2_EVENTS_ENABLED OBJECT_GC_DELAY
+  WORKER_CONCURRENCY WORKER_METRICS_ADDR WORKER_QUEUE_AI WORKER_QUEUE_MEDIA WORKER_QUEUE_OBJECT WORKER_QUEUE_MAINTENANCE
   AI_PROVIDER DASHSCOPE_API_KEY AI_BASE_URL AI_CHAT_MODEL AI_EMBEDDING_MODEL AI_VISION_MODEL
   AI_RERANK_ENABLED AI_RERANK_BASE_URL AI_RERANK_MODEL AI_RERANK_CANDIDATES AI_RERANK_TOP_K AI_RERANK_TIMEOUT
   AI_EMBEDDING_DIMENSION AI_MAX_OBJECT_MIB AI_REQUEST_TIMEOUT AI_RATE_LIMIT_ENABLED
   AI_RATE_LIMIT_SEARCH_PER_MINUTE AI_RATE_LIMIT_ASK_PER_MINUTE AI_RATE_LIMIT_REPROCESS_PER_MINUTE
-  AISVC_GRPC_ADDR AISVC_GRPC_TARGET AISVC_CALL_TIMEOUT
+  AISVC_GRPC_ADDR AISVC_GRPC_TARGET AI_SERVICE_ROLE AISVC_CALL_TIMEOUT
   AISVC_SEARCH_MAX_ATTEMPTS AISVC_REPROCESS_MAX_ATTEMPTS
   AISVC_RETRY_BASE_BACKOFF AISVC_RETRY_MAX_BACKOFF
   AISVC_BREAKER_WINDOW AISVC_BREAKER_MIN_REQUESTS AISVC_BREAKER_FAILURE_RATE
@@ -57,11 +90,41 @@ keys=(
   ETCD_ENABLED ETCD_ENDPOINTS ETCD_USERNAME ETCD_PASSWORD ETCD_DIAL_TIMEOUT
   ETCD_SERVICE_PREFIX ETCD_LEASE_TTL AISVC_ADVERTISE_ADDR
   OUTBOX_LEADER_LOCK_ENABLED OUTBOX_LEADER_LOCK_KEY OUTBOX_LEADER_LOCK_TTL
+  SEARCH_INDEX_ENABLED SEARCH_WRITE_BACKENDS SEARCH_READ_BACKEND SEARCH_SHADOW_SAMPLE_RATE SEARCH_INDEX_EPOCH
+  KAFKA_ENABLED KAFKA_BROKERS
 )
 
-profiles=(--profile app)
-services=(api worker)
-if [[ "$AI_ENABLED" == "true" ]]; then
+profiles=(--profile app --profile distributed --profile ai --profile ai-split --profile redis-split)
+services=(api)
+
+search_container_ids=()
+mapfile -t search_container_ids < <(docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile search ps -q search-indexer)
+if ((${#search_container_ids[@]} > 0)); then
+  services+=(search-indexer)
+  profiles+=(--profile search)
+  SEARCH_INDEX_ENABLED=true
+fi
+redis_split_mode=false
+redis_split_container_ids=()
+mapfile -t redis_split_container_ids < <(docker compose --env-file "$env_file" -f "$compose_file" --profile redis-split ps -q redis-broker)
+if ((${#redis_split_container_ids[@]} > 0)); then
+  redis_split_mode=true
+fi
+distributed_container_ids=()
+mapfile -t distributed_container_ids < <(docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile distributed ps -q outbox-relay)
+if ((${#distributed_container_ids[@]} > 0)); then
+  services+=(outbox-relay object-worker media-worker maintenance-worker)
+else
+  services+=(worker)
+fi
+ai_split_mode=false
+ai_query_container_ids=()
+mapfile -t ai_query_container_ids < <(docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile distributed --profile ai --profile ai-split ps -q ai-query)
+if ((${#ai_query_container_ids[@]} > 0)); then
+	ai_split_mode=true
+	services+=(ai-query ai-indexer)
+fi
+if [[ "$AI_ENABLED" == "true" && "$ai_split_mode" == false ]]; then
   profiles+=(--profile ai)
   services+=(aisvc)
 fi
@@ -81,6 +144,21 @@ for service in "${services[@]}"; do
     container_env=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container_id")
     for key in "${keys[@]}"; do
       expected=${!key-}
+      if [[ "$redis_split_mode" == true ]]; then
+        case "$key" in
+          REDIS_BROKER_ADDR) expected="redis-broker:6379" ;;
+          REDIS_COORDINATION_ADDR) expected="redis-coordination:6379" ;;
+          REDIS_CACHE_ADDR) expected="redis-cache:6379" ;;
+        esac
+      fi
+      if [[ "$key" == "AISVC_GRPC_TARGET" && "$ai_split_mode" == true ]]; then
+        expected="ai-query:8082"
+      elif [[ "$key" == "AI_SERVICE_ROLE" && "$ai_split_mode" == true ]]; then
+        case "$service" in
+          ai-query) expected=query ;;
+          ai-indexer) expected=indexer ;;
+        esac
+      fi
       actual=$(awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' <<<"$container_env")
       if [[ "$actual" != "$expected" ]]; then
         echo "$container_name: $key differs from deploy/.env" >&2

@@ -38,7 +38,8 @@ proxy_infra_host=$infra_host
 [[ "$proxy_infra_host" == "0.0.0.0" ]] && proxy_infra_host=127.0.0.1
 
 export HTTP_ADDR="${app_host}:${API_PORT:-8081}"
-export POSTGRES_DSN="postgres://${POSTGRES_USER:-yunpan}:${POSTGRES_PASSWORD:-yunpan}@${infra_host}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-yunpan}?sslmode=disable"
+export POSTGRES_PRIMARY_DSN="${POSTGRES_PRIMARY_DSN:-${POSTGRES_DSN:-postgres://${POSTGRES_USER:-yunpan}:${POSTGRES_PASSWORD:-yunpan}@${infra_host}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-yunpan}?sslmode=disable}}"
+export POSTGRES_DSN="$POSTGRES_PRIMARY_DSN"
 export REDIS_ADDR="${infra_host}:${REDIS_PORT:-6379}"
 export S3_ENDPOINT="${infra_host}:${MINIO_PORT:-9000}"
 export S3_SECURE=false

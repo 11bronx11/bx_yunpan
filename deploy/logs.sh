@@ -23,10 +23,11 @@ fi
 if (($#)); then
   services=("$@")
 else
-  services=(api worker web migrate)
+  services=(api worker outbox-relay object-worker media-worker maintenance-worker web migrate)
   if [[ "$ai_enabled" == true ]]; then
-    services+=(aisvc etcd)
+    services+=(aisvc ai-query ai-indexer etcd)
   fi
+  services+=(redis-broker redis-coordination redis-cache)
 fi
 
-docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app --profile ai --profile observability logs --tail=200 -f "${services[@]}"
+docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app --profile ai --profile ai-split --profile distributed --profile redis-split --profile observability logs --tail=200 -f "${services[@]}"

@@ -1,0 +1,2 @@
+metrics=ok
+indexer_exit=124

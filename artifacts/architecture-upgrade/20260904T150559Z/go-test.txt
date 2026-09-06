@@ -1,0 +1,33 @@
+?   	github.com/11bronx11/bx_yunpan/backend/api	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/aisvc	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/api	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/migrate	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/worker	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai	0.231s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcclient	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcserver	(cached)
+?   	github.com/11bronx11/bx_yunpan/backend/internal/ai/pb	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/rag	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/ragtest	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/bootstrap	(cached)
+?   	github.com/11bronx11/bx_yunpan/backend/internal/contract	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/drive	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/eventcontract	(cached)
+?   	github.com/11bronx11/bx_yunpan/backend/internal/identity	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/media	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/objectstore	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/outbox	0.020s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/breaker	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/config	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/dblock	(cached)
+?   	github.com/11bronx11/bx_yunpan/backend/internal/platform/dependencies	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/health	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/httpapi	(cached)
+?   	github.com/11bronx11/bx_yunpan/backend/internal/platform/logging	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/registry	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/storageurl	(cached)
+?   	github.com/11bronx11/bx_yunpan/backend/internal/platform/tracing	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/internal/platform/worker	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/sharing	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/upload	0.012s

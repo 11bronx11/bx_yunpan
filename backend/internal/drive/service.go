@@ -1,12 +1,18 @@
 package drive
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
+	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
+	"github.com/11bronx11/bx_yunpan/backend/internal/ownerepoch"
 )
 
 var (
@@ -32,7 +38,10 @@ func (s *Service) ProvisionUser(tx *gorm.DB, userID uuid.UUID) error {
 		NameNormalized: "/",
 		Version:        1,
 	}
-	return tx.Create(&root).Error
+	if err := tx.Create(&root).Error; err != nil {
+		return err
+	}
+	return ownerepoch.Ensure(tx, userID)
 }
 
 func (s *Service) Root(ownerID uuid.UUID) (Folder, error) {
@@ -103,11 +112,12 @@ func (s *Service) Breadcrumb(ownerID, folderID uuid.UUID) ([]Folder, error) {
 }
 
 func (s *Service) Create(ownerID, parentID uuid.UUID, name string) (Folder, error) {
+	return s.CreateWithContext(context.Background(), ownerID, parentID, name)
+}
+
+func (s *Service) CreateWithContext(ctx context.Context, ownerID, parentID uuid.UUID, name string) (Folder, error) {
 	name, normalized, err := normalizeName(name)
 	if err != nil {
-		return Folder{}, err
-	}
-	if _, err := s.folder(ownerID, parentID); err != nil {
 		return Folder{}, err
 	}
 	folder := Folder{
@@ -118,48 +128,99 @@ func (s *Service) Create(ownerID, parentID uuid.UUID, name string) (Folder, erro
 		NameNormalized: normalized,
 		Version:        1,
 	}
-	if err := s.db.Create(&folder).Error; err != nil {
-		if errors.Is(err, gorm.ErrDuplicatedKey) {
-			return Folder{}, ErrConflict
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var epoch ownerepoch.Epoch
+		var parent Folder
+		if err := tx.Where("id = ? AND owner_id = ? AND deleted_at IS NULL", parentID, ownerID).First(&parent).Error; err != nil {
+			return ErrNotFound
 		}
+		if err := tx.Create(&folder).Error; err != nil {
+			if errors.Is(err, gorm.ErrDuplicatedKey) {
+				return ErrConflict
+			}
+			return err
+		}
+		var epochErr error
+		epoch, epochErr = ownerepoch.BumpContent(tx, ownerID)
+		if epochErr != nil {
+			return epochErr
+		}
+		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
+			EventType: eventcontract.EventFolderCreatedV1, AggregateID: folder.ID, AggregateVersion: folder.Version,
+			Producer: "core-api", Payload: eventcontract.FolderCreatedV1{OwnerID: ownerID, FolderID: folder.ID, ParentID: folder.ParentID, ContentEpoch: epoch.ContentEpoch},
+		})
+	})
+	if err != nil {
 		return Folder{}, err
 	}
 	return folder, nil
 }
 
 func (s *Service) Rename(ownerID, folderID uuid.UUID, version int64, name string) (Folder, error) {
+	return s.RenameWithContext(context.Background(), ownerID, folderID, version, name)
+}
+
+func (s *Service) RenameWithContext(ctx context.Context, ownerID, folderID uuid.UUID, version int64, name string) (Folder, error) {
 	name, normalized, err := normalizeName(name)
 	if err != nil {
 		return Folder{}, err
 	}
-	result := s.db.Model(&Folder{}).
-		Where("id = ? AND owner_id = ? AND parent_id IS NOT NULL AND deleted_at IS NULL AND version = ?", folderID, ownerID, version).
-		Updates(map[string]any{"name": name, "name_normalized": normalized, "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()})
-	if errors.Is(result.Error, gorm.ErrDuplicatedKey) {
-		return Folder{}, ErrConflict
-	}
-	if result.Error != nil {
-		return Folder{}, result.Error
-	}
-	if result.RowsAffected != 1 {
-		return Folder{}, ErrConflict
-	}
-	return s.folder(ownerID, folderID)
+	var updated Folder
+	var epoch ownerepoch.Epoch
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var folder Folder
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ? AND parent_id IS NOT NULL AND deleted_at IS NULL", folderID, ownerID).First(&folder).Error; err != nil {
+			return ErrNotFound
+		}
+		if folder.Version != version {
+			return ErrConflict
+		}
+		now := time.Now().UTC()
+		if err := tx.Model(&folder).Updates(map[string]any{"name": name, "name_normalized": normalized, "version": gorm.Expr("version + 1"), "updated_at": now}).Error; err != nil {
+			if errors.Is(err, gorm.ErrDuplicatedKey) {
+				return ErrConflict
+			}
+			return err
+		}
+		var epochErr error
+		epoch, epochErr = ownerepoch.BumpContent(tx, ownerID)
+		if epochErr != nil {
+			return epochErr
+		}
+		updated = folder
+		updated.Name, updated.NameNormalized, updated.Version, updated.UpdatedAt = name, normalized, version+1, now
+		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
+			EventType: eventcontract.EventFolderRenamedV1, AggregateID: folder.ID, AggregateVersion: version + 1,
+			Producer: "core-api", Payload: eventcontract.FolderRenamedV1{OwnerID: ownerID, FolderID: folder.ID, OldName: folder.Name, NewName: name, ContentEpoch: epoch.ContentEpoch},
+		})
+	})
+	return updated, err
 }
 
 func (s *Service) Move(ownerID, folderID, targetID uuid.UUID, version int64) (Folder, error) {
+	return s.MoveWithContext(context.Background(), ownerID, folderID, targetID, version)
+}
+
+func (s *Service) MoveWithContext(ctx context.Context, ownerID, folderID, targetID uuid.UUID, version int64) (Folder, error) {
 	if folderID == targetID {
 		return Folder{}, ErrInvalidInput
 	}
-	folder, err := s.folder(ownerID, folderID)
-	if err != nil || folder.ParentID == nil {
-		return Folder{}, ErrNotFound
-	}
-	if _, err := s.folder(ownerID, targetID); err != nil {
-		return Folder{}, err
-	}
-	var descendant bool
-	err = s.db.Raw(`
+	var updated Folder
+	var epoch ownerepoch.Epoch
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var folder Folder
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ? AND deleted_at IS NULL", folderID, ownerID).First(&folder).Error; err != nil || folder.ParentID == nil {
+			return ErrNotFound
+		}
+		if folder.Version != version {
+			return ErrConflict
+		}
+		var target Folder
+		if err := tx.Where("id = ? AND owner_id = ? AND deleted_at IS NULL", targetID, ownerID).First(&target).Error; err != nil {
+			return ErrNotFound
+		}
+		var descendant bool
+		err := tx.Raw(`
         WITH RECURSIVE descendants AS (
             SELECT id FROM folders WHERE id = ? AND owner_id = ? AND deleted_at IS NULL
             UNION ALL
@@ -167,50 +228,76 @@ func (s *Service) Move(ownerID, folderID, targetID uuid.UUID, version int64) (Fo
             WHERE f.owner_id = ? AND f.deleted_at IS NULL
         )
         SELECT EXISTS(SELECT 1 FROM descendants WHERE id = ?)`, folderID, ownerID, ownerID, targetID).Scan(&descendant).Error
-	if err != nil {
-		return Folder{}, err
-	}
-	if descendant {
-		return Folder{}, ErrInvalidInput
-	}
-	result := s.db.Model(&Folder{}).
-		Where("id = ? AND owner_id = ? AND deleted_at IS NULL AND version = ?", folderID, ownerID, version).
-		Updates(map[string]any{"parent_id": targetID, "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()})
-	if errors.Is(result.Error, gorm.ErrDuplicatedKey) {
-		return Folder{}, ErrConflict
-	}
-	if result.Error != nil || result.RowsAffected != 1 {
-		return Folder{}, ErrConflict
-	}
-	return s.folder(ownerID, folderID)
+		if err != nil {
+			return err
+		}
+		if descendant {
+			return ErrInvalidInput
+		}
+		now := time.Now().UTC()
+		if err := tx.Model(&folder).Updates(map[string]any{"parent_id": targetID, "version": gorm.Expr("version + 1"), "updated_at": now}).Error; err != nil {
+			if errors.Is(err, gorm.ErrDuplicatedKey) {
+				return ErrConflict
+			}
+			return err
+		}
+		var epochErr error
+		epoch, epochErr = ownerepoch.BumpContent(tx, ownerID)
+		if epochErr != nil {
+			return epochErr
+		}
+		oldParent := folder.ParentID
+		updated = folder
+		updated.ParentID, updated.Version, updated.UpdatedAt = &targetID, version+1, now
+		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
+			EventType: eventcontract.EventFolderMovedV1, AggregateID: folder.ID, AggregateVersion: version + 1,
+			Producer: "core-api", Payload: eventcontract.FolderMovedV1{OwnerID: ownerID, FolderID: folder.ID, OldParentID: oldParent, NewParentID: &targetID, ContentEpoch: epoch.ContentEpoch},
+		})
+	})
+	return updated, err
 }
 
 func (s *Service) Delete(ownerID, folderID uuid.UUID, version int64) error {
-	folder, err := s.folder(ownerID, folderID)
-	if err != nil || folder.ParentID == nil {
-		return ErrNotFound
-	}
-	var childCount int64
-	if err := s.db.Model(&Folder{}).Where("parent_id = ? AND deleted_at IS NULL", folderID).Count(&childCount).Error; err != nil {
-		return err
-	}
-	if childCount > 0 {
-		return ErrNotEmpty
-	}
-	if err := s.db.Model(&FileEntry{}).Where("folder_id = ? AND deleted_at IS NULL", folderID).Count(&childCount).Error; err != nil {
-		return err
-	}
-	if childCount > 0 {
-		return ErrNotEmpty
-	}
-	now := time.Now().UTC()
-	result := s.db.Model(&Folder{}).
-		Where("id = ? AND owner_id = ? AND deleted_at IS NULL AND version = ?", folderID, ownerID, version).
-		Updates(map[string]any{"deleted_at": now, "version": gorm.Expr("version + 1"), "updated_at": now})
-	if result.Error != nil || result.RowsAffected != 1 {
-		return ErrConflict
-	}
-	return nil
+	return s.DeleteWithContext(context.Background(), ownerID, folderID, version)
+}
+
+func (s *Service) DeleteWithContext(ctx context.Context, ownerID, folderID uuid.UUID, version int64) error {
+	var epoch ownerepoch.Epoch
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var folder Folder
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ? AND deleted_at IS NULL", folderID, ownerID).First(&folder).Error; err != nil || folder.ParentID == nil {
+			return ErrNotFound
+		}
+		if folder.Version != version {
+			return ErrConflict
+		}
+		var childCount int64
+		if err := tx.Model(&Folder{}).Where("parent_id = ? AND deleted_at IS NULL", folderID).Count(&childCount).Error; err != nil {
+			return err
+		}
+		if childCount > 0 {
+			return ErrNotEmpty
+		}
+		if err := tx.Model(&FileEntry{}).Where("folder_id = ? AND deleted_at IS NULL", folderID).Count(&childCount).Error; err != nil {
+			return err
+		}
+		if childCount > 0 {
+			return ErrNotEmpty
+		}
+		now := time.Now().UTC()
+		if err := tx.Model(&folder).Updates(map[string]any{"deleted_at": now, "version": gorm.Expr("version + 1"), "updated_at": now}).Error; err != nil {
+			return err
+		}
+		var epochErr error
+		epoch, epochErr = ownerepoch.BumpContent(tx, ownerID)
+		if epochErr != nil {
+			return epochErr
+		}
+		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
+			EventType: eventcontract.EventFolderDeletedV1, AggregateID: folder.ID, AggregateVersion: version + 1,
+			Producer: "core-api", Payload: eventcontract.FolderDeletedV1{OwnerID: ownerID, FolderID: folder.ID, TombstoneAt: now, ContentEpoch: epoch.ContentEpoch},
+		})
+	})
 }
 
 func (s *Service) CreateFile(tx *gorm.DB, ownerID, folderID, objectID uuid.UUID, name string) (FileEntry, error) {
@@ -242,6 +329,9 @@ func (s *Service) CreateFile(tx *gorm.DB, ownerID, folderID, objectID uuid.UUID,
 		}
 		return FileEntry{}, err
 	}
+	if _, err := ownerepoch.BumpContent(tx, ownerID); err != nil {
+		return FileEntry{}, err
+	}
 	return entry, nil
 }
 
@@ -260,28 +350,84 @@ func (s *Service) File(ownerID, fileID uuid.UUID) (FileView, error) {
 }
 
 func (s *Service) RenameFile(ownerID, fileID uuid.UUID, version int64, name string) (FileView, error) {
+	return s.RenameFileWithContext(context.Background(), ownerID, fileID, version, name)
+}
+
+func (s *Service) RenameFileWithContext(ctx context.Context, ownerID, fileID uuid.UUID, version int64, name string) (FileView, error) {
 	name, normalized, err := normalizeName(name)
 	if err != nil {
 		return FileView{}, err
 	}
-	result := s.db.Model(&FileEntry{}).
-		Where("id = ? AND owner_id = ? AND deleted_at IS NULL AND version = ?", fileID, ownerID, version).
-		Updates(map[string]any{"name": name, "name_normalized": normalized, "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()})
-	if result.Error != nil || result.RowsAffected != 1 {
-		return FileView{}, ErrConflict
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var epoch ownerepoch.Epoch
+		var entry FileEntry
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ? AND deleted_at IS NULL", fileID, ownerID).First(&entry).Error; err != nil {
+			return ErrNotFound
+		}
+		if entry.Version != version {
+			return ErrConflict
+		}
+		now := time.Now().UTC()
+		if err := tx.Model(&entry).Updates(map[string]any{"name": name, "name_normalized": normalized, "version": gorm.Expr("version + 1"), "updated_at": now}).Error; err != nil {
+			if errors.Is(err, gorm.ErrDuplicatedKey) {
+				return ErrConflict
+			}
+			return err
+		}
+		var epochErr error
+		epoch, epochErr = ownerepoch.BumpContent(tx, ownerID)
+		if epochErr != nil {
+			return epochErr
+		}
+		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
+			EventType: eventcontract.EventFileUpdatedV1, AggregateID: entry.ID, AggregateVersion: version + 1,
+			Producer: "core-api", Payload: eventcontract.FileUpdatedV1{OwnerID: ownerID, FileEntryID: entry.ID, ObjectID: entry.ObjectID, OldName: entry.Name, NewName: name, ContentEpoch: epoch.ContentEpoch},
+		})
+	})
+	if err != nil {
+		return FileView{}, err
 	}
 	return s.File(ownerID, fileID)
 }
 
 func (s *Service) MoveFile(ownerID, fileID, targetFolderID uuid.UUID, version int64) (FileView, error) {
-	if _, err := s.folder(ownerID, targetFolderID); err != nil {
+	return s.MoveFileWithContext(context.Background(), ownerID, fileID, targetFolderID, version)
+}
+
+func (s *Service) MoveFileWithContext(ctx context.Context, ownerID, fileID, targetFolderID uuid.UUID, version int64) (FileView, error) {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var epoch ownerepoch.Epoch
+		var target Folder
+		if err := tx.Where("id = ? AND owner_id = ? AND deleted_at IS NULL", targetFolderID, ownerID).First(&target).Error; err != nil {
+			return ErrNotFound
+		}
+		var entry FileEntry
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ? AND deleted_at IS NULL", fileID, ownerID).First(&entry).Error; err != nil {
+			return ErrNotFound
+		}
+		if entry.Version != version {
+			return ErrConflict
+		}
+		now := time.Now().UTC()
+		if err := tx.Model(&entry).Updates(map[string]any{"folder_id": targetFolderID, "version": gorm.Expr("version + 1"), "updated_at": now}).Error; err != nil {
+			if errors.Is(err, gorm.ErrDuplicatedKey) {
+				return ErrConflict
+			}
+			return err
+		}
+		var epochErr error
+		epoch, epochErr = ownerepoch.BumpContent(tx, ownerID)
+		if epochErr != nil {
+			return epochErr
+		}
+		oldFolder := entry.FolderID
+		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
+			EventType: eventcontract.EventFileUpdatedV1, AggregateID: entry.ID, AggregateVersion: version + 1,
+			Producer: "core-api", Payload: eventcontract.FileUpdatedV1{OwnerID: ownerID, FileEntryID: entry.ID, ObjectID: entry.ObjectID, OldFolderID: &oldFolder, NewFolderID: &targetFolderID, ContentEpoch: epoch.ContentEpoch},
+		})
+	})
+	if err != nil {
 		return FileView{}, err
-	}
-	result := s.db.Model(&FileEntry{}).
-		Where("id = ? AND owner_id = ? AND deleted_at IS NULL AND version = ?", fileID, ownerID, version).
-		Updates(map[string]any{"folder_id": targetFolderID, "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()})
-	if result.Error != nil || result.RowsAffected != 1 {
-		return FileView{}, ErrConflict
 	}
 	return s.File(ownerID, fileID)
 }

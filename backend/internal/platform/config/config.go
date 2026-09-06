@@ -10,27 +10,31 @@ import (
 )
 
 type Config struct {
-	App       App
-	HTTP      HTTP
-	Postgres  Postgres
-	Redis     Redis
-	Storage   Storage
-	Worker    Worker
-	Auth      Auth
-	Identity  Identity
-	Upload    Upload
-	Outbox    Outbox
-	Sharing   Sharing
-	AI        AI
-	AIService AIService
-	Tracing   Tracing
-	Registry  Registry
-	Locking   Locking
+	App         App
+	HTTP        HTTP
+	Postgres    Postgres
+	Redis       Redis
+	Cache       Cache
+	Storage     Storage
+	Worker      Worker
+	Auth        Auth
+	Identity    Identity
+	Upload      Upload
+	Outbox      Outbox
+	Search      Search
+	EventStream EventStream
+	Sharing     Sharing
+	AI          AI
+	AIService   AIService
+	Tracing     Tracing
+	Registry    Registry
+	Locking     Locking
 }
 
 type App struct {
-	Env      string
-	LogLevel string
+	Env        string
+	LogLevel   string
+	InstanceID string
 }
 
 type HTTP struct {
@@ -44,6 +48,10 @@ type HTTP struct {
 }
 
 type Postgres struct {
+	// PrimaryDSN is the stable writer endpoint used by every process during
+	// the HA migration. DSN remains as the compatibility alias for older
+	// callers and is kept equal to PrimaryDSN when loaded from the environment.
+	PrimaryDSN      string
 	DSN             string
 	MaxOpenConns    int
 	MaxIdleConns    int
@@ -52,9 +60,27 @@ type Postgres struct {
 }
 
 type Redis struct {
-	Addr     string
-	Password string
-	DB       int
+	// Addr/Password/DB are the compatibility aliases for a single Redis
+	// instance.  The role-specific fields let Broker, Coordination and Cache
+	// move to independent instances without changing callers at once.
+	Addr                 string
+	Password             string
+	DB                   int
+	BrokerAddr           string
+	BrokerPassword       string
+	BrokerDB             int
+	CoordinationAddr     string
+	CoordinationPassword string
+	CoordinationDB       int
+	CacheAddr            string
+	CachePassword        string
+	CacheDB              int
+}
+
+type Cache struct {
+	Enabled    bool
+	TTL        time.Duration
+	L1MaxItems int
 }
 
 type Storage struct {
@@ -73,6 +99,7 @@ type Storage struct {
 type Worker struct {
 	Concurrency int
 	Queues      map[string]int
+	MetricsAddr string
 }
 
 type Auth struct {
@@ -96,11 +123,27 @@ type Upload struct {
 }
 
 type Outbox struct {
-	PollInterval time.Duration
-	BatchSize    int
-	MaxRetry     int
-	TaskTimeout  time.Duration
-	GCDelay      time.Duration
+	PollInterval    time.Duration
+	BatchSize       int
+	MaxRetry        int
+	TaskTimeout     time.Duration
+	GCDelay         time.Duration
+	V2EventsEnabled bool
+}
+
+// Search controls the rebuildable derived index plane. PostgreSQL remains the
+// default read path until an external index has passed snapshot/shadow gates.
+type Search struct {
+	Enabled          bool
+	WriteBackends    []string
+	ReadBackend      string
+	ShadowSampleRate float64
+	IndexEpoch       string
+}
+
+type EventStream struct {
+	KafkaEnabled bool
+	KafkaBrokers []string
 }
 
 type Sharing struct {
@@ -116,10 +159,14 @@ type Tracing struct {
 	// SamplerRatio 配合 ParentBased 使用，开发默认 1.0 全采。
 	SamplerRatio float64
 	Environment  string
+	InstanceID   string
 }
 
 // AIService 描述 aisvc 进程与 API 侧客户端的连接参数。
 type AIService struct {
+	// Role controls the P3 split. combined preserves the current compatibility
+	// process; query serves gRPC only; indexer consumes the ai queue only.
+	Role string
 	// GRPCAddr 是 aisvc 的 gRPC 监听地址。
 	GRPCAddr string
 	// Target 是 API 侧的 dial 目标：host:port 或 etcd resolver URL。
@@ -189,10 +236,18 @@ type AI struct {
 }
 
 func Load() (Config, error) {
+	legacyRedisAddr := env("REDIS_ADDR", "127.0.0.1:6379")
+	legacyRedisPassword := os.Getenv("REDIS_PASSWORD")
+	legacyRedisDB := envInt("REDIS_DB", 0)
+	postgresPrimaryDSN := os.Getenv("POSTGRES_PRIMARY_DSN")
+	if strings.TrimSpace(postgresPrimaryDSN) == "" {
+		postgresPrimaryDSN = env("POSTGRES_DSN", "postgres://yunpan:yunpan@127.0.0.1:5432/yunpan?sslmode=disable")
+	}
 	cfg := Config{
 		App: App{
-			Env:      env("APP_ENV", "development"),
-			LogLevel: env("LOG_LEVEL", "info"),
+			Env:        env("APP_ENV", "development"),
+			LogLevel:   env("LOG_LEVEL", "info"),
+			InstanceID: serviceInstanceID(),
 		},
 		HTTP: HTTP{
 			Addr:              env("HTTP_ADDR", ":8081"),
@@ -204,16 +259,29 @@ func Load() (Config, error) {
 			MaxHeaderBytes:    envInt("HTTP_MAX_HEADER_BYTES", 64<<10),
 		},
 		Postgres: Postgres{
-			DSN:             env("POSTGRES_DSN", "postgres://yunpan:yunpan@127.0.0.1:5432/yunpan?sslmode=disable"),
+			PrimaryDSN:      postgresPrimaryDSN,
+			DSN:             postgresPrimaryDSN,
 			MaxOpenConns:    envInt("POSTGRES_MAX_OPEN_CONNS", 32),
 			MaxIdleConns:    envInt("POSTGRES_MAX_IDLE_CONNS", 8),
 			ConnMaxLifetime: envDuration("POSTGRES_CONN_MAX_LIFETIME", 30*time.Minute),
 			ConnMaxIdleTime: envDuration("POSTGRES_CONN_MAX_IDLE_TIME", 5*time.Minute),
 		},
 		Redis: Redis{
-			Addr:     env("REDIS_ADDR", "127.0.0.1:6379"),
-			Password: os.Getenv("REDIS_PASSWORD"),
-			DB:       envInt("REDIS_DB", 0),
+			Addr: legacyRedisAddr, Password: legacyRedisPassword, DB: legacyRedisDB,
+			BrokerAddr:           env("REDIS_BROKER_ADDR", legacyRedisAddr),
+			BrokerPassword:       env("REDIS_BROKER_PASSWORD", legacyRedisPassword),
+			BrokerDB:             envInt("REDIS_BROKER_DB", legacyRedisDB),
+			CoordinationAddr:     env("REDIS_COORDINATION_ADDR", legacyRedisAddr),
+			CoordinationPassword: env("REDIS_COORDINATION_PASSWORD", legacyRedisPassword),
+			CoordinationDB:       envInt("REDIS_COORDINATION_DB", legacyRedisDB),
+			CacheAddr:            env("REDIS_CACHE_ADDR", legacyRedisAddr),
+			CachePassword:        env("REDIS_CACHE_PASSWORD", legacyRedisPassword),
+			CacheDB:              envInt("REDIS_CACHE_DB", legacyRedisDB),
+		},
+		Cache: Cache{
+			Enabled:    envBool("CACHE_ENABLED", true),
+			TTL:        envDuration("CACHE_TTL", 5*time.Minute),
+			L1MaxItems: envInt("CACHE_L1_MAX_ITEMS", 512),
 		},
 		Storage: Storage{
 			Endpoint:         env("S3_ENDPOINT", "127.0.0.1:9000"),
@@ -229,6 +297,7 @@ func Load() (Config, error) {
 		},
 		Worker: Worker{
 			Concurrency: envInt("WORKER_CONCURRENCY", 8),
+			MetricsAddr: env("WORKER_METRICS_ADDR", ":8083"),
 			Queues: map[string]int{
 				"ai":          envInt("WORKER_QUEUE_AI", 4),
 				"media":       envInt("WORKER_QUEUE_MEDIA", 4),
@@ -254,12 +323,21 @@ func Load() (Config, error) {
 			CleanupBatch:    envInt("UPLOAD_CLEANUP_BATCH", 100),
 		},
 		Outbox: Outbox{
-			PollInterval: envDuration("OUTBOX_POLL_INTERVAL", time.Second),
-			BatchSize:    envInt("OUTBOX_BATCH_SIZE", 20),
-			MaxRetry:     envInt("OUTBOX_TASK_MAX_RETRY", 8),
-			TaskTimeout:  envDuration("OUTBOX_TASK_TIMEOUT", 30*time.Minute),
-			GCDelay:      envDuration("OBJECT_GC_DELAY", 24*time.Hour),
+			PollInterval:    envDuration("OUTBOX_POLL_INTERVAL", time.Second),
+			BatchSize:       envInt("OUTBOX_BATCH_SIZE", 20),
+			MaxRetry:        envInt("OUTBOX_TASK_MAX_RETRY", 8),
+			TaskTimeout:     envDuration("OUTBOX_TASK_TIMEOUT", 30*time.Minute),
+			GCDelay:         envDuration("OBJECT_GC_DELAY", 24*time.Hour),
+			V2EventsEnabled: envBool("OUTBOX_V2_EVENTS_ENABLED", false),
 		},
+		Search: Search{
+			Enabled:          envBool("SEARCH_INDEX_ENABLED", false),
+			WriteBackends:    envList("SEARCH_WRITE_BACKENDS", []string{"postgres"}),
+			ReadBackend:      env("SEARCH_READ_BACKEND", "postgres"),
+			ShadowSampleRate: envFloat("SEARCH_SHADOW_SAMPLE_RATE", 0),
+			IndexEpoch:       env("SEARCH_INDEX_EPOCH", "v1"),
+		},
+		EventStream: EventStream{KafkaEnabled: envBool("KAFKA_ENABLED", false), KafkaBrokers: envList("KAFKA_BROKERS", []string{"kafka:9092"})},
 		Sharing: Sharing{
 			Secret:    env("SHARE_SECRET", "bx-yunpan-development-share-secret"),
 			AccessTTL: envDuration("SHARE_ACCESS_TTL", 15*time.Minute),
@@ -287,6 +365,7 @@ func Load() (Config, error) {
 			RateLimitReprocessPerMinute: envInt("AI_RATE_LIMIT_REPROCESS_PER_MINUTE", 3),
 		},
 		AIService: AIService{
+			Role:                  env("AI_SERVICE_ROLE", "combined"),
 			GRPCAddr:              env("AISVC_GRPC_ADDR", ":8082"),
 			Target:                env("AISVC_GRPC_TARGET", "127.0.0.1:8082"),
 			CallTimeout:           envDuration("AISVC_CALL_TIMEOUT", 120*time.Second),
@@ -305,6 +384,7 @@ func Load() (Config, error) {
 			Endpoint:     env("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317"),
 			SamplerRatio: envFloat("OTEL_TRACES_SAMPLER_ARG", 1.0),
 			Environment:  env("APP_ENV", "development"),
+			InstanceID:   serviceInstanceID(),
 		},
 		Registry: Registry{
 			Enabled:       envBool("ETCD_ENABLED", false),
@@ -331,23 +411,43 @@ func Load() (Config, error) {
 
 func (c Config) Validate() error {
 	var errs []error
+	if strings.TrimSpace(c.App.InstanceID) == "" {
+		errs = append(errs, errors.New("SERVICE_INSTANCE_ID is required or hostname must be available"))
+	}
 	if strings.TrimSpace(c.HTTP.Addr) == "" {
 		errs = append(errs, errors.New("HTTP_ADDR is required"))
 	}
 	if c.HTTP.ShutdownTimeout <= 0 || c.HTTP.ProbeTimeout <= 0 || c.HTTP.ReadHeaderTimeout <= 0 || c.HTTP.IdleTimeout <= 0 || c.HTTP.MaxBodyBytes <= 0 || c.HTTP.MaxHeaderBytes <= 0 {
 		errs = append(errs, errors.New("HTTP timeouts and max body size must be positive"))
 	}
-	if strings.TrimSpace(c.Postgres.DSN) == "" {
-		errs = append(errs, errors.New("POSTGRES_DSN is required"))
+	primaryDSN := c.Postgres.PrimaryDSN
+	if primaryDSN == "" {
+		primaryDSN = c.Postgres.DSN
+	}
+	if strings.TrimSpace(primaryDSN) == "" {
+		errs = append(errs, errors.New("POSTGRES_PRIMARY_DSN or POSTGRES_DSN is required"))
 	}
 	if c.Postgres.MaxOpenConns <= 0 || c.Postgres.MaxIdleConns < 0 || c.Postgres.MaxIdleConns > c.Postgres.MaxOpenConns || c.Postgres.ConnMaxLifetime <= 0 || c.Postgres.ConnMaxIdleTime <= 0 {
 		errs = append(errs, errors.New("Postgres pool settings are invalid"))
 	}
-	if strings.TrimSpace(c.Redis.Addr) == "" {
-		errs = append(errs, errors.New("REDIS_ADDR is required"))
+	for name, addr := range map[string]string{
+		"REDIS_ADDR": c.Redis.Addr, "REDIS_BROKER_ADDR": c.Redis.BrokerAddr,
+		"REDIS_COORDINATION_ADDR": c.Redis.CoordinationAddr, "REDIS_CACHE_ADDR": c.Redis.CacheAddr,
+	} {
+		if strings.TrimSpace(addr) == "" {
+			errs = append(errs, fmt.Errorf("%s is required", name))
+		}
 	}
-	if c.Redis.DB < 0 {
-		errs = append(errs, errors.New("REDIS_DB cannot be negative"))
+	for name, db := range map[string]int{
+		"REDIS_DB": c.Redis.DB, "REDIS_BROKER_DB": c.Redis.BrokerDB,
+		"REDIS_COORDINATION_DB": c.Redis.CoordinationDB, "REDIS_CACHE_DB": c.Redis.CacheDB,
+	} {
+		if db < 0 {
+			errs = append(errs, fmt.Errorf("%s cannot be negative", name))
+		}
+	}
+	if c.Cache.TTL <= 0 || c.Cache.L1MaxItems <= 0 {
+		errs = append(errs, errors.New("CACHE_TTL and CACHE_L1_MAX_ITEMS must be positive"))
 	}
 	if strings.TrimSpace(c.Storage.Endpoint) == "" || strings.TrimSpace(c.Storage.PublicEndpoint) == "" || strings.TrimSpace(c.Storage.Bucket) == "" || strings.TrimSpace(c.Storage.Region) == "" {
 		errs = append(errs, errors.New("S3_ENDPOINT, S3_PUBLIC_ENDPOINT, S3_BUCKET, and S3_REGION are required"))
@@ -360,6 +460,9 @@ func (c Config) Validate() error {
 	}
 	if c.Storage.ReadURLTTL <= 0 {
 		errs = append(errs, errors.New("S3_READ_URL_TTL must be positive"))
+	}
+	if strings.TrimSpace(c.Worker.MetricsAddr) == "" {
+		errs = append(errs, errors.New("WORKER_METRICS_ADDR is required"))
 	}
 	if c.Worker.Concurrency <= 0 {
 		errs = append(errs, errors.New("WORKER_CONCURRENCY must be positive"))
@@ -383,6 +486,32 @@ func (c Config) Validate() error {
 	}
 	if c.Outbox.PollInterval <= 0 || c.Outbox.BatchSize <= 0 || c.Outbox.MaxRetry < 0 || c.Outbox.TaskTimeout <= 0 || c.Outbox.GCDelay < 0 {
 		errs = append(errs, errors.New("outbox settings are invalid"))
+	}
+	if c.Search.ShadowSampleRate < 0 || c.Search.ShadowSampleRate > 1 {
+		errs = append(errs, errors.New("SEARCH_SHADOW_SAMPLE_RATE must be in [0, 1]"))
+	}
+	if strings.TrimSpace(c.Search.IndexEpoch) == "" {
+		errs = append(errs, errors.New("SEARCH_INDEX_EPOCH is required"))
+	}
+	validSearchBackend := func(value string) bool {
+		return value == "postgres" || value == "es_qdrant"
+	}
+	if !validSearchBackend(c.Search.ReadBackend) && c.Search.ReadBackend != "shadow" {
+		errs = append(errs, errors.New("SEARCH_READ_BACKEND must be postgres, shadow, or es_qdrant"))
+	}
+	if len(c.Search.WriteBackends) == 0 {
+		errs = append(errs, errors.New("SEARCH_WRITE_BACKENDS must not be empty"))
+	}
+	for _, backend := range c.Search.WriteBackends {
+		if !validSearchBackend(backend) {
+			errs = append(errs, fmt.Errorf("unsupported search write backend %q", backend))
+		}
+	}
+	if c.Search.Enabled && c.Search.ReadBackend == "es_qdrant" && !contains(c.Search.WriteBackends, "es_qdrant") {
+		errs = append(errs, errors.New("SEARCH_READ_BACKEND=es_qdrant requires es_qdrant in SEARCH_WRITE_BACKENDS"))
+	}
+	if c.EventStream.KafkaEnabled && len(c.EventStream.KafkaBrokers) == 0 {
+		errs = append(errs, errors.New("KAFKA_BROKERS is required when KAFKA_ENABLED=true"))
 	}
 	if c.Sharing.Secret == "" || c.Sharing.AccessTTL <= 0 {
 		errs = append(errs, errors.New("share secret and positive access TTL are required"))
@@ -414,6 +543,9 @@ func (c Config) Validate() error {
 		}
 		if strings.TrimSpace(c.AIService.GRPCAddr) == "" || strings.TrimSpace(c.AIService.Target) == "" {
 			errs = append(errs, errors.New("AISVC_GRPC_ADDR and AISVC_GRPC_TARGET are required"))
+		}
+		if c.AIService.Role != "combined" && c.AIService.Role != "query" && c.AIService.Role != "indexer" {
+			errs = append(errs, errors.New("AI_SERVICE_ROLE must be combined, query, or indexer"))
 		}
 		// 三层 deadline 收敛：API 调用预算不能短于 aisvc 单次 Provider 调用超时，
 		// 否则请求必然在下游还没做完时就被上游掐断。
@@ -468,6 +600,16 @@ func (c Config) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func serviceInstanceID() string {
+	if value := strings.TrimSpace(os.Getenv("SERVICE_INSTANCE_ID")); value != "" {
+		return value
+	}
+	if hostname, err := os.Hostname(); err == nil && strings.TrimSpace(hostname) != "" {
+		return strings.TrimSpace(hostname)
+	}
+	return "unknown"
 }
 
 // envList 解析逗号分隔的列表，忽略空白项。
@@ -553,4 +695,13 @@ func envDuration(name string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return parsed
+}
+
+func contains(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }

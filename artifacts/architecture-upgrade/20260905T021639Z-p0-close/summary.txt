@@ -1,0 +1,7 @@
+gofmt=0
+go_test=0
+go_vet=0
+web_test=0
+shell_syntax=0
+diff_check=0
+status=1

@@ -5,11 +5,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	"gorm.io/gorm"
 )
 
 type Document struct {
-	ID              uuid.UUID `gorm:"type:uuid;primaryKey"`
-	ObjectID        uuid.UUID `gorm:"type:uuid"`
+	ID              uuid.UUID  `gorm:"type:uuid;primaryKey"`
+	ObjectID        uuid.UUID  `gorm:"type:uuid"`
+	ActiveVersionID *uuid.UUID `gorm:"type:uuid"`
 	Status          string
 	Summary         *string
 	Tags            pq.StringArray `gorm:"type:text[]"`
@@ -23,6 +25,29 @@ type Document struct {
 
 func (Document) TableName() string { return "ai_documents" }
 
+type DocumentVersion struct {
+	ID              uuid.UUID `gorm:"type:uuid;primaryKey"`
+	DocumentID      uuid.UUID `gorm:"type:uuid"`
+	ObjectID        uuid.UUID `gorm:"type:uuid"`
+	PipelineVersion string
+	ModelVersion    string
+	Generation      int64
+	Status          string
+	Summary         *string
+	Tags            pq.StringArray `gorm:"type:text[]"`
+	Language        *string
+	ErrorCode       *string
+	LeaseToken      *uuid.UUID `gorm:"type:uuid"`
+	LeaseUntil      *time.Time
+	LastError       *string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	IndexedAt       *time.Time
+	RetiredAt       *time.Time
+}
+
+func (DocumentVersion) TableName() string { return "ai_document_versions" }
+
 type Task struct {
 	ID           uuid.UUID `gorm:"type:uuid;primaryKey"`
 	OwnerID      uuid.UUID `gorm:"type:uuid"`
@@ -33,6 +58,7 @@ type Task struct {
 	Status       string
 	Progress     int
 	Attempt      int
+	Version      int64
 	ErrorCode    *string
 	ErrorMessage *string
 	CreatedAt    time.Time
@@ -40,6 +66,13 @@ type Task struct {
 }
 
 func (Task) TableName() string { return "async_tasks" }
+
+func (t *Task) BeforeCreate(_ *gorm.DB) error {
+	if t.Version == 0 {
+		t.Version = 1
+	}
+	return nil
+}
 
 type SearchInput struct {
 	Query             string

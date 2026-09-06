@@ -1,0 +1,41 @@
+?   	github.com/11bronx11/bx_yunpan/backend/api	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/aisvc	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/api	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/maintenance-worker	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/media-worker	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/migrate	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/object-worker	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/outbox-relay	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/worker	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai	0.442s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcclient	0.145s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcserver	0.062s
+?   	github.com/11bronx11/bx_yunpan/backend/internal/ai/pb	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/rag	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/ragtest	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/bootstrap	0.033s
+?   	github.com/11bronx11/bx_yunpan/backend/internal/contract	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/drive	0.020s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/eventcontract	(cached)
+?   	github.com/11bronx11/bx_yunpan/backend/internal/identity	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/media	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/objectstore	0.010s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/outbox	0.011s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ownerepoch	0.007s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/breaker	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/cache	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/config	0.003s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/dblock	(cached)
+?   	github.com/11bronx11/bx_yunpan/backend/internal/platform/dependencies	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/health	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/httpapi	0.023s
+?   	github.com/11bronx11/bx_yunpan/backend/internal/platform/logging	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/registry	(cached)
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/storageurl	(cached)
+?   	github.com/11bronx11/bx_yunpan/backend/internal/platform/tracing	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/worker	0.022s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/recovery	0.017s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/sharing	0.045s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/storageops	0.021s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/upload	0.018s

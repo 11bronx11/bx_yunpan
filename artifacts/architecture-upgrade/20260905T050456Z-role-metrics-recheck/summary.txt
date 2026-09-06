@@ -1,0 +1,9 @@
+outbox-relay metrics=ok
+outbox-relay exit=124
+object-worker metrics=ok
+object-worker exit=124
+media-worker metrics=ok
+media-worker exit=124
+maintenance-worker metrics=ok
+maintenance-worker exit=124
+/bx-yunpan-worker-1 running

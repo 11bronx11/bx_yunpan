@@ -26,4 +26,5 @@ logs/
 .idea/
 .DS_Store
 Thumbs.db
-docs/
+docs/*
+!docs/ARCHITECTURE_UPGRADE_FINAL_EXECUTION_PLAN.md

@@ -56,7 +56,7 @@ func (h *FileHTTP) rename(c *gin.Context) {
 		new(HTTP).writeError(c, err)
 		return
 	}
-	file, err := h.manager.Rename(ownerID, fileID, version, request.Name)
+	file, err := h.manager.RenameWithContext(c.Request.Context(), ownerID, fileID, version, request.Name)
 	if err != nil {
 		new(HTTP).writeError(c, err)
 		return
@@ -77,7 +77,7 @@ func (h *FileHTTP) move(c *gin.Context) {
 		new(HTTP).writeError(c, err)
 		return
 	}
-	file, err := h.manager.Move(ownerID, fileID, request.TargetFolderID, version)
+	file, err := h.manager.MoveWithContext(c.Request.Context(), ownerID, fileID, request.TargetFolderID, version)
 	if err != nil {
 		new(HTTP).writeError(c, err)
 		return

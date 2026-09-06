@@ -23,6 +23,7 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/drive"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
+	platformcache "github.com/11bronx11/bx_yunpan/backend/internal/platform/cache"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dependencies"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx"
@@ -35,6 +36,17 @@ import (
 // AI 模块是唯一有真实独立扩容理由的模块：抽取、OCR、Embedding 都是 CPU/IO
 // 重活，与 API 的请求特征不同，混在一个进程里会互相挤资源。
 func RunAISvc(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	switch cfg.AIService.Role {
+	case "query":
+		return RunAIQuery(ctx, cfg, logger)
+	case "indexer":
+		return RunAIIndexer(ctx, cfg, logger)
+	default:
+		return runCombinedAISvc(ctx, cfg, logger)
+	}
+}
+
+func runCombinedAISvc(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	deps, err := dependencies.Open(ctx, cfg)
 	if err != nil {
 		return err
@@ -43,13 +55,14 @@ func RunAISvc(ctx context.Context, cfg config.Config, logger *slog.Logger) error
 
 	driveService := drive.NewService(deps.GORM)
 	objects := objectstore.NewService(deps.GORM)
-	aiService := ai.NewService(deps.GORM, driveService, objects, deps.Storage, cfg.AI)
+	aiCache := newQueryEmbeddingCache(cfg, deps)
+	aiService := ai.NewServiceWithCache(deps.GORM, driveService, objects, deps.Storage, cfg.AI, aiCache)
 
 	// 限流下移到 aisvc：放 API 侧的话多副本各自计数，总量会是副本数的倍数，
 	// 对下游 LLM 配额没有保护作用。
 	var limiter ai.RequestLimiter
 	if cfg.AI.RateLimitEnabled {
-		limiter = ai.NewRequestLimiter(deps.Redis, ai.RateLimits{
+		limiter = ai.NewRequestLimiter(deps.RedisCoordination, ai.RateLimits{
 			SearchPerMinute:    cfg.AI.RateLimitSearchPerMinute,
 			AskPerMinute:       cfg.AI.RateLimitAskPerMinute,
 			ReprocessPerMinute: cfg.AI.RateLimitReprocessPerMinute,
@@ -93,8 +106,9 @@ func RunAISvc(ctx context.Context, cfg config.Config, logger *slog.Logger) error
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	defer stopWorker()
 	aiQueues := map[string]int{platformworker.QueueAI: cfg.Worker.Queues[platformworker.QueueAI]}
+	workerMetrics := platformworker.NewMetrics(registry, platformworker.Role("aisvc"), aiQueues, deps.RedisBroker)
 	go func() {
-		workerErr <- platformworker.RunQueues(workerCtx, cfg, aiQueues, logger, aiWorkerHandlers(aiService, logger))
+		workerErr <- platformworker.RunQueuesWithMetrics(workerCtx, cfg, aiQueues, logger, aiWorkerHandlers(aiService, logger), workerMetrics)
 	}()
 
 	select {
@@ -115,6 +129,93 @@ func RunAISvc(ctx context.Context, cfg config.Config, logger *slog.Logger) error
 	server.GracefulStop()
 	stopWorker()
 	return nil
+}
+
+// RunAIQuery is the online half of the P3 split. It owns the gRPC query/ask
+// contract and does not consume the asynchronous ai queue.
+func RunAIQuery(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	deps, err := dependencies.Open(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer deps.Close()
+	service := ai.NewServiceWithCache(deps.GORM, drive.NewService(deps.GORM), objectstore.NewService(deps.GORM), deps.Storage, cfg.AI,
+		newQueryEmbeddingCache(cfg, deps))
+	var limiter ai.RequestLimiter
+	if cfg.AI.RateLimitEnabled {
+		limiter = ai.NewRequestLimiter(deps.RedisCoordination, ai.RateLimits{
+			SearchPerMinute: cfg.AI.RateLimitSearchPerMinute, AskPerMinute: cfg.AI.RateLimitAskPerMinute,
+			ReprocessPerMinute: cfg.AI.RateLimitReprocessPerMinute,
+		})
+	}
+	server, healthServer, listener, deregister, serverErr, registry, err := startAIServer(ctx, cfg, logger, service, limiter)
+	if err != nil {
+		return err
+	}
+	go serveWorkerMetrics(ctx, cfg.Worker.MetricsAddr, registry, logger)
+	select {
+	case <-ctx.Done():
+	case err := <-serverErr:
+		return fmt.Errorf("serve ai-query grpc: %w", err)
+	}
+	healthServer.SetServingStatus(pb.AIService_ServiceDesc.ServiceName, healthpb.HealthCheckResponse_NOT_SERVING)
+	deregister()
+	server.GracefulStop()
+	_ = listener.Close()
+	return nil
+}
+
+// RunAIIndexer is the offline half of the P3 split. It owns the ai queue and
+// never advertises an online gRPC endpoint, so query replicas can be scaled
+// independently of extraction/embedding workers.
+func RunAIIndexer(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	deps, err := dependencies.Open(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer deps.Close()
+	service := ai.NewServiceWithCache(deps.GORM, drive.NewService(deps.GORM), objectstore.NewService(deps.GORM), deps.Storage, cfg.AI, nil)
+	aiQueues := map[string]int{platformworker.QueueAI: cfg.Worker.Queues[platformworker.QueueAI]}
+	metricsRegistry := prometheus.NewRegistry()
+	workerMetrics := platformworker.NewMetrics(metricsRegistry, platformworker.Role("ai-indexer"), aiQueues, deps.RedisBroker)
+	go serveWorkerMetrics(ctx, cfg.Worker.MetricsAddr, metricsRegistry, logger)
+	return platformworker.RunQueuesWithMetrics(ctx, cfg, aiQueues, logger, aiWorkerHandlers(service, logger), workerMetrics)
+}
+
+func newQueryEmbeddingCache(cfg config.Config, deps *dependencies.Set) ai.QueryEmbeddingCache {
+	if !cfg.Cache.Enabled {
+		return nil
+	}
+	return platformcache.NewEmbeddingStore(deps.RedisCache, cfg.Cache.TTL, cfg.Cache.L1MaxItems)
+}
+
+func startAIServer(ctx context.Context, cfg config.Config, logger *slog.Logger, aiService *ai.Service, limiter ai.RequestLimiter) (*grpc.Server, *health.Server, net.Listener, func(), <-chan error, *prometheus.Registry, error) {
+	registry := prometheus.NewRegistry()
+	server := grpc.NewServer(grpcx.ServerInterceptors(grpcx.ServerOptions{
+		Logger: logger, Metrics: grpcx.NewMetrics(registry, "server"), Mapper: ai.GRPCStatus,
+	})...)
+	pb.RegisterAIServiceServer(server, grpcserver.New(aiService, limiter))
+	healthServer := health.NewServer()
+	healthpb.RegisterHealthServer(server, healthServer)
+	healthServer.SetServingStatus(pb.AIService_ServiceDesc.ServiceName, healthpb.HealthCheckResponse_SERVING)
+	listener, err := net.Listen("tcp", cfg.AIService.GRPCAddr)
+	if err != nil {
+		return nil, nil, nil, func() {}, nil, registry, fmt.Errorf("listen grpc: %w", err)
+	}
+	serverErr := make(chan error, 1)
+	go func() {
+		logger.Info("ai-query grpc listening", "address", cfg.AIService.GRPCAddr)
+		if err := server.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			serverErr <- err
+		}
+	}()
+	deregister, err := registerAISvc(ctx, cfg, logger, listener)
+	if err != nil {
+		server.Stop()
+		_ = listener.Close()
+		return nil, nil, nil, func() {}, nil, registry, err
+	}
+	return server, healthServer, listener, deregister, serverErr, registry, nil
 }
 
 // registerAISvc 把本实例注册到 etcd，返回幂等的撤销函数。
@@ -182,6 +283,8 @@ func advertiseAddress(listener net.Listener) (string, error) {
 func aiWorkerHandlers(service *ai.Service, logger *slog.Logger) map[string]asynq.HandlerFunc {
 	return map[string]asynq.HandlerFunc{
 		outbox.EventAIIndexRequested:     ai.ObjectReadyHandler(service, logger),
+		outbox.TaskAIIndexV1:             ai.ObjectReadyHandler(service, logger),
 		outbox.EventAIReprocessRequested: ai.ReprocessHandler(service, logger),
+		outbox.TaskAIReprocessV1:         ai.ReprocessHandler(service, logger),
 	}
 }

@@ -1,0 +1,35 @@
+missing staging HA variable: POSTGRES_PRIMARY_DSN
+missing staging HA variable: POSTGRES_REPLICA_DSNS
+missing staging HA variable: BACKUP_BUCKET
+missing staging HA variable: WAL_ARCHIVE_TARGET
+staging HA gate: blocked until dedicated PostgreSQL HA/PITR endpoints are configured
+ha_exit=2
+missing staging search variable: POSTGRES_PRIMARY_DSN
+missing staging search variable: SEARCH_INDEX_EPOCH
+missing staging search variable: SEARCH_ES_ENDPOINT
+missing staging search variable: SEARCH_QDRANT_ENDPOINT
+staging search gate: blocked until ES/Qdrant and writer endpoints are configured
+search_exit=2
+missing P9 staging variable: P9_ENVIRONMENT
+missing P9 staging variable: P9_CHANGE_WINDOW
+missing P9 staging variable: P9_ROLLBACK_OWNER
+missing P9 staging variable: POSTGRES_PRIMARY_DSN
+missing P9 staging variable: POSTGRES_REPLICA_DSNS
+missing P9 staging variable: WAL_ARCHIVE_TARGET
+missing P9 staging variable: BACKUP_BUCKET
+missing P9 staging variable: REDIS_BROKER_ENDPOINT
+missing P9 staging variable: REDIS_COORDINATION_ENDPOINT
+missing P9 staging variable: REDIS_CACHE_ENDPOINT
+missing P9 staging variable: MINIO_SOURCE_ENDPOINT
+missing P9 staging variable: MINIO_TARGET_ENDPOINT
+missing P9 staging variable: MINIO_CHECKSUM_MANIFEST
+missing P9 staging variable: SEARCH_ES_ENDPOINT
+missing P9 staging variable: SEARCH_QDRANT_ENDPOINT
+missing P9 staging variable: KAFKA_BROKERS
+missing P9 staging variable: GATEWAY_PUBLIC_ENDPOINT
+missing P9 staging variable: TLS_CERTIFICATE_REF
+missing P9 staging variable: ACCOUNT_DB_DSN
+missing P9 staging variable: CONTENT_DB_DSN
+missing P9 staging variable: STORAGE_DB_DSN
+P9 staging gate: blocked until dedicated endpoints, backup target, and rollback owner are configured
+p9_exit=2

@@ -13,10 +13,13 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/drive"
+	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
+	"github.com/11bronx11/bx_yunpan/backend/internal/ownerepoch"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dblock"
 )
@@ -70,6 +73,10 @@ func NewService(db *gorm.DB, driveService *drive.Service, objects *objectstore.S
 }
 
 func (s *Service) Create(ownerID, fileID uuid.UUID, expiresAt *time.Time) (Share, string, error) {
+	return s.CreateWithContext(context.Background(), ownerID, fileID, expiresAt)
+}
+
+func (s *Service) CreateWithContext(ctx context.Context, ownerID, fileID uuid.UUID, expiresAt *time.Time) (Share, string, error) {
 	if _, err := s.drive.File(ownerID, fileID); err != nil {
 		return Share{}, "", ErrNotFound
 	}
@@ -85,7 +92,19 @@ func (s *Service) Create(ownerID, fileID uuid.UUID, expiresAt *time.Time) (Share
 		ID: uuid.Must(uuid.NewV7()), OwnerID: ownerID, FileEntryID: fileID,
 		KeyHash: s.keyHash(key), ExpiresAt: expiresAt, Version: 1,
 	}
-	if err := s.db.Create(&share).Error; err != nil {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&share).Error; err != nil {
+			return err
+		}
+		epoch, err := ownerepoch.BumpACL(tx, ownerID)
+		if err != nil {
+			return err
+		}
+		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
+			EventType: eventcontract.EventShareCreatedV1, AggregateID: share.ID, AggregateVersion: share.Version,
+			Producer: "core-api", Payload: eventcontract.ShareCreatedV1{OwnerID: ownerID, ShareID: share.ID, FileEntryID: fileID, ExpiresAt: expiresAt, ACLEpoch: epoch.ACLEpoch},
+		})
+	}); err != nil {
 		return Share{}, "", err
 	}
 	return share, key, nil
@@ -106,13 +125,28 @@ func (s *Service) Get(ownerID, shareID uuid.UUID) (Share, error) {
 }
 
 func (s *Service) Revoke(ownerID, shareID uuid.UUID) error {
-	now := time.Now().UTC()
-	result := s.db.Model(&Share{}).Where("id = ? AND owner_id = ? AND revoked_at IS NULL", shareID, ownerID).
-		Updates(map[string]any{"revoked_at": now, "version": gorm.Expr("version + 1"), "updated_at": now})
-	if result.Error != nil || result.RowsAffected != 1 {
-		return ErrNotFound
-	}
-	return nil
+	return s.RevokeWithContext(context.Background(), ownerID, shareID)
+}
+
+func (s *Service) RevokeWithContext(ctx context.Context, ownerID, shareID uuid.UUID) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var share Share
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ? AND revoked_at IS NULL", shareID, ownerID).First(&share).Error; err != nil {
+			return ErrNotFound
+		}
+		now := time.Now().UTC()
+		if err := tx.Model(&share).Updates(map[string]any{"revoked_at": now, "version": gorm.Expr("version + 1"), "updated_at": now}).Error; err != nil {
+			return err
+		}
+		epoch, err := ownerepoch.BumpACL(tx, ownerID)
+		if err != nil {
+			return err
+		}
+		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
+			EventType: eventcontract.EventShareRevokedV1, AggregateID: share.ID, AggregateVersion: share.Version + 1,
+			Producer: "core-api", Payload: eventcontract.ShareRevokedV1{OwnerID: ownerID, ShareID: share.ID, RevokedAt: now, ACLEpoch: epoch.ACLEpoch},
+		})
+	})
 }
 
 func (s *Service) Resolve(key string) (Share, drive.FileView, string, time.Time, error) {
@@ -192,6 +226,10 @@ func (s *Service) Import(ctx context.Context, userID, shareID, targetFolderID uu
 		if err != nil {
 			return err
 		}
+		epoch, err := ownerepoch.Current(tx, userID)
+		if err != nil {
+			return err
+		}
 		importedID = entry.ID
 		if err := s.objects.AddReference(tx, object.ID); err != nil {
 			return err
@@ -200,7 +238,16 @@ func (s *Service) Import(ctx context.Context, userID, shareID, targetFolderID uu
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
-		return outbox.Add(tx, "share", share.ID, outbox.EventShareImported, map[string]any{"share_id": share.ID, "file_entry_id": entry.ID})
+		if err := outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
+			EventType: eventcontract.EventShareImportedV1, AggregateID: share.ID, AggregateVersion: share.Version,
+			Producer: "core-api", Payload: eventcontract.ShareImportedV1{OwnerID: userID, ShareID: share.ID, FileEntryID: entry.ID, ObjectID: object.ID, ContentEpoch: epoch.ContentEpoch},
+		}); err != nil {
+			return err
+		}
+		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
+			EventType: eventcontract.EventFileCreatedV1, AggregateID: entry.ID, AggregateVersion: entry.Version,
+			Producer: "core-api", Payload: eventcontract.FileCreatedV1{OwnerID: userID, FileEntryID: entry.ID, ObjectID: object.ID},
+		})
 	})
 	if err != nil {
 		return drive.FileView{}, err

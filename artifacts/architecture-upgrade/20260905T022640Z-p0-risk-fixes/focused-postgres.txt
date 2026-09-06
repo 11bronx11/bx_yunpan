@@ -1,0 +1,6 @@
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/drive	0.082s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/upload	0.141s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/recovery	0.200s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/outbox	0.070s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/storageops	0.005s [no tests to run]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/objectstore	0.028s

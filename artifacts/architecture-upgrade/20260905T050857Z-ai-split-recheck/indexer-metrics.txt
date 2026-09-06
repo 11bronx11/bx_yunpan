@@ -1,0 +1,10 @@
+# HELP yunpan_worker_queue_size Current total task count in an Asynq queue.
+# TYPE yunpan_worker_queue_size gauge
+yunpan_worker_queue_size{queue="ai",role="ai-indexer"} 4
+# HELP yunpan_worker_queue_state Asynq queue state values: pending, active, retry, failed, latency_seconds.
+# TYPE yunpan_worker_queue_state gauge
+yunpan_worker_queue_state{queue="ai",role="ai-indexer",state="active"} 0
+yunpan_worker_queue_state{queue="ai",role="ai-indexer",state="failed"} 27
+yunpan_worker_queue_state{queue="ai",role="ai-indexer",state="latency_seconds"} 0
+yunpan_worker_queue_state{queue="ai",role="ai-indexer",state="pending"} 0
+yunpan_worker_queue_state{queue="ai",role="ai-indexer",state="retry"} 3

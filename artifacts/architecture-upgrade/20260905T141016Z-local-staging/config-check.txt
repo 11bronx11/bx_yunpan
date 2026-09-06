@@ -1,0 +1,1 @@
+Docker application configuration matches deploy/.env (AI_ENABLED=true).

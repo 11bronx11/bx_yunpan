@@ -1,0 +1,32 @@
+## main...orign/master
+ M .gitignore
+?? ARCHITECTURE_UPGRADE.md
+?? ARCHITECTURE_UPGRADE_FINAL.md
+?? ARCHITECTURE_UPGRADE_FINAL_EXECUTION_PLAN.md
+?? ARCHITECTURE_UPGRADE_REVISED.md
+?? artifacts/architecture-upgrade/
+?? backend/internal/eventcontract/
+?? backend/internal/outbox/consumption.go
+?? backend/internal/outbox/consumption_test.go
+
+compose services
+aisvc
+api
+etcd
+minio
+postgres
+redis
+web
+worker
+
+compose images
+aisvc bx-yunpan-aisvc:local Up 11 hours (healthy)
+aisvc bx-yunpan-aisvc:local Up 11 hours (healthy)
+aisvc bx-yunpan-aisvc:local Up 11 hours (healthy)
+api bx-yunpan-api:local Up 11 hours (healthy)
+etcd quay.io/coreos/etcd:v3.6.6 Up 11 hours (healthy)
+minio docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z Up 11 hours (healthy)
+postgres docker.io/pgvector/pgvector:0.8.6-pg17 Up 11 hours (healthy)
+redis docker.io/library/redis:8.10-alpine Up 11 hours (healthy)
+web bx-yunpan-web:local Up 11 hours (healthy)
+worker bx-yunpan-worker:local Up 11 hours

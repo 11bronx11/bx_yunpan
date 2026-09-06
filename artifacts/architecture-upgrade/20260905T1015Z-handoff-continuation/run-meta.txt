@@ -1,0 +1,2 @@
+date=2026-09-05 UTC
+scope=handoff continuation; no secrets

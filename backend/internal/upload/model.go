@@ -7,13 +7,15 @@ import (
 )
 
 const (
-	StatusCreated   = "created"
-	StatusUploading = "uploading"
-	StatusVerifying = "verifying"
-	StatusCompleted = "completed"
-	StatusFailed    = "failed"
-	StatusAborted   = "aborted"
-	StatusExpired   = "expired"
+	StatusInitializing = "initializing"
+	StatusCreated      = "created"
+	StatusUploading    = "uploading"
+	StatusCompleting   = "completing"
+	StatusVerifying    = "verifying"
+	StatusCompleted    = "completed"
+	StatusFailed       = "failed"
+	StatusAborted      = "aborted"
+	StatusExpired      = "expired"
 )
 
 type Session struct {

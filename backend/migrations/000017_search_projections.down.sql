@@ -1,0 +1,10 @@
+BEGIN;
+DROP INDEX IF EXISTS idx_search_file_object;
+DROP INDEX IF EXISTS idx_search_file_owner;
+DROP TABLE IF EXISTS search_file_projections;
+DROP INDEX IF EXISTS idx_search_content_version;
+DROP INDEX IF EXISTS idx_search_content_object;
+DROP TABLE IF EXISTS search_content_projections;
+DROP INDEX IF EXISTS uq_search_index_versions_active;
+DROP TABLE IF EXISTS search_index_versions;
+COMMIT;

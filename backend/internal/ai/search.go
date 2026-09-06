@@ -253,7 +253,9 @@ func (s *Service) loadFullChunks(ctx context.Context, ownerID uuid.UUID, candida
 	err := s.db.WithContext(ctx).Raw(`
 		SELECT c.id AS chunk_id, d.id AS document_id, e.id AS file_id, c.content
 		FROM ai_chunks c
-		JOIN ai_documents d ON d.id = c.document_id AND d.status = 'indexed'
+		JOIN ai_documents d ON d.id = c.document_id
+		JOIN ai_document_versions v ON (v.id = d.active_version_id OR (d.active_version_id IS NULL AND v.document_id = d.id)) AND v.status = 'indexed'
+			AND (c.document_version_id = v.id OR (c.document_version_id IS NULL AND c.document_id = d.id AND (d.active_version_id IS NULL OR d.updated_at > v.updated_at)))
 		JOIN file_entries e ON e.object_id = d.object_id AND e.deleted_at IS NULL
 		JOIN file_objects o ON o.id = e.object_id AND o.status = 'ready'
 		WHERE c.id = ANY(CAST(@chunk_ids AS uuid[]))
@@ -327,8 +329,9 @@ func (s *Service) queryCandidates(ctx context.Context, ownerID uuid.UUID, input 
 			ts_rank_cd(c.content_tsv, plainto_tsquery('simple', @query)) AS score
 		FROM file_entries e
 		JOIN file_objects o ON o.id = e.object_id AND o.status = 'ready'
-		JOIN ai_documents d ON d.object_id = e.object_id AND d.status = 'indexed'
-		JOIN ai_chunks c ON c.document_id = d.id
+		JOIN ai_documents d ON d.object_id = e.object_id
+		JOIN ai_document_versions v ON (v.id = d.active_version_id OR (d.active_version_id IS NULL AND v.document_id = d.id)) AND v.status = 'indexed'
+		JOIN ai_chunks c ON c.document_id = d.id AND (c.document_version_id = v.id OR (c.document_version_id IS NULL AND c.document_id = d.id AND (d.active_version_id IS NULL OR d.updated_at > v.updated_at)))
 			WHERE e.owner_id = @owner AND e.deleted_at IS NULL AND ` + fileFilter + ` AND ` + folderFilter + ` AND ` + mimeFilter + `
 			AND c.content_tsv @@ plainto_tsquery('simple', @query)
 		ORDER BY score DESC LIMIT @candidate_limit`
@@ -338,8 +341,9 @@ func (s *Service) queryCandidates(ctx context.Context, ownerID uuid.UUID, input 
 			1 - (c.embedding <=> CAST(@embedding AS vector)) AS score
 		FROM file_entries e
 		JOIN file_objects o ON o.id = e.object_id AND o.status = 'ready'
-		JOIN ai_documents d ON d.object_id = e.object_id AND d.status = 'indexed'
-		JOIN ai_chunks c ON c.document_id = d.id
+		JOIN ai_documents d ON d.object_id = e.object_id
+		JOIN ai_document_versions v ON (v.id = d.active_version_id OR (d.active_version_id IS NULL AND v.document_id = d.id)) AND v.status = 'indexed'
+		JOIN ai_chunks c ON c.document_id = d.id AND (c.document_version_id = v.id OR (c.document_version_id IS NULL AND c.document_id = d.id AND (d.active_version_id IS NULL OR d.updated_at > v.updated_at)))
 			WHERE e.owner_id = @owner AND e.deleted_at IS NULL AND ` + fileFilter + ` AND ` + folderFilter + ` AND ` + mimeFilter + `
 			AND d.model_version = @model_version AND d.pipeline_version = @pipeline_version
 		ORDER BY c.embedding <=> CAST(@embedding AS vector) LIMIT @candidate_limit`

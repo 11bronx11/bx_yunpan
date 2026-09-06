@@ -195,6 +195,9 @@ AI 开启时可按需扩容 aisvc；该参数会覆盖 `deploy/.env` 中的 `AIS
 # 单独检查运行容器是否与 deploy/.env 一致
 ./deploy/config-check.sh
 
+# 在现有单机 Compose 上执行可逆的核心故障恢复演练
+./deploy/local-staging-check.sh
+
 # 跟踪当前模式下的 API、Worker、Web、迁移日志，以及可选的 aisvc、etcd 日志
 ./deploy/logs.sh
 
@@ -275,6 +278,9 @@ Docker Compose 和宿主机开发脚本都从 `deploy/.env` 读取配置。不�
 | `POSTGRES_CONN_MAX_LIFETIME` | `30m` | PostgreSQL 连接最大生命周期 |
 | `POSTGRES_CONN_MAX_IDLE_TIME` | `5m` | PostgreSQL 空闲连接回收时间 |
 | `REDIS_DB` | `0` | Redis 逻辑数据库编号 |
+| `REDIS_BROKER_ADDR/PASSWORD/DB` | 继承 `REDIS_*` | Asynq Broker 连接；可单独指向 Redis 实例 |
+| `REDIS_COORDINATION_ADDR/PASSWORD/DB` | 继承 `REDIS_*` | 选主锁、限流等协调状态连接 |
+| `REDIS_CACHE_ADDR/PASSWORD/DB` | 继承 `REDIS_*` | 两级业务缓存 L2 连接；缓存故障可回源事实库 |
 | `S3_PUBLIC_ENDPOINT` | `127.0.0.1:3000` | 浏览器实际访问到的 Web Host，参与 SigV4 签名 |
 | `S3_PUBLIC_PATH_PREFIX` | `/storage` | Web 代理对象存储的路径前缀 |
 | `S3_REGION` | `us-east-1` | S3 签名区域 |
@@ -327,6 +333,7 @@ Docker Compose 和宿主机开发脚本都从 `deploy/.env` 读取配置。不�
 | `AISVC_REPLICAS` | `1` | `up.sh` 启动的 aisvc 副本数；AI 开启时必须为正整数，仅 `AI_ENABLED=false` 时可设为 `0` |
 | `AISVC_GRPC_ADDR` | `:8082` | aisvc 监听地址 |
 | `AISVC_GRPC_TARGET` | `aisvc:8082` | API 直连 aisvc 的目标；启用 etcd 后由 resolver 发现 |
+| `AI_SERVICE_ROLE` | `combined` | AI 进程角色：`combined`、`query` 或 `indexer`；P3 split profile 使用后两者 |
 | `AISVC_CALL_TIMEOUT` | `120s` | API 到 aisvc 的总调用预算，不得短于 `AI_REQUEST_TIMEOUT` |
 | `AISVC_SEARCH_MAX_ATTEMPTS` | `3` | aisvc 搜索调用最大尝试次数 |
 | `AISVC_REPROCESS_MAX_ATTEMPTS` | `3` | aisvc 重建索引调用最大尝试次数 |
@@ -577,3 +584,16 @@ backend/migrations           PostgreSQL/pgvector Schema
 web/src                      React 云盘工作台
 deploy                       Compose、Nginx、监控和部署脚本
 ```
+
+### Derived search projection (opt-in)
+
+The default development profile keeps search reads on PostgreSQL. To exercise
+the rebuildable projection consumer locally, start with:
+
+```bash
+SEARCH_INDEX_ENABLED=true ./deploy/up.sh --no-build --distributed-workers --ai-split --redis-split --search-indexer
+```
+
+This only validates the PostgreSQL projection fallback. Elasticsearch/Qdrant,
+Kafka, PostgreSQL HA/PITR, and production Gateway checks require the dedicated
+staging gates under `deploy/staging-*-check.sh`.

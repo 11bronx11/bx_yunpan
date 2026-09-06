@@ -55,6 +55,7 @@ func Setup(ctx context.Context, cfg config.Tracing, serviceName string) (Shutdow
 		resource.WithAttributes(
 			semconv.ServiceName(serviceName),
 			attribute.String("deployment.environment", cfg.Environment),
+			attribute.String("service.instance.id", cfg.InstanceID),
 		),
 	)
 	if err != nil {

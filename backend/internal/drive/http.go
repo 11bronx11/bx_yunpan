@@ -88,7 +88,7 @@ func (h *HTTP) create(c *gin.Context) {
 		return
 	}
 	ownerID, _ := httpapi.PrincipalID(c)
-	folder, err := h.service.Create(ownerID, request.ParentID, request.Name)
+	folder, err := h.service.CreateWithContext(c.Request.Context(), ownerID, request.ParentID, request.Name)
 	h.writeFolder(c, http.StatusCreated, folder, err)
 }
 
@@ -105,7 +105,7 @@ func (h *HTTP) rename(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
-	folder, err := h.service.Rename(ownerID, folderID, version, request.Name)
+	folder, err := h.service.RenameWithContext(c.Request.Context(), ownerID, folderID, version, request.Name)
 	h.writeFolder(c, http.StatusOK, folder, err)
 }
 
@@ -122,7 +122,7 @@ func (h *HTTP) move(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
-	folder, err := h.service.Move(ownerID, folderID, request.TargetFolderID, version)
+	folder, err := h.service.MoveWithContext(c.Request.Context(), ownerID, folderID, request.TargetFolderID, version)
 	h.writeFolder(c, http.StatusOK, folder, err)
 }
 
@@ -132,7 +132,7 @@ func (h *HTTP) delete(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
-	if err := h.service.Delete(ownerID, folderID, version); err != nil {
+	if err := h.service.DeleteWithContext(c.Request.Context(), ownerID, folderID, version); err != nil {
 		h.writeError(c, err)
 		return
 	}

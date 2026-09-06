@@ -1,0 +1,28 @@
+ESLint: 1504 errors, 3933 warnings in 3 files
+═══════════════════════════════════════
+Top rules:
+  no-sequences (2402x)
+  no-unused-expressions (1479x)
+  no-mixed-operators (882x)
+  new-parens (133x)
+  no-use-before-define (107x)
+  default-case (84x)
+  no-labels (61x)
+  no-template-curly-in-string (42x)
+  no-fallthrough (39x)
+  eqeqeq (32x)
+
+Top files:
+  main.d3d2b1e5.js (5333 issues)
+    no-sequences (2383)
+    no-unused-expressions (1470)
+    no-mixed-operators (856)
+  441.126417c3.chunk.js (80 issues)
+    no-mixed-operators (26)
+    new-parens (25)
+    no-sequences (15)
+  804.cfdcdb26.chunk.js (24 issues)
+    no-use-before-define (7)
+    no-restricted-globals (5)
+    no-sequences (4)
+[full output: ~/.local/share/rtk/tee/1788587255_lint.log]

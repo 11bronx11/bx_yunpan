@@ -1,0 +1,12 @@
+backend_tests=113 passed
+backend_vet=passed
+frontend_tests=14 suites,36 tests passed
+migration_version=16|false
+api_replicas=2
+api_readiness=both healthy
+api_failover_probe=web ready 200 with api-1 stopped
+api_instance_ids=162ac58aba3d,a8a6d388b802
+ai_split=query health SERVING,indexer queue ai and metrics OK
+isolated_migration=empty up 15|f,down-one 14|f
+existing_migration=processing legacy backfill to building, final 16|f
+independent_worker_images=not built; registry TLS handshake timeout

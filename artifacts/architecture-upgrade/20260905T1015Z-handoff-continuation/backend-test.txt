@@ -1,0 +1,45 @@
+?   	github.com/11bronx11/bx_yunpan/backend/api	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/aisvc	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/api	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/maintenance-worker	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/media-worker	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/migrate	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/object-worker	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/outbox-relay	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/search-indexer	[no test files]
+?   	github.com/11bronx11/bx_yunpan/backend/cmd/worker	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai	0.397s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcclient	0.049s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcserver	0.021s
+?   	github.com/11bronx11/bx_yunpan/backend/internal/ai/pb	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/rag	0.005s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ai/ragtest	0.003s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/bootstrap	0.039s
+?   	github.com/11bronx11/bx_yunpan/backend/internal/contract	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/drive	0.247s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/eventcontract	0.012s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/eventstream	0.006s
+?   	github.com/11bronx11/bx_yunpan/backend/internal/identity	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/media	0.013s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/objectstore	0.076s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/outbox	0.194s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/ownerepoch	0.044s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/breaker	0.004s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/cache	0.006s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/config	0.003s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/dblock	0.118s
+?   	github.com/11bronx11/bx_yunpan/backend/internal/platform/dependencies	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx	0.006s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/health	0.003s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/httpapi	0.013s
+?   	github.com/11bronx11/bx_yunpan/backend/internal/platform/logging	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/registry	0.024s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/storageurl	0.009s
+?   	github.com/11bronx11/bx_yunpan/backend/internal/platform/tracing	[no test files]
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/platform/worker	0.020s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/recovery	0.198s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/search	0.105s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/sharing	0.137s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/storageops	0.110s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/upload	0.396s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/workflow	0.005s

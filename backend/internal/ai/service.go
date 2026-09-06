@@ -17,6 +17,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/drive"
+	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
@@ -36,17 +37,32 @@ var (
 )
 
 type Service struct {
-	db       *gorm.DB
-	drive    *drive.Service
-	objects  *objectstore.Service
-	storage  *minio.Client
-	provider Provider
-	reranker Reranker
-	config   config.AI
+	db             *gorm.DB
+	drive          *drive.Service
+	objects        *objectstore.Service
+	storage        *minio.Client
+	provider       Provider
+	reranker       Reranker
+	config         config.AI
+	embeddingCache QueryEmbeddingCache
+}
+
+// QueryEmbeddingCache is deliberately narrower than a general cache API. It
+// stores only derived query vectors; callers must treat errors as cache misses
+// and continue against the provider.
+type QueryEmbeddingCache interface {
+	Get(context.Context, string) ([]float32, bool, error)
+	Set(context.Context, string, []float32) error
 }
 
 func NewService(db *gorm.DB, driveService *drive.Service, objects *objectstore.Service, storage *minio.Client, cfg config.AI) *Service {
 	return &Service{db: db, drive: driveService, objects: objects, storage: storage, provider: NewProvider(cfg), reranker: NewReranker(cfg), config: cfg}
+}
+
+func NewServiceWithCache(db *gorm.DB, driveService *drive.Service, objects *objectstore.Service, storage *minio.Client, cfg config.AI, embeddingCache QueryEmbeddingCache) *Service {
+	service := NewService(db, driveService, objects, storage, cfg)
+	service.embeddingCache = embeddingCache
+	return service
 }
 
 func (s *Service) ProcessObject(ctx context.Context, objectID uuid.UUID) error {
@@ -70,7 +86,7 @@ func (s *Service) runIndex(ctx context.Context, objectID uuid.UUID, force bool) 
 	if err != nil {
 		return ErrNotFound
 	}
-	document, acquired, err := s.startDocument(objectID, force)
+	document, version, acquired, err := s.startDocumentVersion(objectID, force)
 	if err != nil {
 		return err
 	}
@@ -78,54 +94,54 @@ func (s *Service) runIndex(ctx context.Context, objectID uuid.UUID, force bool) 
 		return nil
 	}
 	if object.SizeBytes > s.config.MaxObjectBytes {
-		return s.finishUnsupported(document.ID, "ai.object_too_large")
+		return s.finishUnsupportedVersion(version, "ai.object_too_large")
 	}
 	extractionMimeType, err := s.extractionMimeType(objectID, object.MimeType)
 	if err != nil {
-		return s.finishFailed(document.ID, "ai.metadata_read_failed", err)
+		return s.finishFailedVersion(document, version, "ai.metadata_read_failed", err)
 	}
 	stream, err := s.storage.GetObject(ctx, object.Bucket, object.ObjectKey, minio.GetObjectOptions{})
 	if err != nil {
-		return s.finishFailed(document.ID, "ai.storage_read_failed", err)
+		return s.finishFailedVersion(document, version, "ai.storage_read_failed", err)
 	}
 	defer func() { _ = stream.Close() }()
 	data, err := io.ReadAll(io.LimitReader(stream, s.config.MaxObjectBytes+1))
 	if err != nil {
-		return s.finishFailed(document.ID, "ai.storage_read_failed", err)
+		return s.finishFailedVersion(document, version, "ai.storage_read_failed", err)
 	}
 	sections, err := s.extractSections(ctx, extractionMimeType, object.SizeBytes, data)
 	if errors.Is(err, errUnsupported) {
-		return s.finishUnsupported(document.ID, "ai.unsupported_type")
+		return s.finishUnsupportedVersion(version, "ai.unsupported_type")
 	}
 	if errors.Is(err, errInvalidInput) {
-		return s.finishUnsupported(document.ID, "ai.invalid_content")
+		return s.finishUnsupportedVersion(version, "ai.invalid_content")
 	}
 	if err != nil {
-		return s.finishFailed(document.ID, "ai.extraction_failed", err)
+		return s.finishFailedVersion(document, version, "ai.extraction_failed", err)
 	}
-	if err := s.touchDocument(ctx, document.ID); err != nil {
-		return s.finishFailed(document.ID, "ai.persistence_failed", err)
+	if err := s.touchDocumentVersion(ctx, version.ID, version.LeaseToken); err != nil {
+		return s.finishFailedVersion(document, version, "ai.persistence_failed", err)
 	}
 	chunks := s.makeChunksTraced(ctx, sections)
 	if len(chunks) == 0 {
-		return s.finishUnsupported(document.ID, "ai.empty_content")
+		return s.finishUnsupportedVersion(version, "ai.empty_content")
 	}
 
 	texts := make([]string, len(chunks))
 	for index := range chunks {
 		texts[index] = chunks[index].Content
 	}
-	embeddings, err := s.embedTexts(ctx, document.ID, texts)
+	embeddings, err := s.embedTexts(ctx, version.ID, version.LeaseToken, texts)
 	if err != nil {
-		return s.finishFailed(document.ID, "ai.embedding_failed", err)
+		return s.finishFailedVersion(document, version, "ai.embedding_failed", err)
 	}
 	insight, err := s.enrich(ctx, strings.Join(texts, "\n"))
 	if err != nil {
-		return s.finishFailed(document.ID, "ai.enrichment_failed", err)
+		return s.finishFailedVersion(document, version, "ai.enrichment_failed", err)
 	}
 
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("document_id = ?", document.ID).Delete(&chunkRow{}).Error; err != nil {
+		if err := tx.Where("document_version_id = ?", version.ID).Delete(&chunkRow{}).Error; err != nil {
 			return err
 		}
 		for index, chunk := range chunks {
@@ -133,22 +149,38 @@ func (s *Service) runIndex(ctx context.Context, objectID uuid.UUID, force bool) 
 				return errors.New("invalid embedding dimension")
 			}
 			if err := tx.Exec(`
-				INSERT INTO ai_chunks (id, document_id, ordinal, page_number, section, content, embedding, token_count)
-				VALUES (?, ?, ?, ?, ?, ?, ?::vector, ?)`,
-				uuid.Must(uuid.NewV7()), document.ID, index, chunk.PageNumber, nullableString(chunk.Section), chunk.Content,
+				INSERT INTO ai_chunks (id, document_id, document_version_id, ordinal, page_number, section, content, embedding, token_count)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?::vector, ?)`,
+				uuid.Must(uuid.NewV7()), document.ID, version.ID, index, chunk.PageNumber, nullableString(chunk.Section), chunk.Content,
 				vectorLiteral(embeddings[index]), len([]rune(chunk.Content))/2,
 			).Error; err != nil {
 				return err
 			}
 		}
 		now := time.Now().UTC()
-		return tx.Model(&Document{}).Where("id = ?", document.ID).Updates(map[string]any{
+		versionResult := tx.Model(&DocumentVersion{}).
+			Where("id = ? AND status = 'building' AND lease_token = ?", version.ID, version.LeaseToken).
+			Updates(map[string]any{"status": "indexed", "summary": insight.Summary, "tags": pq.StringArray(insight.Tags),
+				"language": nullableString(insight.Language), "error_code": nil, "last_error": nil,
+				"updated_at": now, "indexed_at": now, "lease_token": nil, "lease_until": nil})
+		if versionResult.Error != nil {
+			return versionResult.Error
+		}
+		if versionResult.RowsAffected != 1 {
+			return ErrProcessing
+		}
+		if err := tx.Model(&DocumentVersion{}).Where("document_id = ? AND id <> ? AND status = 'indexed' AND retired_at IS NULL", document.ID, version.ID).
+			Updates(map[string]any{"retired_at": now, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&Document{}).Where("id = ?").Updates(map[string]any{
 			"status": "indexed", "summary": insight.Summary, "tags": pq.StringArray(insight.Tags),
-			"language": nullableString(insight.Language), "error_code": nil, "model_version": s.provider.ModelVersion(), "updated_at": now,
+			"language": nullableString(insight.Language), "error_code": nil, "model_version": s.provider.ModelVersion(),
+			"active_version_id": version.ID, "updated_at": now,
 		}).Error
 	})
 	if err != nil {
-		return s.finishFailed(document.ID, "ai.persistence_failed", err)
+		return s.finishFailedVersion(document, version, "ai.persistence_failed", err)
 	}
 	return nil
 }
@@ -183,7 +215,7 @@ func (s *Service) RequestReprocess(ctx context.Context, ownerID, fileID uuid.UUI
 	dedupeKey := ownerID.String() + ":" + fileID.String() + ":" + idempotencyKey
 	task := Task{
 		ID: uuid.Must(uuid.NewV7()), OwnerID: ownerID, TaskType: "ai.reprocess", DedupeKey: dedupeKey,
-		ResourceType: "file", ResourceID: fileID, Status: "pending", Progress: 0,
+		ResourceType: "file", ResourceID: fileID, Status: "pending", Progress: 0, Version: 1,
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		result := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "task_type"}, {Name: "dedupe_key"}}, DoNothing: true}).Create(&task)
@@ -193,8 +225,9 @@ func (s *Service) RequestReprocess(ctx context.Context, ownerID, fileID uuid.UUI
 		if result.RowsAffected == 0 {
 			return tx.Where("task_type = ? AND dedupe_key = ?", task.TaskType, dedupeKey).First(&task).Error
 		}
-		return outbox.Add(tx, "ai_task", task.ID, outbox.EventAIReprocessRequested, map[string]any{
-			"task_id": task.ID, "object_id": file.ObjectID,
+		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
+			EventType: eventcontract.EventAIReprocessRequestedV1, AggregateID: task.ID, AggregateVersion: task.Version,
+			Producer: "core-api", Payload: eventcontract.AIReprocessRequestedV1{TaskID: task.ID, ObjectID: file.ObjectID},
 		})
 	})
 	return task, err
@@ -203,7 +236,7 @@ func (s *Service) RequestReprocess(ctx context.Context, ownerID, fileID uuid.UUI
 func (s *Service) ProcessTask(ctx context.Context, taskID, objectID uuid.UUID) error {
 	now := time.Now().UTC()
 	result := s.db.Model(&Task{}).Where("id = ? AND status IN ?", taskID, []string{"pending", "running", "failed"}).Updates(map[string]any{
-		"status": "running", "progress": 10, "attempt": gorm.Expr("attempt + 1"), "updated_at": now,
+		"status": "running", "progress": 10, "attempt": gorm.Expr("attempt + 1"), "version": gorm.Expr("version + 1"), "updated_at": now,
 	})
 	if result.Error != nil {
 		return result.Error
@@ -214,12 +247,12 @@ func (s *Service) ProcessTask(ctx context.Context, taskID, objectID uuid.UUID) e
 	if err := s.processObject(ctx, objectID, true); err != nil {
 		message := limitRunes(err.Error(), 500)
 		s.db.Model(&Task{}).Where("id = ?", taskID).Updates(map[string]any{
-			"status": "failed", "progress": 100, "error_code": "ai.reprocess_failed", "error_message": message, "updated_at": time.Now().UTC(),
+			"status": "failed", "progress": 100, "version": gorm.Expr("version + 1"), "error_code": "ai.reprocess_failed", "error_message": message, "updated_at": time.Now().UTC(),
 		})
 		return err
 	}
 	return s.db.Model(&Task{}).Where("id = ?", taskID).Updates(map[string]any{
-		"status": "succeeded", "progress": 100, "error_code": nil, "error_message": nil, "updated_at": time.Now().UTC(),
+		"status": "succeeded", "progress": 100, "version": gorm.Expr("version + 1"), "error_code": nil, "error_message": nil, "updated_at": time.Now().UTC(),
 	}).Error
 }
 
@@ -274,10 +307,90 @@ func (s *Service) processingLease() time.Duration {
 	return lease
 }
 
+// startDocumentVersion acquires a fencing token for one building generation.
+// The legacy ai_documents row remains a compatibility summary, while chunks
+// are written only under the private version ID. A stale indexer can therefore
+// never switch the active pointer after another worker has taken over.
+func (s *Service) startDocumentVersion(objectID uuid.UUID, force bool) (Document, DocumentVersion, bool, error) {
+	now := time.Now().UTC()
+	var document Document
+	var version DocumentVersion
+	var acquired bool
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("object_id = ?", objectID).First(&document).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			document = Document{ID: uuid.Must(uuid.NewV7()), ObjectID: objectID, Status: "processing", Tags: pq.StringArray{}, PipelineVersion: pipelineVersion, ModelVersion: s.provider.ModelVersion()}
+			if err := tx.Create(&document).Error; err != nil {
+				return err
+			}
+		} else if !force && document.ActiveVersionID != nil {
+			var active DocumentVersion
+			if err := tx.First(&active, "id = ?", *document.ActiveVersionID).Error; err == nil && active.Status == "indexed" && active.PipelineVersion == pipelineVersion && active.ModelVersion == s.provider.ModelVersion() {
+				return nil
+			}
+		}
+
+		var building DocumentVersion
+		if err := tx.Where("document_id = ? AND status = 'building'", document.ID).Order("generation DESC").First(&building).Error; err == nil {
+			if building.LeaseUntil != nil && building.LeaseUntil.After(now) {
+				return ErrProcessing
+			}
+			// An expired building version is retained as failed history. This
+			// avoids deleting a generation that another reader may still inspect.
+			_ = tx.Model(&DocumentVersion{}).Where("id = ? AND status = 'building'", building.ID).Updates(map[string]any{
+				"status": "failed", "error_code": "ai.lease_expired", "last_error": "indexer lease expired", "updated_at": now,
+			}).Error
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		var generation int64
+		if err := tx.Model(&DocumentVersion{}).Where("document_id = ?", document.ID).Select("COALESCE(MAX(generation), 0)").Scan(&generation).Error; err != nil {
+			return err
+		}
+		leaseToken := uuid.Must(uuid.NewV7())
+		version = DocumentVersion{ID: uuid.Must(uuid.NewV7()), DocumentID: document.ID, ObjectID: objectID,
+			PipelineVersion: pipelineVersion, ModelVersion: s.provider.ModelVersion(), Generation: generation + 1,
+			Status: "building", Tags: pq.StringArray{}, LeaseToken: &leaseToken,
+			LeaseUntil: timePtr(now.Add(s.processingLease())), CreatedAt: now, UpdatedAt: now}
+		if err := tx.Create(&version).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&Document{}).Where("id = ?", document.ID).Updates(map[string]any{
+			"status": "processing", "pipeline_version": pipelineVersion, "model_version": s.provider.ModelVersion(), "error_code": nil, "updated_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		acquired = true
+		return nil
+	})
+	return document, version, acquired, err
+}
+
+func timePtr(value time.Time) *time.Time { return &value }
+
 func (s *Service) touchDocument(ctx context.Context, documentID uuid.UUID) error {
 	result := s.db.WithContext(ctx).Model(&Document{}).
 		Where("id = ? AND status = ?", documentID, "processing").
 		Update("updated_at", time.Now().UTC())
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrProcessing
+	}
+	return nil
+}
+
+func (s *Service) touchDocumentVersion(ctx context.Context, versionID uuid.UUID, token *uuid.UUID) error {
+	if token == nil {
+		return ErrProcessing
+	}
+	result := s.db.WithContext(ctx).Model(&DocumentVersion{}).
+		Where("id = ? AND status = 'building' AND lease_token = ? AND lease_until > ?", versionID, *token, time.Now().UTC()).
+		Updates(map[string]any{"updated_at": time.Now().UTC(), "lease_until": time.Now().UTC().Add(s.processingLease())})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -298,6 +411,59 @@ func (s *Service) finishFailed(documentID uuid.UUID, code string, cause error) e
 		"status": "failed", "error_code": code, "updated_at": time.Now().UTC(),
 	}).Error; err != nil {
 		return err
+	}
+	return fmt.Errorf("%s: %w", code, cause)
+}
+
+func (s *Service) finishUnsupportedVersion(version DocumentVersion, code string) error {
+	now := time.Now().UTC()
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&DocumentVersion{}).
+			Where("id = ? AND status = 'building' AND lease_token = ?", version.ID, version.LeaseToken).
+			Updates(map[string]any{
+				"status": "unsupported", "error_code": code, "updated_at": now, "lease_token": nil, "lease_until": nil,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrProcessing
+		}
+
+		// The legacy summary row is still read by compatibility callers. A
+		// first-generation unsupported document must leave processing, while a
+		// failed replacement must keep the previously indexed active version.
+		var document Document
+		if err := tx.Select("id", "active_version_id").First(&document, "id = ?", version.DocumentID).Error; err != nil {
+			return err
+		}
+		if document.ActiveVersionID != nil {
+			var active DocumentVersion
+			if err := tx.Select("id", "status").First(&active, "id = ?", *document.ActiveVersionID).Error; err != nil {
+				return err
+			}
+			if active.Status == "indexed" {
+				return tx.Model(&Document{}).
+					Where("id = ? AND active_version_id = ?", document.ID, *document.ActiveVersionID).
+					Updates(map[string]any{"status": "indexed", "error_code": nil, "updated_at": now}).Error
+			}
+		}
+		return tx.Model(&Document{}).
+			Where("id = ? AND active_version_id IS NULL", document.ID).
+			Updates(map[string]any{"status": "unsupported", "error_code": code, "updated_at": now}).Error
+	})
+}
+
+func (s *Service) finishFailedVersion(document Document, version DocumentVersion, code string, cause error) error {
+	if err := s.db.Model(&DocumentVersion{}).Where("id = ? AND status = 'building' AND lease_token = ?", version.ID, version.LeaseToken).Updates(map[string]any{
+		"status": "failed", "error_code": code, "last_error": limitRunes(cause.Error(), 500), "updated_at": time.Now().UTC(), "lease_token": nil, "lease_until": nil,
+	}).Error; err != nil {
+		return err
+	}
+	// Preserve a previously indexed active version. Only a document without an
+	// active pointer needs its legacy summary marked failed.
+	if document.ActiveVersionID == nil {
+		_ = s.db.Model(&Document{}).Where("id = ? AND active_version_id IS NULL", document.ID).Updates(map[string]any{"status": "failed", "error_code": code, "updated_at": time.Now().UTC()}).Error
 	}
 	return fmt.Errorf("%s: %w", code, cause)
 }

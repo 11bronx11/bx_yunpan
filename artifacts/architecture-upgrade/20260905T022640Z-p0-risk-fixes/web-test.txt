@@ -1,0 +1,24 @@
+
+> tc-ai@0.1.0 test
+> react-scripts test --watchAll=false --runInBand
+
+PASS src/pages/Drive.test.js (5.116 s)
+PASS src/App.test.js
+PASS src/components/SearchResultModal.test.js
+PASS src/pages/AIWorkspace.test.js
+PASS src/components/MoveFileModal.test.js
+PASS src/pages/AIAsk.test.js
+PASS src/components/AIIndexModal.test.js
+PASS src/components/FileSummaryModal.test.js
+PASS src/contexts/TransferContext.test.js
+PASS src/components/design/ProductUI.test.js
+PASS src/services/drive.test.js
+PASS src/services/api.test.js
+PASS src/utils/download.test.js
+PASS src/utils/fileCapabilities.test.js
+
+Test Suites: 14 passed, 14 total
+Tests:       36 passed, 36 total
+Snapshots:   0 total
+Time:        18.016 s, estimated 19 s
+Ran all test suites.

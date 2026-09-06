@@ -1,0 +1,7 @@
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/drive	0.192s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/upload	0.594s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/recovery	0.222s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/outbox	0.108s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/storageops	0.051s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/objectstore	0.047s
+ok  	github.com/11bronx11/bx_yunpan/backend/internal/sharing	0.051s

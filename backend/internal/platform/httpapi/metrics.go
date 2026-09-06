@@ -13,41 +13,46 @@ type Metrics struct {
 	Registry *prometheus.Registry
 	requests *prometheus.CounterVec
 	duration *prometheus.HistogramVec
-	inflight prometheus.Gauge
+	inflight *prometheus.GaugeVec
+	instance string
 }
 
-func NewMetrics() *Metrics {
+func NewMetrics(instanceIDs ...string) *Metrics {
+	instance := "unknown"
+	if len(instanceIDs) > 0 && instanceIDs[0] != "" {
+		instance = instanceIDs[0]
+	}
 	registry := prometheus.NewRegistry()
 	requests := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "yunpan",
 		Subsystem: "http",
 		Name:      "requests_total",
 		Help:      "Total HTTP requests.",
-	}, []string{"method", "route", "status"})
+	}, []string{"method", "route", "status", "instance"})
 	duration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "yunpan",
 		Subsystem: "http",
 		Name:      "request_duration_seconds",
 		Help:      "HTTP request latency.",
 		Buckets:   prometheus.DefBuckets,
-	}, []string{"method", "route"})
-	inflight := prometheus.NewGauge(prometheus.GaugeOpts{
+	}, []string{"method", "route", "instance"})
+	inflight := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "yunpan",
 		Subsystem: "http",
 		Name:      "inflight_requests",
 		Help:      "Current in-flight HTTP requests.",
-	})
+	}, []string{"instance"})
 
 	registry.MustRegister(requests, duration, inflight)
 	registry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
-	return &Metrics{Registry: registry, requests: requests, duration: duration, inflight: inflight}
+	return &Metrics{Registry: registry, requests: requests, duration: duration, inflight: inflight, instance: instance}
 }
 
 func (m *Metrics) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		started := time.Now()
-		m.inflight.Inc()
-		defer m.inflight.Dec()
+		m.inflight.WithLabelValues(m.instance).Inc()
+		defer m.inflight.WithLabelValues(m.instance).Dec()
 
 		c.Next()
 
@@ -55,7 +60,7 @@ func (m *Metrics) Middleware() gin.HandlerFunc {
 		if route == "" {
 			route = "unmatched"
 		}
-		m.requests.WithLabelValues(c.Request.Method, route, strconv.Itoa(c.Writer.Status())).Inc()
-		m.duration.WithLabelValues(c.Request.Method, route).Observe(time.Since(started).Seconds())
+		m.requests.WithLabelValues(c.Request.Method, route, strconv.Itoa(c.Writer.Status()), m.instance).Inc()
+		m.duration.WithLabelValues(c.Request.Method, route, m.instance).Observe(time.Since(started).Seconds())
 	}
 }

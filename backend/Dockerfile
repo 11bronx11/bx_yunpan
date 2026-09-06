@@ -11,7 +11,7 @@ COPY . .
 ARG GO_BUILD_PARALLELISM=1
 ARG GO_BUILD_MAX_PROCS=2
 ARG TARGET=api
-RUN case "${TARGET}" in api|worker|aisvc|migrate) ;; *) echo "unsupported TARGET=${TARGET}" >&2; exit 1 ;; esac \
+RUN case "${TARGET}" in api|worker|aisvc|migrate|outbox-relay|object-worker|media-worker|maintenance-worker|search-indexer) ;; *) echo "unsupported TARGET=${TARGET}" >&2; exit 1 ;; esac \
     && CGO_ENABLED=0 GOMAXPROCS="${GO_BUILD_MAX_PROCS}" \
        go build -p="${GO_BUILD_PARALLELISM}" -trimpath -ldflags="-s -w" -o /out/service ./cmd/${TARGET}
 

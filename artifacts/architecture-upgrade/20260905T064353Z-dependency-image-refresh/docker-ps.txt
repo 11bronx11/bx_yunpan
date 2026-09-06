@@ -1,0 +1,17 @@
+bx-yunpan-ai-indexer-1	bx-yunpan-aisvc:local	Up 4 minutes
+bx-yunpan-ai-query-1	bx-yunpan-aisvc:local	Up 4 minutes (healthy)
+bx-yunpan-ai-query-2	bx-yunpan-aisvc:local	Up 4 minutes (healthy)
+bx-yunpan-api-1	bx-yunpan-api:local	Up 4 minutes (healthy)
+bx-yunpan-api-2	bx-yunpan-api:local	Up 4 minutes (healthy)
+bx-yunpan-etcd-1	quay.io/coreos/etcd:v3.6.6	Up 6 hours (healthy)
+bx-yunpan-maintenance-worker-1	bx-yunpan-maintenance-worker:local	Up 4 minutes
+bx-yunpan-media-worker-1	bx-yunpan-media-worker:local	Up 4 minutes
+bx-yunpan-minio-1	minio/minio:RELEASE.2025-09-07T16-13-09Z	Up 6 hours (healthy)
+bx-yunpan-object-worker-1	bx-yunpan-object-worker:local	Up 4 minutes
+bx-yunpan-outbox-relay-1	bx-yunpan-outbox-relay:local	Up 4 minutes
+bx-yunpan-postgres-1	pgvector/pgvector:0.8.6-pg17	Up 6 hours (healthy)
+bx-yunpan-redis-1	redis:8.10-alpine	Up 6 hours (healthy)
+bx-yunpan-redis-broker-1	redis:8.10-alpine	Up About an hour (healthy)
+bx-yunpan-redis-cache-1	redis:8.10-alpine	Up About an hour (healthy)
+bx-yunpan-redis-coordination-1	redis:8.10-alpine	Up About an hour (healthy)
+bx-yunpan-web-1	bx-yunpan-web:local	Up 4 minutes (healthy)

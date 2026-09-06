@@ -1,0 +1,10 @@
+Building outbox-relay with one image at a time (memory=1536m, memory+swap=2048m, cpu=1 core)...
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            Install the buildx component to build images with BuildKit:
+            https://docs.docker.com/go/buildx/
+
+Sending build context to Docker daemon  739.3kB
+Step 1/24 : ARG DOCKER_REGISTRY=docker.io
+Step 2/24 : ARG GO_VERSION=1.25.13
+Step 3/24 : FROM ${DOCKER_REGISTRY}/library/golang:${GO_VERSION}-alpine AS build
+failed to resolve reference "docker.io/library/golang:1.25.13-alpine": failed to do request: Head "https://registry-1.docker.io/v2/library/golang/manifests/1.25.13-alpine": net/http: TLS handshake timeout

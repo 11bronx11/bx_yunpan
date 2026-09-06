@@ -45,7 +45,7 @@ func (h *HTTP) create(c *gin.Context) {
 		return
 	}
 	ownerID, _ := httpapi.PrincipalID(c)
-	share, key, err := h.service.Create(ownerID, request.FileID, request.ExpiresAt)
+	share, key, err := h.service.CreateWithContext(c.Request.Context(), ownerID, request.FileID, request.ExpiresAt)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -85,7 +85,7 @@ func (h *HTTP) get(c *gin.Context) {
 func (h *HTTP) revoke(c *gin.Context) {
 	ownerID, _ := httpapi.PrincipalID(c)
 	shareID, err := uuid.Parse(c.Param("shareId"))
-	if err != nil || h.service.Revoke(ownerID, shareID) != nil {
+	if err != nil || h.service.RevokeWithContext(c.Request.Context(), ownerID, shareID) != nil {
 		h.writeError(c, ErrNotFound)
 		return
 	}

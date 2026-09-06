@@ -1,0 +1,3 @@
+# HELP yunpan_outbox_unrouted_oldest_age_seconds Age in seconds of the oldest unresolved unrouted outbox event.
+# TYPE yunpan_outbox_unrouted_oldest_age_seconds gauge
+yunpan_outbox_unrouted_oldest_age_seconds 0

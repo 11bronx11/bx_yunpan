@@ -1,0 +1,2 @@
+before_ready=200
+after_api1_stop_ready=200

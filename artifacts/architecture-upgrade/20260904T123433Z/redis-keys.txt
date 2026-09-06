@@ -1,0 +1,7 @@
+      4 asynq:<queue>:processed
+      3 asynq:<queue>:processed:2026-08-23
+      4 asynq:<queue>:processed:2026-08-25
+      1 asynq:queues
+      1 asynq:servers
+      4 asynq:servers:<queue>
+      1 asynq:workers

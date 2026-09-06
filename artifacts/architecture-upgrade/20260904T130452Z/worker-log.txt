@@ -1,0 +1,3 @@
+worker-1  | {"time":"2026-09-04T13:04:20.092283315Z","level":"INFO","msg":"asynq","service":"bx-yunpan","environment":"development","process":"worker","message":["Starting processing"]}
+worker-1  | {"time":"2026-09-04T13:04:20.092360651Z","level":"INFO","msg":"worker started","service":"bx-yunpan","environment":"development","process":"worker","concurrency":8,"queues":{"maintenance":1,"media":4,"object":2}}
+worker-1  | {"time":"2026-09-04T13:04:20.097506531Z","level":"INFO","msg":"outbox dispatcher acquired leadership","service":"bx-yunpan","environment":"development","process":"worker","key":"yunpan:outbox:dispatcher:leader"}

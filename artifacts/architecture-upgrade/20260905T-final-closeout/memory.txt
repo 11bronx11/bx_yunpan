@@ -1,0 +1,3 @@
+               total        used        free      shared  buff/cache   available
+内存：         5.2Gi       2.0Gi       249Mi        23Mi       3.2Gi       3.2Gi
+交换：         3.8Gi       832Mi       3.0Gi

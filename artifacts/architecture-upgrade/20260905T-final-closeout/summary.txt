@@ -1,0 +1,19 @@
+BX YunPan architecture upgrade final closeout, 2026-09-05 UTC
+
+PASS: gofmt, go test (118 tests / 41 packages), go vet, bash syntax,
+Compose full-profile render, config drift check, direct ESLint,
+frontend tests (14 suites / 36 tests), frontend production build,
+git diff check, and deploy/status.sh.
+
+Runtime topology at verification: api=2, ai-query=2, ai-indexer=1,
+outbox-relay=1, object-worker=1, media-worker=1,
+maintenance-worker=1, and separate Redis Broker/Coordination/Cache.
+
+Boundary: backend application images were created at 05:18 UTC and are older
+than the final source edits. Rebuild attempts did not reach compilation because
+the official registry timed out, one mirror returned 401, and another mirror
+stalled while downloading the Go base image. The stalled build was stopped at
+the user's request. Repository defaults and runtime data were not changed.
+
+The npm lint wrapper incorrectly included ignored web/build artifacts. The
+equivalent local ESLint binary command passed; both outputs are retained.

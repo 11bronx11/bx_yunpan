@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/health"
 )
 
@@ -36,6 +37,27 @@ func TestReadinessFailsWhenDependencyIsUnavailable(t *testing.T) {
 	}
 	if response.Header().Get("X-Request-ID") == "" {
 		t.Fatal("missing request id")
+	}
+}
+
+func TestReadinessReportsAdvisoryFailureWithoutRemovingAPI(t *testing.T) {
+	router := NewRouter(RouterConfig{
+		Environment:  "test",
+		ProbeTimeout: time.Second,
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Metrics:      NewMetrics(),
+		AdvisoryProbes: []health.Probe{
+			health.ProbeFunc{ProbeName: "redis_cache", Func: func(context.Context) error { return errors.New("offline") }},
+		},
+	})
+	request := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if !bytes.Contains(response.Body.Bytes(), []byte(`"redis_cache":"degraded"`)) {
+		t.Fatalf("missing degraded cache state: %s", response.Body.String())
 	}
 }
 
@@ -63,5 +85,28 @@ func TestRouterLimitsRequestBody(t *testing.T) {
 
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413, got %d", response.Code)
+	}
+}
+
+func TestRouterPropagatesOutboxFeatureFlagsToRequests(t *testing.T) {
+	router := NewRouter(RouterConfig{
+		Environment: "test", Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Metrics: NewMetrics(),
+		V2EventsEnabled: true, SearchEnabled: true, KafkaEnabled: true,
+		Registrars: []func(*gin.RouterGroup){func(v1 *gin.RouterGroup) {
+			v1.GET("/flags", func(c *gin.Context) {
+				ctx := c.Request.Context()
+				if !outbox.V2EventsEnabled(ctx) || !outbox.SearchEnabled(ctx) || !outbox.KafkaEnabled(ctx) {
+					c.Status(http.StatusInternalServerError)
+					return
+				}
+				c.Status(http.StatusNoContent)
+			})
+		}},
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/flags", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("feature flags were not propagated, status=%d", response.Code)
 	}
 }

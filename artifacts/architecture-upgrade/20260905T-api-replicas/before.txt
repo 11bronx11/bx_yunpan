@@ -1,0 +1,4 @@
+/bx-yunpan-api-1 instance_id=HTTP_ADDR=:8081
+/bx-yunpan-api-1 state=running health=healthy
+/bx-yunpan-api-2 instance_id=UPLOAD_PART_URL_TTL=15m
+/bx-yunpan-api-2 state=running health=healthy

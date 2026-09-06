@@ -1,0 +1,26 @@
+NAME                   IMAGE                                                                     COMMAND                   SERVICE    CREATED        STATUS                       PORTS
+bx-yunpan-aisvc-1      sha256:f265ecd92081c7a6c4eeb5a0d3c4fb21b1442b0fa8729610cdff3664c4f9e761   "/app/service"            aisvc      13 hours ago   Up About an hour (healthy)   8081-8082/tcp
+bx-yunpan-aisvc-2      sha256:f265ecd92081c7a6c4eeb5a0d3c4fb21b1442b0fa8729610cdff3664c4f9e761   "/app/service"            aisvc      13 hours ago   Up About an hour (healthy)   8081-8082/tcp
+bx-yunpan-aisvc-3      sha256:f265ecd92081c7a6c4eeb5a0d3c4fb21b1442b0fa8729610cdff3664c4f9e761   "/app/service"            aisvc      13 hours ago   Up About an hour (healthy)   8081-8082/tcp
+bx-yunpan-api-1        sha256:1d7eb707031ff3ad5dfffadde2bb8c384a519290e6b1067fc68646effa741ca9   "/app/service"            api        13 hours ago   Up About an hour (healthy)   127.0.0.1:8081->8081/tcp, 8082/tcp
+bx-yunpan-etcd-1       quay.io/coreos/etcd:v3.6.6                                                "/usr/local/bin/etcd"     etcd       10 days ago    Up About an hour (healthy)   2379-2380/tcp
+bx-yunpan-minio-1      docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z                        "/usr/bin/docker-ent…"   minio      10 days ago    Up About an hour (healthy)   127.0.0.1:9000-9001->9000-9001/tcp
+bx-yunpan-postgres-1   docker.io/pgvector/pgvector:0.8.6-pg17                                    "docker-entrypoint.s…"   postgres   10 days ago    Up About an hour (healthy)   127.0.0.1:5432->5432/tcp
+bx-yunpan-redis-1      docker.io/library/redis:8.10-alpine                                       "docker-entrypoint.s…"   redis      10 days ago    Up About an hour (healthy)   127.0.0.1:6379->6379/tcp
+bx-yunpan-web-1        sha256:737abfcbadd47d17e332e87ddb2f210c857a8a87667cd837a67ef94ca787797e   "/docker-entrypoint.…"   web        10 days ago    Up About an hour (healthy)   127.0.0.1:3000->80/tcp
+bx-yunpan-worker-1     sha256:5042b8a288df98f41f4e11bcf74e9b186a9b78646a9e4edbc99fb6a49db81e09   "/app/service"            worker     11 hours ago   Up About an hour             8081-8082/tcp
+
+bx-yunpan-api-1 -> HTTP readiness: OK
+bx-yunpan-aisvc-1 -> grpc.health.v1: SERVING
+bx-yunpan-aisvc-2 -> grpc.health.v1: SERVING
+bx-yunpan-aisvc-3 -> grpc.health.v1: SERVING
+web: HTTP 200
+web -> api: HTTP 200
+web -> storage: HTTP 200
+service "media-worker" depends on undefined service "migrate": invalid compose project
+bx-yunpan-api-1: WORKER_METRICS_ADDR differs from deploy/.env
+bx-yunpan-worker-1: WORKER_METRICS_ADDR differs from deploy/.env
+bx-yunpan-aisvc-1: WORKER_METRICS_ADDR differs from deploy/.env
+bx-yunpan-aisvc-2: WORKER_METRICS_ADDR differs from deploy/.env
+bx-yunpan-aisvc-3: WORKER_METRICS_ADDR differs from deploy/.env
+Configuration drift detected; run ./deploy/up.sh --no-build.

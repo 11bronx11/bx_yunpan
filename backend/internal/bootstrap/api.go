@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc/resolver"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/identity"
 	"github.com/11bronx11/bx_yunpan/backend/internal/media"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
+	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/breaker"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dependencies"
@@ -27,6 +29,8 @@ import (
 )
 
 func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	ctx = outbox.WithSearchEnabled(ctx, cfg.Search.Enabled)
+	ctx = outbox.WithKafkaEnabled(ctx, cfg.EventStream.KafkaEnabled)
 	deps, err := dependencies.Open(ctx, cfg)
 	if err != nil {
 		return err
@@ -45,17 +49,18 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	fileHTTP := drive.NewFileHTTP(fileManager, identityHTTP.Authenticate())
 	sharingService := sharing.NewService(deps.GORM, driveService, objects, identityService, cfg.Sharing)
 	sharingHTTP := sharing.NewHTTP(sharingService, fileManager, identityHTTP.Authenticate())
-	metrics := httpapi.NewMetrics()
+	metrics := httpapi.NewMetrics(cfg.App.InstanceID)
+	readiness := httpapi.NewReadiness(true)
 	var aiBackend ai.Backend = ai.DisabledBackend{}
 	closeAI := func() {}
 	if cfg.AI.Enabled {
-		// Search / Ask / Reprocess 经 gRPC 调 aisvc；限流已下移到 aisvc 侧。
-		// 文档与任务的只读查询仍直接查库，不必绕一次 RPC。
+		// Search / Ask 经 gRPC 调 query 服务；Reprocess 是 core-api 的命令，
+		// 必须在本地事务里完成 owner 校验、幂等 Task 和 Outbox 写入。
 		aiClient, closeRegistry, err := newAIClient(cfg, logger, metrics.Registry)
 		if err != nil {
 			return err
 		}
-		aiBackend = aiClient
+		aiBackend = &splitAIBackend{query: aiClient, command: ai.NewService(deps.GORM, driveService, objects, deps.Storage, cfg.AI)}
 		closeAI = func() {
 			_ = aiClient.Close()
 			closeRegistry()
@@ -65,13 +70,18 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	aiHTTP := ai.NewHTTP(aiBackend, ai.NewReader(deps.GORM, driveService), identityHTTP.Authenticate())
 
 	router := httpapi.NewRouter(httpapi.RouterConfig{
-		Environment:  cfg.App.Env,
-		ServiceName:  "bx-yunpan-api",
-		ProbeTimeout: cfg.HTTP.ProbeTimeout,
-		MaxBodyBytes: cfg.HTTP.MaxBodyBytes,
-		Logger:       logger,
-		Probes:       deps.Probes(),
-		Metrics:      metrics,
+		Environment:     cfg.App.Env,
+		ServiceName:     "bx-yunpan-api",
+		ProbeTimeout:    cfg.HTTP.ProbeTimeout,
+		MaxBodyBytes:    cfg.HTTP.MaxBodyBytes,
+		V2EventsEnabled: cfg.Outbox.V2EventsEnabled,
+		SearchEnabled:   cfg.Search.Enabled,
+		KafkaEnabled:    cfg.EventStream.KafkaEnabled,
+		Readiness:       readiness,
+		Logger:          logger,
+		Probes:          deps.Probes(),
+		AdvisoryProbes:  deps.AdvisoryProbes(),
+		Metrics:         metrics,
 		Registrars: []func(*gin.RouterGroup){
 			identityHTTP.RegisterRoutes,
 			driveHTTP.RegisterRoutes,
@@ -100,6 +110,7 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	select {
 	case <-ctx.Done():
 		logger.Info("api shutdown requested")
+		readiness.SetReady(false)
 	case err := <-serverErr:
 		return fmt.Errorf("serve http: %w", err)
 	}
@@ -110,6 +121,27 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return fmt.Errorf("shutdown http: %w", err)
 	}
 	return nil
+}
+
+// splitAIBackend keeps the online query plane behind gRPC while retaining
+// command ownership in core-api. The legacy gRPC Reprocess endpoint remains
+// available for an older client during the compatibility window, but current
+// HTTP requests never depend on it.
+type splitAIBackend struct {
+	query   *grpcclient.Client
+	command *ai.Service
+}
+
+func (b *splitAIBackend) Search(ctx context.Context, ownerID uuid.UUID, input ai.SearchInput) ([]ai.SearchHit, error) {
+	return b.query.Search(ctx, ownerID, input)
+}
+
+func (b *splitAIBackend) Ask(ctx context.Context, ownerID uuid.UUID, question string, folderID *uuid.UUID, fileIDs []uuid.UUID) (string, []ai.Citation, error) {
+	return b.query.Ask(ctx, ownerID, question, folderID, fileIDs)
+}
+
+func (b *splitAIBackend) RequestReprocess(ctx context.Context, ownerID, fileID uuid.UUID, idempotencyKey string) (ai.Task, error) {
+	return b.command.RequestReprocess(ctx, ownerID, fileID, idempotencyKey)
 }
 
 // newAIClient 按配置构造 aisvc 客户端。重试策略按接口性质分别定：

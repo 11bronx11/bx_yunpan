@@ -1,0 +1,8 @@
+/bx-yunpan-api-1 WORKER_CONCURRENCY=8
+AUTH_ISSUER=bx-yunpan
+AISVC_GRPC_TARGET=aisvc:8082
+APP_ENV=development
+/bx-yunpan-api-2 AI_CHAT_MODEL=qwen-plus
+AUTH_ISSUER=bx-yunpan
+AISVC_GRPC_TARGET=aisvc:8082
+APP_ENV=development

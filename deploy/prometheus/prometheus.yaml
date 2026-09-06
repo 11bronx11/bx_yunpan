@@ -4,5 +4,21 @@ global:
 scrape_configs:
   - job_name: bx-yunpan-api
     metrics_path: /metrics
-    static_configs:
-      - targets: ["api:8081"]
+    dns_sd_configs:
+      - names: ["api"]
+        type: A
+        port: 8081
+    relabel_configs:
+      - source_labels: [__meta_dns_name]
+        target_label: service
+        replacement: core-api
+
+  - job_name: bx-yunpan-workers
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: ["outbox-relay", "object-worker", "media-worker", "maintenance-worker", "search-indexer"]
+        type: A
+        port: 8083
+    relabel_configs:
+      - source_labels: [__meta_dns_name]
+        target_label: service

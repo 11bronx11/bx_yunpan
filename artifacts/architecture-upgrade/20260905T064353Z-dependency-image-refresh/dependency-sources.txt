@@ -1,0 +1,3 @@
+go_proxy=https://goproxy.cn,direct
+npm_registry=https://registry.npmmirror.com
+docker_registry=official pull unavailable; used cached verified runtime layers for local refresh

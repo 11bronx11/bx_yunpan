@@ -1,0 +1,19 @@
+# HELP yunpan_grpc_server_handled_total Total gRPC calls by method and status code.
+# TYPE yunpan_grpc_server_handled_total counter
+yunpan_grpc_server_handled_total{code="OK",method="/grpc.health.v1.Health/Check"} 1
+# HELP yunpan_grpc_server_handling_duration_seconds gRPC call latency by method.
+# TYPE yunpan_grpc_server_handling_duration_seconds histogram
+yunpan_grpc_server_handling_duration_seconds_bucket{method="/grpc.health.v1.Health/Check",le="0.005"} 1
+yunpan_grpc_server_handling_duration_seconds_bucket{method="/grpc.health.v1.Health/Check",le="0.01"} 1
+yunpan_grpc_server_handling_duration_seconds_bucket{method="/grpc.health.v1.Health/Check",le="0.025"} 1
+yunpan_grpc_server_handling_duration_seconds_bucket{method="/grpc.health.v1.Health/Check",le="0.05"} 1
+yunpan_grpc_server_handling_duration_seconds_bucket{method="/grpc.health.v1.Health/Check",le="0.1"} 1
+yunpan_grpc_server_handling_duration_seconds_bucket{method="/grpc.health.v1.Health/Check",le="0.25"} 1
+yunpan_grpc_server_handling_duration_seconds_bucket{method="/grpc.health.v1.Health/Check",le="0.5"} 1
+yunpan_grpc_server_handling_duration_seconds_bucket{method="/grpc.health.v1.Health/Check",le="1"} 1
+yunpan_grpc_server_handling_duration_seconds_bucket{method="/grpc.health.v1.Health/Check",le="2.5"} 1
+yunpan_grpc_server_handling_duration_seconds_bucket{method="/grpc.health.v1.Health/Check",le="5"} 1
+yunpan_grpc_server_handling_duration_seconds_bucket{method="/grpc.health.v1.Health/Check",le="10"} 1
+yunpan_grpc_server_handling_duration_seconds_bucket{method="/grpc.health.v1.Health/Check",le="+Inf"} 1
+yunpan_grpc_server_handling_duration_seconds_sum{method="/grpc.health.v1.Health/Check"} 1.9124e-05
+yunpan_grpc_server_handling_duration_seconds_count{method="/grpc.health.v1.Health/Check"} 1

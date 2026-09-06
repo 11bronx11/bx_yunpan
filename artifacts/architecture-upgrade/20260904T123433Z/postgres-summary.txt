@@ -1,0 +1,8 @@
+schema_migration|8|false
+table_count|16
+outbox_pending|0
+outbox_failed|0
+outbox_published|30
+ai_documents|indexed|14
+object_references|1|12
+object_references|2|2

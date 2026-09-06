@@ -1,0 +1,34 @@
+NAME                             IMAGE                                                COMMAND                   SERVICE              CREATED       STATUS                    PORTS
+bx-yunpan-ai-indexer-1           bx-yunpan-aisvc:local                                "/app/service"            ai-indexer           5 hours ago   Up 5 hours                8081-8083/tcp
+bx-yunpan-ai-query-2             bx-yunpan-aisvc:local                                "/app/service"            ai-query             5 hours ago   Up 5 hours (healthy)      8081-8083/tcp
+bx-yunpan-ai-query-3             bx-yunpan-aisvc:local                                "/app/service"            ai-query             5 hours ago   Up 5 hours (healthy)      8081-8083/tcp
+bx-yunpan-api-1                  bx-yunpan-api:local                                  "/app/service"            api                  5 hours ago   Up 38 seconds (healthy)   8081-8082/tcp
+bx-yunpan-api-2                  bx-yunpan-api:local                                  "/app/service"            api                  5 hours ago   Up 5 hours (healthy)      8081-8082/tcp
+bx-yunpan-etcd-1                 quay.io/coreos/etcd:v3.6.6                           "/usr/local/bin/etcd"     etcd                 11 days ago   Up 13 hours (healthy)     2379-2380/tcp
+bx-yunpan-maintenance-worker-1   bx-yunpan-maintenance-worker:local                   "/app/service"            maintenance-worker   5 hours ago   Up 5 hours                8081-8083/tcp
+bx-yunpan-media-worker-1         bx-yunpan-media-worker:local                         "/app/service"            media-worker         5 hours ago   Up 5 hours                8081-8083/tcp
+bx-yunpan-minio-1                docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z   "/usr/bin/docker-ent…"   minio                11 days ago   Up 19 seconds (healthy)   127.0.0.1:9000-9001->9000-9001/tcp
+bx-yunpan-object-worker-1        bx-yunpan-object-worker:local                        "/app/service"            object-worker        5 hours ago   Up 5 hours                8081-8083/tcp
+bx-yunpan-outbox-relay-1         bx-yunpan-outbox-relay:local                         "/app/service"            outbox-relay         5 hours ago   Up Less than a second     8081-8083/tcp
+bx-yunpan-postgres-1             docker.io/pgvector/pgvector:0.8.6-pg17               "docker-entrypoint.s…"   postgres             11 days ago   Up 13 hours (healthy)     127.0.0.1:5432->5432/tcp
+bx-yunpan-redis-1                docker.io/library/redis:8.10-alpine                  "docker-entrypoint.s…"   redis                11 days ago   Up 13 hours (healthy)     127.0.0.1:6379->6379/tcp
+bx-yunpan-redis-broker-1         docker.io/library/redis:8.10-alpine                  "docker-entrypoint.s…"   redis-broker         9 hours ago   Up 29 seconds (healthy)   6379/tcp
+bx-yunpan-redis-cache-1          docker.io/library/redis:8.10-alpine                  "docker-entrypoint.s…"   redis-cache          9 hours ago   Up 35 seconds (healthy)   6379/tcp
+bx-yunpan-redis-coordination-1   docker.io/library/redis:8.10-alpine                  "docker-entrypoint.s…"   redis-coordination   9 hours ago   Up 5 hours (healthy)      6379/tcp
+bx-yunpan-search-indexer-1       bx-yunpan-search-indexer:local                       "/app/service"            search-indexer       5 hours ago   Up 5 hours                8081-8083/tcp
+bx-yunpan-web-1                  bx-yunpan-web:local                                  "/docker-entrypoint.…"   web                  8 hours ago   Up 8 hours (healthy)      127.0.0.1:3000->80/tcp
+
+bx-yunpan-api-1 -> HTTP readiness: OK
+bx-yunpan-api-2 -> HTTP readiness: OK
+bx-yunpan-ai-query-2 -> grpc.health.v1: SERVING
+bx-yunpan-ai-query-3 -> grpc.health.v1: SERVING
+bx-yunpan-ai-indexer-1 -> ai queue worker: running
+web: HTTP 200
+web -> api: HTTP 200
+web -> storage: HTTP 200
+Docker application configuration matches deploy/.env (AI_ENABLED=true).
+outbox-relay -> metrics: OK
+object-worker -> metrics: OK
+media-worker -> metrics: OK
+maintenance-worker -> metrics: OK
+search-indexer -> metrics: OK

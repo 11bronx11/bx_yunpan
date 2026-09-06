@@ -11,8 +11,10 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
+	"github.com/11bronx11/bx_yunpan/backend/internal/ownerepoch"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/storageurl"
 )
 
@@ -45,8 +47,16 @@ func (m *FileManager) Rename(ownerID, fileID uuid.UUID, version int64, name stri
 	return m.drive.RenameFile(ownerID, fileID, version, name)
 }
 
+func (m *FileManager) RenameWithContext(ctx context.Context, ownerID, fileID uuid.UUID, version int64, name string) (FileView, error) {
+	return m.drive.RenameFileWithContext(ctx, ownerID, fileID, version, name)
+}
+
 func (m *FileManager) Move(ownerID, fileID, targetFolderID uuid.UUID, version int64) (FileView, error) {
 	return m.drive.MoveFile(ownerID, fileID, targetFolderID, version)
+}
+
+func (m *FileManager) MoveWithContext(ctx context.Context, ownerID, fileID, targetFolderID uuid.UUID, version int64) (FileView, error) {
+	return m.drive.MoveFileWithContext(ctx, ownerID, fileID, targetFolderID, version)
 }
 
 // Delete 需要 ctx：事务里写 Outbox 时要把当前 span context 一起注入，
@@ -68,6 +78,10 @@ func (m *FileManager) Delete(ctx context.Context, ownerID, fileID uuid.UUID, ver
 		if err := tx.Model(&entry).Updates(map[string]any{"deleted_at": now, "version": gorm.Expr("version + 1"), "updated_at": now}).Error; err != nil {
 			return err
 		}
+		epoch, err := ownerepoch.BumpContent(tx, ownerID)
+		if err != nil {
+			return err
+		}
 		remaining, err := m.objects.ReleaseReference(tx, entry.ObjectID)
 		if err != nil {
 			return err
@@ -75,8 +89,22 @@ func (m *FileManager) Delete(ctx context.Context, ownerID, fileID uuid.UUID, ver
 		if err := m.quota.RemoveLogicalUsage(tx, ownerID, object.SizeBytes); err != nil {
 			return err
 		}
+		if err := outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
+			EventType: eventcontract.EventFileDeletedV1, AggregateID: entry.ID, AggregateVersion: entry.Version + 1,
+			Producer: "core-api", Payload: eventcontract.FileDeletedV1{OwnerID: ownerID, FileEntryID: entry.ID, ObjectID: entry.ObjectID, TombstoneAt: now, ContentEpoch: epoch.ContentEpoch},
+		}); err != nil {
+			return err
+		}
 		if remaining == 0 {
-			return outbox.Add(tx, "file_object", object.ID, outbox.EventObjectGCRequested, map[string]any{"object_id": object.ID})
+			// ReleaseReference advances the object aggregate version. Read it back
+			// so the GC command fences against the committed version.
+			if err := tx.First(&object, "id = ?", object.ID).Error; err != nil {
+				return err
+			}
+			return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
+				EventType: eventcontract.EventObjectGCRequestedV1, AggregateID: object.ID, AggregateVersion: object.Version,
+				Producer: "core-api", Payload: eventcontract.ObjectGCRequestedV1{ObjectID: object.ID},
+			})
 		}
 		return nil
 	})

@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	apispec "github.com/11bronx11/bx_yunpan/backend/api"
+	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/health"
 )
 
@@ -25,14 +26,19 @@ func tracedRequest(c *gin.Context) bool {
 }
 
 type RouterConfig struct {
-	Environment  string
-	ServiceName  string
-	ProbeTimeout time.Duration
-	MaxBodyBytes int64
-	Logger       *slog.Logger
-	Probes       []health.Probe
-	Metrics      *Metrics
-	Registrars   []func(*gin.RouterGroup)
+	Environment     string
+	ServiceName     string
+	ProbeTimeout    time.Duration
+	MaxBodyBytes    int64
+	Logger          *slog.Logger
+	Probes          []health.Probe
+	AdvisoryProbes  []health.Probe
+	Metrics         *Metrics
+	V2EventsEnabled bool
+	SearchEnabled   bool
+	KafkaEnabled    bool
+	Readiness       *Readiness
+	Registrars      []func(*gin.RouterGroup)
 }
 
 func NewRouter(cfg RouterConfig) *gin.Engine {
@@ -44,16 +50,27 @@ func NewRouter(cfg RouterConfig) *gin.Engine {
 	// otelgin 放在最前：它负责从 traceparent 头恢复上游 trace 并开出 server span，
 	// 后面所有中间件与 handler 都能从 ctx 拿到这个 span 作为父节点。
 	router.Use(otelgin.Middleware(cfg.ServiceName, otelgin.WithGinFilter(tracedRequest)))
-	router.Use(RequestID(), cfg.Metrics.Middleware(), AccessLog(cfg.Logger), Recovery(cfg.Logger), LimitRequestBody(cfg.MaxBodyBytes))
+	router.Use(RequestID(), outboxContext(cfg.V2EventsEnabled, cfg.SearchEnabled, cfg.KafkaEnabled), cfg.Metrics.Middleware(), AccessLog(cfg.Logger), Recovery(cfg.Logger), LimitRequestBody(cfg.MaxBodyBytes))
 
 	router.GET("/health/live", func(c *gin.Context) {
 		c.JSON(http.StatusOK, health.Result{Status: "ok"})
 	})
 	router.GET("/health/ready", func(c *gin.Context) {
+		if !cfg.Readiness.Ready() {
+			c.JSON(http.StatusServiceUnavailable, health.Result{Status: "draining"})
+			return
+		}
 		result, err := health.Run(c.Request.Context(), cfg.ProbeTimeout, cfg.Probes)
 		if err != nil {
 			c.JSON(http.StatusServiceUnavailable, result)
 			return
+		}
+		advisory, _ := health.Run(c.Request.Context(), cfg.ProbeTimeout, cfg.AdvisoryProbes)
+		for name, status := range advisory.Checks {
+			if status == "unavailable" {
+				status = "degraded"
+			}
+			result.Checks[name] = status
 		}
 		c.JSON(http.StatusOK, result)
 	})
@@ -73,6 +90,17 @@ func NewRouter(cfg RouterConfig) *gin.Engine {
 	})
 
 	return router
+}
+
+func outboxContext(v2Enabled, searchEnabled, kafkaEnabled bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := c.Request.Context()
+		ctx = outbox.WithV2EventsEnabled(ctx, v2Enabled)
+		ctx = outbox.WithSearchEnabled(ctx, searchEnabled)
+		ctx = outbox.WithKafkaEnabled(ctx, kafkaEnabled)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}
 }
 
 const docsHTML = `<!doctype html>

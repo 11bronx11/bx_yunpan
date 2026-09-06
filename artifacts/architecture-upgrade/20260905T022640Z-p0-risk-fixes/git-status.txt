@@ -1,0 +1,78 @@
+## main...orign/master
+ M .gitignore
+ M backend/Dockerfile
+ M backend/cmd/aisvc/main.go
+ M backend/cmd/api/main.go
+ M backend/cmd/worker/main.go
+ M backend/internal/ai/model.go
+ M backend/internal/ai/service.go
+ M backend/internal/bootstrap/aisvc.go
+ M backend/internal/bootstrap/api.go
+ M backend/internal/bootstrap/worker.go
+ M backend/internal/drive/file_http.go
+ M backend/internal/drive/files.go
+ M backend/internal/drive/http.go
+ M backend/internal/drive/service.go
+ M backend/internal/drive/service_move_test.go
+ M backend/internal/objectstore/service.go
+ M backend/internal/outbox/dispatcher.go
+ M backend/internal/outbox/dispatcher_test.go
+ M backend/internal/outbox/outbox.go
+ M backend/internal/platform/config/config.go
+ M backend/internal/platform/httpapi/metrics.go
+ M backend/internal/platform/httpapi/router.go
+ M backend/internal/platform/tracing/tracing.go
+ M backend/internal/platform/worker/server.go
+ M backend/internal/sharing/http.go
+ M backend/internal/sharing/service.go
+ M backend/internal/upload/model.go
+ M backend/internal/upload/service.go
+ M backend/internal/upload/service_concurrency_test.go
+ M deploy/.env.example
+ M deploy/.env.no-ai.example
+ M deploy/build.sh
+ M deploy/compose.yaml
+ M deploy/config-check.sh
+ M deploy/down.sh
+ M deploy/logs.sh
+ M deploy/prometheus/prometheus.yaml
+ M deploy/status.sh
+ M deploy/up.sh
+ M web/nginx-app.conf
+?? ARCHITECTURE_UPGRADE.md
+?? ARCHITECTURE_UPGRADE_FINAL.md
+?? ARCHITECTURE_UPGRADE_FINAL_EXECUTION_PLAN.md
+?? ARCHITECTURE_UPGRADE_HANDOFF.md
+?? ARCHITECTURE_UPGRADE_REVISED.md
+?? artifacts/architecture-upgrade/
+?? backend/cmd/maintenance-worker/
+?? backend/cmd/media-worker/
+?? backend/cmd/object-worker/
+?? backend/cmd/outbox-relay/
+?? backend/internal/bootstrap/roles.go
+?? backend/internal/bootstrap/worker_metrics.go
+?? backend/internal/eventcontract/
+?? backend/internal/outbox/compat.go
+?? backend/internal/outbox/compatibility_test.go
+?? backend/internal/outbox/consumption.go
+?? backend/internal/outbox/consumption_test.go
+?? backend/internal/outbox/metrics.go
+?? backend/internal/outbox/routes.go
+?? backend/internal/outbox/routes_test.go
+?? backend/internal/platform/httpapi/readiness.go
+?? backend/internal/platform/worker/role.go
+?? backend/internal/platform/worker/role_test.go
+?? backend/internal/recovery/
+?? backend/internal/storageops/
+?? backend/migrations/000009_outbox_delivery.down.sql
+?? backend/migrations/000009_outbox_delivery.up.sql
+?? backend/migrations/000010_aggregate_versions.down.sql
+?? backend/migrations/000010_aggregate_versions.up.sql
+?? backend/migrations/000011_storage_operations.down.sql
+?? backend/migrations/000011_storage_operations.up.sql
+?? backend/migrations/000012_upload_state_operations.down.sql
+?? backend/migrations/000012_upload_state_operations.up.sql
+?? backend/migrations/000013_storage_operation_lease_token.down.sql
+?? backend/migrations/000013_storage_operation_lease_token.up.sql
+?? backend/migrations/000014_outbox_recovery.down.sql
+?? backend/migrations/000014_outbox_recovery.up.sql

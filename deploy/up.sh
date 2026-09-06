@@ -8,13 +8,23 @@ env_file="$deploy_dir/.env"
 build=true
 observability=false
 aisvc_replicas=
+api_replicas=
+distributed_workers=false
+ai_split=false
+redis_split=false
+search_indexer=false
 
 usage() {
   cat <<'EOF'
-Usage: ./deploy/up.sh [--no-build] [--observability] [--aisvc-replicas N]
+Usage: ./deploy/up.sh [--no-build] [--observability] [--distributed-workers] [--ai-split] [--redis-split] [--search-indexer] [--api-replicas N] [--aisvc-replicas N]
 
   --no-build           Start existing images without building them.
   --observability      Also start Prometheus, Grafana, and OpenTelemetry Collector.
+  --distributed-workers Start independent relay/object/media/maintenance roles.
+  --ai-split           Start separate ai-query and ai-indexer roles.
+  --redis-split        Use separate Broker, Coordination, and Cache Redis services.
+  --search-indexer     Start the opt-in PostgreSQL search projection consumer.
+  --api-replicas N      Scale core API only when explicitly requested.
   --aisvc-replicas N   Override AISVC_REPLICAS for this run.
 EOF
 }
@@ -23,6 +33,16 @@ while (($#)); do
   case "$1" in
     --no-build) build=false ;;
     --observability) observability=true ;;
+    --distributed-workers) distributed_workers=true ;;
+    --ai-split) ai_split=true ;;
+    --redis-split) redis_split=true ;;
+    --search-indexer) search_indexer=true ;;
+    --api-replicas)
+      (($# >= 2)) || { echo "--api-replicas requires a value" >&2; exit 2; }
+      api_replicas=$2
+      shift
+      ;;
+    --api-replicas=*) api_replicas=${1#*=} ;;
     --aisvc-replicas)
       (($# >= 2)) || { echo "--aisvc-replicas requires a value" >&2; exit 2; }
       aisvc_replicas=$2
@@ -67,6 +87,13 @@ ai_enabled=$(env_value AI_ENABLED)
 ai_enabled=${ai_enabled:-true}
 if [[ "$ai_enabled" != "true" && "$ai_enabled" != "false" ]]; then
   echo "AI_ENABLED must be true or false." >&2
+  exit 1
+fi
+
+outbox_v2_events_enabled=$(env_value OUTBOX_V2_EVENTS_ENABLED)
+outbox_v2_events_enabled=${outbox_v2_events_enabled:-false}
+if [[ "$outbox_v2_events_enabled" != "true" && "$outbox_v2_events_enabled" != "false" ]]; then
+  echo "OUTBOX_V2_EVENTS_ENABLED must be true or false." >&2
   exit 1
 fi
 
@@ -123,6 +150,11 @@ if [[ "$ai_enabled" == true ]]; then
   fi
 fi
 
+if [[ "$ai_split" == true && "$ai_enabled" != true ]]; then
+  echo "--ai-split requires AI_ENABLED=true." >&2
+  exit 1
+fi
+
 s3_public_path_prefix=$(env_value S3_PUBLIC_PATH_PREFIX)
 s3_public_path_prefix=${s3_public_path_prefix:-/storage}
 if [[ "$s3_public_path_prefix" != "/storage" ]]; then
@@ -149,6 +181,11 @@ elif [[ -n "$aisvc_replicas" && "$aisvc_replicas" != "0" ]]; then
   exit 1
 else
   aisvc_replicas=0
+fi
+
+if [[ -n "$api_replicas" && ! "$api_replicas" =~ ^[1-9][0-9]*$ ]]; then
+  echo "API_REPLICAS must be a positive integer when specified." >&2
+  exit 1
 fi
 
 go_build_parallelism=$(env_value GO_BUILD_PARALLELISM)
@@ -179,24 +216,79 @@ if [[ "$build" == true ]]; then
     echo "Free disk space or use --no-build when application images already exist." >&2
     exit 1
   fi
-  build_targets=(migrate api worker web)
+  build_targets=(migrate api web)
+  if [[ "$distributed_workers" == true ]]; then
+    build_targets+=(outbox-relay object-worker media-worker maintenance-worker)
+  else
+    build_targets+=(worker)
+  fi
   if [[ "$ai_enabled" == true ]]; then
-    build_targets=(migrate api worker aisvc web)
+    build_targets+=(aisvc)
+  fi
+  if [[ "$search_indexer" == true ]]; then
+    build_targets+=(search-indexer)
   fi
   "$deploy_dir/build.sh" "${build_targets[@]}"
 fi
 
 profiles=(--profile app)
-if [[ "$ai_enabled" == true ]]; then
+if [[ "$ai_enabled" == true && "$ai_split" == false ]]; then
   profiles+=(--profile ai)
+fi
+if [[ "$ai_enabled" == true && "$ai_split" == true ]]; then
+  profiles+=(--profile ai-split)
+  # The API remains configured through the stable env file by default. The
+  # split profile is an explicit run-time override and is not persisted.
+  export AISVC_GRPC_TARGET=ai-query:8082
 fi
 if [[ "$observability" == true ]]; then
   profiles+=(--profile observability)
 fi
+if [[ "$distributed_workers" == true ]]; then
+  profiles+=(--profile distributed)
+fi
+if [[ "$redis_split" == true ]]; then
+  profiles+=(--profile redis-split)
+  export REDIS_BROKER_ADDR=redis-broker:6379
+  export REDIS_COORDINATION_ADDR=redis-coordination:6379
+  export REDIS_CACHE_ADDR=redis-cache:6379
+fi
+if [[ "$search_indexer" == true ]]; then
+  profiles+=(--profile search)
+  # The explicit role opt-in also enables search deliveries for this process
+  # lifetime; the value is not persisted into the user's env file.
+  export SEARCH_INDEX_ENABLED=true
+fi
 
 args=(--env-file "$env_file" -f "$compose_file" "${profiles[@]}" up -d --remove-orphans --wait --wait-timeout 240)
+scale_args=()
 if [[ "$ai_enabled" == true ]]; then
-  args+=(--scale "aisvc=$aisvc_replicas")
+  if [[ "$ai_split" == true ]]; then
+    scale_args+=(--scale "ai-query=$aisvc_replicas" --scale "ai-indexer=1")
+  else
+    scale_args+=(--scale "aisvc=$aisvc_replicas")
+  fi
+fi
+if [[ -n "$api_replicas" ]]; then
+  scale_args+=(--scale "api=$api_replicas")
+fi
+args+=("${scale_args[@]}")
+if [[ "$distributed_workers" == true ]]; then
+  distributed_services=(migrate api web outbox-relay object-worker media-worker maintenance-worker)
+  if [[ "$ai_enabled" == true ]]; then
+    if [[ "$ai_split" == true ]]; then
+      distributed_services+=(ai-query ai-indexer)
+    else
+      distributed_services+=(aisvc)
+    fi
+  fi
+  if [[ "$redis_split" == true ]]; then
+    distributed_services+=(redis-broker redis-coordination redis-cache)
+  fi
+  if [[ "$search_indexer" == true ]]; then
+    distributed_services+=(search-indexer)
+  fi
+  args+=("${distributed_services[@]}")
 fi
 
 max_attempts=${YUNPAN_UP_ATTEMPTS:-$(env_value YUNPAN_UP_ATTEMPTS)}
@@ -222,11 +314,44 @@ if [[ "$started" != true ]]; then
   exit 1
 fi
 
+if [[ "$distributed_workers" == true ]]; then
+  # Compose does not remove a service that is still part of the selected
+  # project but omitted from the explicit service list. Stop the legacy
+  # combined worker so it cannot consume queues owned by independent roles.
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile distributed stop worker >/dev/null
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile distributed rm -f worker >/dev/null
+else
+  # Switching back to the compatibility worker must also remove the
+  # independent consumers, otherwise both generations would process a queue.
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile distributed stop outbox-relay object-worker media-worker maintenance-worker >/dev/null
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile distributed rm -f outbox-relay object-worker media-worker maintenance-worker >/dev/null
+fi
+
+if [[ "$ai_split" == true ]]; then
+  # ai-query/ai-indexer replace the combined aisvc process in split mode.
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile ai --profile ai-split stop aisvc >/dev/null
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile ai --profile ai-split rm -f aisvc >/dev/null
+else
+  # The combined aisvc is the rollback path when split mode is disabled.
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile ai --profile ai-split stop ai-query ai-indexer >/dev/null
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile ai --profile ai-split rm -f ai-query ai-indexer >/dev/null
+fi
+
 if [[ "$ai_enabled" == false ]]; then
   # Profile-disabled services are not orphans, so remove old AI containers
   # explicitly when switching an existing deployment to core-only mode.
-  docker compose --env-file "$env_file" -f "$compose_file" --profile ai stop aisvc etcd
-  docker compose --env-file "$env_file" -f "$compose_file" --profile ai rm -f aisvc etcd
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile ai --profile ai-split stop aisvc ai-query ai-indexer etcd
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile ai --profile ai-split rm -f aisvc ai-query ai-indexer etcd
+fi
+
+if [[ "$redis_split" == false ]]; then
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile redis-split stop redis-broker redis-coordination redis-cache >/dev/null
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile redis-split rm -f redis-broker redis-coordination redis-cache >/dev/null
+fi
+
+if [[ "$search_indexer" == false ]]; then
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile search stop search-indexer >/dev/null
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile search rm -f search-indexer >/dev/null
 fi
 
 web_port=$(awk -F= '$1 == "WEB_PORT" {print $2}' "$env_file" | tail -1)

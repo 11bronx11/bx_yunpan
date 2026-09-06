@@ -1,0 +1,3 @@
+Test Suites: 14 passed, 14 total
+Tests: 36 passed, 36 total
+Command: CI=true npm test -- --watchAll=false --runInBand

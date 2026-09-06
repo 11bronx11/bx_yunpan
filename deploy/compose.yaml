@@ -9,7 +9,10 @@ x-app-environment: &app-environment
   HTTP_PROBE_TIMEOUT: ${HTTP_PROBE_TIMEOUT:-2s}
   HTTP_READ_HEADER_TIMEOUT: ${HTTP_READ_HEADER_TIMEOUT:-5s}
   HTTP_IDLE_TIMEOUT: ${HTTP_IDLE_TIMEOUT:-60s}
-  POSTGRES_DSN: postgres://${POSTGRES_USER:-yunpan}:${POSTGRES_PASSWORD:-yunpan}@postgres:5432/${POSTGRES_DB:-yunpan}?sslmode=disable
+  # Both names are passed during the expand window. New code uses the stable
+  # writer endpoint; POSTGRES_DSN remains for older binaries.
+  POSTGRES_PRIMARY_DSN: ${POSTGRES_PRIMARY_DSN:-${POSTGRES_DSN:-postgres://${POSTGRES_USER:-yunpan}:${POSTGRES_PASSWORD:-yunpan}@postgres:5432/${POSTGRES_DB:-yunpan}?sslmode=disable}}
+  POSTGRES_DSN: ${POSTGRES_DSN:-${POSTGRES_PRIMARY_DSN:-postgres://${POSTGRES_USER:-yunpan}:${POSTGRES_PASSWORD:-yunpan}@postgres:5432/${POSTGRES_DB:-yunpan}?sslmode=disable}}
   POSTGRES_MAX_OPEN_CONNS: ${POSTGRES_MAX_OPEN_CONNS:-32}
   POSTGRES_MAX_IDLE_CONNS: ${POSTGRES_MAX_IDLE_CONNS:-8}
   POSTGRES_CONN_MAX_LIFETIME: ${POSTGRES_CONN_MAX_LIFETIME:-30m}
@@ -17,6 +20,20 @@ x-app-environment: &app-environment
   REDIS_ADDR: redis:6379
   REDIS_PASSWORD: ${REDIS_PASSWORD:-}
   REDIS_DB: ${REDIS_DB:-0}
+  # Compatibility defaults keep all three responsibilities on the bundled
+  # Redis. Set role-specific values to separate instances in staging/production.
+  REDIS_BROKER_ADDR: ${REDIS_BROKER_ADDR:-redis:6379}
+  REDIS_BROKER_PASSWORD: ${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}
+  REDIS_BROKER_DB: ${REDIS_BROKER_DB:-${REDIS_DB:-0}}
+  REDIS_COORDINATION_ADDR: ${REDIS_COORDINATION_ADDR:-redis:6379}
+  REDIS_COORDINATION_PASSWORD: ${REDIS_COORDINATION_PASSWORD:-${REDIS_PASSWORD:-}}
+  REDIS_COORDINATION_DB: ${REDIS_COORDINATION_DB:-${REDIS_DB:-0}}
+  REDIS_CACHE_ADDR: ${REDIS_CACHE_ADDR:-redis:6379}
+  REDIS_CACHE_PASSWORD: ${REDIS_CACHE_PASSWORD:-${REDIS_PASSWORD:-}}
+  REDIS_CACHE_DB: ${REDIS_CACHE_DB:-${REDIS_DB:-0}}
+  CACHE_ENABLED: ${CACHE_ENABLED:-true}
+  CACHE_TTL: ${CACHE_TTL:-5m}
+  CACHE_L1_MAX_ITEMS: ${CACHE_L1_MAX_ITEMS:-512}
   S3_ENDPOINT: minio:9000
   S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-127.0.0.1:3000}
   S3_PUBLIC_PATH_PREFIX: ${S3_PUBLIC_PATH_PREFIX:-/storage}
@@ -38,8 +55,11 @@ x-app-environment: &app-environment
   OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-20}
   OUTBOX_TASK_MAX_RETRY: ${OUTBOX_TASK_MAX_RETRY:-8}
   OUTBOX_TASK_TIMEOUT: ${OUTBOX_TASK_TIMEOUT:-30m}
+  # New typed event writes stay opt-in until the compatibility relay is deployed.
+  OUTBOX_V2_EVENTS_ENABLED: ${OUTBOX_V2_EVENTS_ENABLED:-false}
   OBJECT_GC_DELAY: ${OBJECT_GC_DELAY:-24h}
   WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-8}
+  WORKER_METRICS_ADDR: ${WORKER_METRICS_ADDR:-:8083}
   WORKER_QUEUE_AI: ${WORKER_QUEUE_AI:-4}
   WORKER_QUEUE_MEDIA: ${WORKER_QUEUE_MEDIA:-4}
   WORKER_QUEUE_OBJECT: ${WORKER_QUEUE_OBJECT:-2}
@@ -73,6 +93,7 @@ x-app-environment: &app-environment
   AI_RATE_LIMIT_REPROCESS_PER_MINUTE: ${AI_RATE_LIMIT_REPROCESS_PER_MINUTE:-3}
   AISVC_GRPC_ADDR: ${AISVC_GRPC_ADDR:-:8082}
   AISVC_GRPC_TARGET: ${AISVC_GRPC_TARGET:-aisvc:8082}
+  AI_SERVICE_ROLE: ${AI_SERVICE_ROLE:-combined}
   AISVC_CALL_TIMEOUT: ${AISVC_CALL_TIMEOUT:-120s}
   AISVC_SEARCH_MAX_ATTEMPTS: ${AISVC_SEARCH_MAX_ATTEMPTS:-3}
   AISVC_REPROCESS_MAX_ATTEMPTS: ${AISVC_REPROCESS_MAX_ATTEMPTS:-3}
@@ -101,6 +122,13 @@ x-app-environment: &app-environment
   OUTBOX_LEADER_LOCK_ENABLED: ${OUTBOX_LEADER_LOCK_ENABLED:-true}
   OUTBOX_LEADER_LOCK_KEY: ${OUTBOX_LEADER_LOCK_KEY:-yunpan:outbox:dispatcher:leader}
   OUTBOX_LEADER_LOCK_TTL: ${OUTBOX_LEADER_LOCK_TTL:-15s}
+  SEARCH_INDEX_ENABLED: ${SEARCH_INDEX_ENABLED:-false}
+  SEARCH_WRITE_BACKENDS: ${SEARCH_WRITE_BACKENDS:-postgres}
+  SEARCH_READ_BACKEND: ${SEARCH_READ_BACKEND:-postgres}
+  SEARCH_SHADOW_SAMPLE_RATE: ${SEARCH_SHADOW_SAMPLE_RATE:-0}
+  SEARCH_INDEX_EPOCH: ${SEARCH_INDEX_EPOCH:-v1}
+  KAFKA_ENABLED: ${KAFKA_ENABLED:-false}
+  KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
 
 services:
   postgres:
@@ -145,9 +173,76 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  # Optional P4 role isolation. The compatibility redis service remains the
+  # default; deploy/up.sh --redis-split points application clients here.
+  redis-broker:
+    profiles: ["redis-split"]
+    image: ${DOCKER_REGISTRY:-docker.io}/library/redis:8.10-alpine
+    environment:
+      ROLE_REDIS_PASSWORD: ${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        if [ -n "$${ROLE_REDIS_PASSWORD}" ]; then
+          exec redis-server --appendonly yes --requirepass "$${ROLE_REDIS_PASSWORD}"
+        fi
+        exec redis-server --appendonly yes
+    volumes:
+      - redis-broker-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$$ROLE_REDIS_PASSWORD\" ]; then redis-cli --no-auth-warning -a \"$$ROLE_REDIS_PASSWORD\" ping; else redis-cli ping; fi"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  redis-coordination:
+    profiles: ["redis-split"]
+    image: ${DOCKER_REGISTRY:-docker.io}/library/redis:8.10-alpine
+    environment:
+      ROLE_REDIS_PASSWORD: ${REDIS_COORDINATION_PASSWORD:-${REDIS_PASSWORD:-}}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        if [ -n "$${ROLE_REDIS_PASSWORD}" ]; then
+          exec redis-server --save "" --appendonly no --requirepass "$${ROLE_REDIS_PASSWORD}"
+        fi
+        exec redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$$ROLE_REDIS_PASSWORD\" ]; then redis-cli --no-auth-warning -a \"$$ROLE_REDIS_PASSWORD\" ping; else redis-cli ping; fi"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  redis-cache:
+    profiles: ["redis-split"]
+    image: ${DOCKER_REGISTRY:-docker.io}/library/redis:8.10-alpine
+    environment:
+      ROLE_REDIS_PASSWORD: ${REDIS_CACHE_PASSWORD:-${REDIS_PASSWORD:-}}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        if [ -n "$${ROLE_REDIS_PASSWORD}" ]; then
+          exec redis-server --save "" --appendonly no --requirepass "$${ROLE_REDIS_PASSWORD}"
+        fi
+        exec redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$$ROLE_REDIS_PASSWORD\" ]; then redis-cli --no-auth-warning -a \"$$ROLE_REDIS_PASSWORD\" ping; else redis-cli ping; fi"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
   # 上游官方镜像只发布在 quay.io，不走 DOCKER_REGISTRY 前缀。
   etcd:
-    profiles: ["ai"]
+    profiles: ["ai", "ai-split"]
     image: ${ETCD_IMAGE:-quay.io/coreos/etcd:v3.6.6}
     command: ["/usr/local/bin/etcd"]
     environment:
@@ -190,7 +285,10 @@ services:
     restart: unless-stopped
 
   minio-init:
-    image: ${DOCKER_REGISTRY:-docker.io}/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    # The pinned MinIO server image also contains the mc CLI. Reusing it keeps
+    # local startup self-contained when the separate mc image is unavailable;
+    # MINIO_INIT_IMAGE may override this in environments with a dedicated CLI.
+    image: ${MINIO_INIT_IMAGE:-${DOCKER_REGISTRY:-docker.io}/minio/minio:RELEASE.2025-09-07T16-13-09Z}
     depends_on:
       minio:
         condition: service_healthy
@@ -240,8 +338,10 @@ services:
     environment:
       <<: *app-environment
       HTTP_ADDR: :8081
-    ports:
-      - "${APP_BIND_IP:-127.0.0.1}:${API_PORT:-8081}:8081"
+    # API is reachable through the Web/Gateway service. Do not bind a fixed
+    # host port here: Compose must be able to scale API replicas.
+    expose:
+      - "8081"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -273,6 +373,8 @@ services:
         GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
         TARGET: worker
     environment: *app-environment
+    expose:
+      - "8083"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -280,6 +382,118 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+  # P2 distributed roles. They are opt-in so the legacy combined worker stays
+  # the default local profile and remains the rollback path.
+  outbox-relay:
+    profiles: ["distributed"]
+    image: bx-yunpan-outbox-relay:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args:
+        DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
+        GO_VERSION: ${GO_VERSION:-1.25.13}
+        GO_PROXY: ${GO_PROXY:-https://proxy.golang.org,direct}
+        GO_BUILD_PARALLELISM: ${GO_BUILD_PARALLELISM:-1}
+        GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
+        TARGET: outbox-relay
+    environment: *app-environment
+    expose: ["8083"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      minio-init: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 15s
+
+  object-worker:
+    profiles: ["distributed"]
+    image: bx-yunpan-object-worker:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args:
+        DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
+        GO_VERSION: ${GO_VERSION:-1.25.13}
+        GO_PROXY: ${GO_PROXY:-https://proxy.golang.org,direct}
+        GO_BUILD_PARALLELISM: ${GO_BUILD_PARALLELISM:-1}
+        GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
+        TARGET: object-worker
+    environment: *app-environment
+    expose: ["8083"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      minio-init: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+  media-worker:
+    profiles: ["distributed"]
+    image: bx-yunpan-media-worker:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args:
+        DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
+        GO_VERSION: ${GO_VERSION:-1.25.13}
+        GO_PROXY: ${GO_PROXY:-https://proxy.golang.org,direct}
+        GO_BUILD_PARALLELISM: ${GO_BUILD_PARALLELISM:-1}
+        GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
+        TARGET: media-worker
+    environment: *app-environment
+    expose: ["8083"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      minio-init: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+  maintenance-worker:
+    profiles: ["distributed"]
+    image: bx-yunpan-maintenance-worker:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args:
+        DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
+        GO_VERSION: ${GO_VERSION:-1.25.13}
+        GO_PROXY: ${GO_PROXY:-https://proxy.golang.org,direct}
+        GO_BUILD_PARALLELISM: ${GO_BUILD_PARALLELISM:-1}
+        GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
+        TARGET: maintenance-worker
+    environment: *app-environment
+    expose: ["8083"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      minio-init: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+  search-indexer:
+    profiles: ["search"]
+    image: bx-yunpan-search-indexer:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args:
+        DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
+        GO_VERSION: ${GO_VERSION:-1.25.13}
+        GO_PROXY: ${GO_PROXY:-https://proxy.golang.org,direct}
+        GO_BUILD_PARALLELISM: ${GO_BUILD_PARALLELISM:-1}
+        GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
+        TARGET: search-indexer
+    environment: *app-environment
+    expose: ["8083"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      minio-init: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
@@ -316,6 +530,47 @@ services:
       timeout: 3s
       retries: 20
       start_period: 10s
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+  # P3 split profile. Both services reuse the compatible aisvc image but have
+  # disjoint process roles: query advertises gRPC, indexer owns only queue ai.
+  # Keep the legacy aisvc service as the default rollback path.
+  ai-query:
+    profiles: ["ai-split"]
+    image: bx-yunpan-aisvc:${APP_IMAGE_TAG:-local}
+    environment:
+      <<: *app-environment
+      AI_SERVICE_ROLE: query
+      AISVC_GRPC_ADDR: :8082
+    expose: ["8083", "8082"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      minio-init: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+      etcd: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "/app/service", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+  ai-indexer:
+    profiles: ["ai-split"]
+    image: bx-yunpan-aisvc:${APP_IMAGE_TAG:-local}
+    environment:
+      <<: *app-environment
+      AI_SERVICE_ROLE: indexer
+    expose: ["8083"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      minio-init: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
@@ -394,6 +649,7 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  redis-broker-data:
   minio-data:
   etcd-data:
   prometheus-data:
