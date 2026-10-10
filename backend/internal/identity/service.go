@@ -3,12 +3,15 @@ package identity
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dblock"
 )
 
 var (
@@ -73,6 +76,25 @@ func (s *Service) Register(username, email, password string) (Session, error) {
 	}
 	var session Session
 	err = s.db.Transaction(func(tx *gorm.DB) error {
+		// Both columns share the login namespace. Lock in a stable order so
+		// concurrent registrations cannot create a cross-column collision.
+		identifiers := []string{usernameNormalized}
+		if emailNormalized != nil && *emailNormalized != usernameNormalized {
+			identifiers = append(identifiers, *emailNormalized)
+		}
+		sort.Strings(identifiers)
+		for _, identifier := range identifiers {
+			if err := dblock.Transaction(tx, "identity:login:"+identifier); err != nil {
+				return err
+			}
+		}
+		var count int64
+		if err := tx.Model(&User{}).Where("username_normalized IN ? OR email_normalized IN ?", identifiers, identifiers).Count(&count).Error; err != nil {
+			return err
+		}
+		if count != 0 {
+			return ErrConflict
+		}
 		if err := tx.Create(&user).Error; err != nil {
 			if errors.Is(err, gorm.ErrDuplicatedKey) {
 				return ErrConflict
@@ -99,17 +121,28 @@ func (s *Service) Login(login, password string) (Session, error) {
 		return Session{}, ErrUnauthorized
 	}
 	normalized := strings.ToLower(strings.TrimSpace(login))
-	var user User
-	if err := s.db.Where("username_normalized = ? OR email_normalized = ?", normalized, normalized).First(&user).Error; err != nil {
-		return Session{}, ErrUnauthorized
+	var candidates []User
+	if err := s.db.Where("username_normalized = ? OR email_normalized = ?", normalized, normalized).Find(&candidates).Error; err != nil {
+		return Session{}, err
 	}
-	if !VerifyPassword(user.PasswordHash, password) {
+	// Existing accounts may predate the shared namespace check. Select by
+	// credentials rather than row order, and reject ambiguous credentials.
+	var user *User
+	for i := range candidates {
+		if VerifyPassword(candidates[i].PasswordHash, password) {
+			if user != nil {
+				return Session{}, ErrUnauthorized
+			}
+			user = &candidates[i]
+		}
+	}
+	if user == nil {
 		return Session{}, ErrUnauthorized
 	}
 	if user.Status != UserStatusActive {
 		return Session{}, ErrDisabled
 	}
-	return s.issueSession(s.db, user, uuid.Must(uuid.NewV7()))
+	return s.issueSession(s.db, *user, uuid.Must(uuid.NewV7()))
 }
 
 func (s *Service) Rotate(rawToken string) (Session, error) {
@@ -117,16 +150,31 @@ func (s *Service) Rotate(rawToken string) (Session, error) {
 		return Session{}, ErrUnauthorized
 	}
 	var result Session
+	replayed := false
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var current RefreshSession
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("token_hash = ?", RefreshHash(rawToken)).First(&current).Error
-		if err != nil {
+		err := tx.Where("token_hash = ?", RefreshHash(rawToken)).First(&current).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrUnauthorized
+		}
+		if err != nil {
+			return err
+		}
+		// Rotating a descendant and revoking the family must serialize before
+		// taking any row lock, otherwise a new descendant can escape revocation.
+		if err := dblock.Transaction(tx, "identity:refresh:"+current.FamilyID.String()); err != nil {
+			return err
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, "id = ?", current.ID).Error; err != nil {
+			return err
 		}
 		now := time.Now().UTC()
 		if current.RevokedAt != nil {
-			tx.Model(&RefreshSession{}).Where("family_id = ? AND revoked_at IS NULL", current.FamilyID).Update("revoked_at", now)
-			return ErrUnauthorized
+			if err := tx.Model(&RefreshSession{}).Where("family_id = ? AND revoked_at IS NULL", current.FamilyID).Update("revoked_at", now).Error; err != nil {
+				return err
+			}
+			replayed = true
+			return nil // Commit revocation before returning the authentication error.
 		}
 		if !current.ExpiresAt.After(now) {
 			return ErrUnauthorized
@@ -141,6 +189,9 @@ func (s *Service) Rotate(rawToken string) (Session, error) {
 		result, err = s.issueSession(tx, user, current.FamilyID)
 		return err
 	})
+	if err == nil && replayed {
+		return Session{}, ErrUnauthorized
+	}
 	return result, err
 }
 

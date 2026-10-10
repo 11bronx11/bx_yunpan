@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 	"github.com/google/uuid"
-	"github.com/hibiken/asynq"
 	redis "github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -21,7 +21,7 @@ import (
 
 type Dispatcher struct {
 	db            *gorm.DB
-	client        taskEnqueuer
+	client        taskqueue.Publisher
 	logger        *slog.Logger
 	config        config.Outbox
 	locking       config.Locking
@@ -29,20 +29,24 @@ type Dispatcher struct {
 	searchEnabled bool
 	metrics       *Metrics
 	// redis 为 nil 时退化为单副本直接轮询，不做选主。
-	redis         redis.UniversalClient
-	markPublished func(*gorm.DB, Delivery, time.Time) error
+	redis          redis.UniversalClient
+	markPublished  func(*gorm.DB, Delivery, time.Time) error
+	publishTimeout time.Duration
 }
 
-type taskEnqueuer interface {
-	EnqueueContext(context.Context, *asynq.Task, ...asynq.Option) (*asynq.TaskInfo, error)
-}
-
-func NewDispatcher(db *gorm.DB, client *asynq.Client, logger *slog.Logger, cfg config.Outbox) *Dispatcher {
+func NewDispatcher(db *gorm.DB, client taskqueue.Publisher, logger *slog.Logger, cfg config.Outbox) *Dispatcher {
 	return newDispatcher(db, client, logger, cfg)
 }
 
-func newDispatcher(db *gorm.DB, client taskEnqueuer, logger *slog.Logger, cfg config.Outbox) *Dispatcher {
-	return &Dispatcher{db: db, client: client, logger: logger, config: cfg, aiEnabled: true, markPublished: markDeliveryPublished}
+func newDispatcher(db *gorm.DB, client taskqueue.Publisher, logger *slog.Logger, cfg config.Outbox) *Dispatcher {
+	return &Dispatcher{db: db, client: client, logger: logger, config: cfg, aiEnabled: true, markPublished: markDeliveryPublished, publishTimeout: 5 * time.Second}
+}
+
+func (d *Dispatcher) WithPublishTimeout(timeout time.Duration) *Dispatcher {
+	if timeout > 0 {
+		d.publishTimeout = timeout
+	}
+	return d
 }
 
 // WithMetrics attaches the worker-owned registry used for outbox backlog
@@ -69,7 +73,7 @@ func (d *Dispatcher) WithSearchEnabled(enabled bool) *Dispatcher {
 // 事务，但选主要跨越连续多轮、跨越事务边界，没有一个能覆盖全程的事务
 // 可以挂 advisory lock。
 //
-// 锁失效的后果是两个副本同时投递，而 Asynq 的 TaskID 去重与任务侧幂等
+// 锁失效的后果是两个副本同时投递，而 任务侧幂等与数据库执行记录
 // 会吸收重复，所以不需要更强的互斥保证。
 func (d *Dispatcher) WithLeaderLock(client redis.UniversalClient, locking config.Locking) *Dispatcher {
 	d.redis = client
@@ -134,8 +138,21 @@ func (d *Dispatcher) poll(ctx context.Context, lost <-chan struct{}) {
 	ticker := time.NewTicker(d.config.PollInterval)
 	defer ticker.Stop()
 	for {
-		if err := d.dispatchBatch(ctx); err != nil {
+		processed, err := d.dispatchBatchCount(ctx)
+		if err != nil {
 			d.logger.ErrorContext(ctx, "dispatch outbox", "error", err)
+		}
+		// Drain a backlog without imposing an artificial batch/interval ceiling.
+		// Check cancellation and leadership between every bounded batch.
+		if err == nil && processed >= d.config.BatchSize && processed > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-lost:
+				return
+			default:
+				continue
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -149,6 +166,38 @@ func (d *Dispatcher) poll(ctx context.Context, lost <-chan struct{}) {
 }
 
 func (d *Dispatcher) dispatchBatch(ctx context.Context) error {
+	_, err := d.dispatchBatchCount(ctx)
+	return err
+}
+
+func (d *Dispatcher) dispatchBatchCount(ctx context.Context) (int, error) {
+	if err := d.prepareDeliveries(ctx); err != nil {
+		return 0, err
+	}
+	claimed, err := d.claimDeliveries(ctx)
+	if err != nil {
+		return 0, err
+	}
+	var firstErr error
+	for _, item := range claimed {
+		if err := d.sendDelivery(ctx, item); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			if d.logger != nil {
+				d.logger.WarnContext(ctx, "dispatch outbox delivery", "event_id", item.event.ID, "error", err)
+			}
+		}
+	}
+	return len(claimed), firstErr
+}
+
+type claimedDelivery struct {
+	delivery Delivery
+	event    Event
+}
+
+func (d *Dispatcher) prepareDeliveries(ctx context.Context) error {
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := ensureLegacyDeliveries(tx, d.aiEnabled); err != nil {
 			return err
@@ -156,68 +205,132 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context) error {
 		if err := ensureSearchDeliveries(tx, d.searchEnabled); err != nil {
 			return err
 		}
-		if err := reportUnroutedEvents(ctx, tx, d.logger, d.aiEnabled, d.metrics); err != nil {
+		var now time.Time
+		if err := tx.Raw("SELECT clock_timestamp()").Scan(&now).Error; err != nil {
 			return err
 		}
+		if _, err := RecoverPublishedBatch(tx, now, 15*time.Minute, d.config.BatchSize, d.aiEnabled, d.searchEnabled); err != nil {
+			return err
+		}
+		// Pin GC eligibility once. Retries, restarts and config changes never
+		// move a persisted deadline earlier or start a fresh delay.
+		if err := tx.Exec(`UPDATE outbox_deliveries d SET not_before =
+          CASE WHEN d.destination IN ('object.gc.v1@maintenance', 'object.gc_requested.v1@maintenance')
+          THEN GREATEST(e.available_at, e.created_at + (? * interval '1 millisecond'))
+          ELSE e.available_at END
+          FROM outbox_events e WHERE d.event_id=e.id AND d.transport='rabbitmq' AND d.not_before IS NULL`, d.config.GCDelay.Milliseconds()).Error; err != nil {
+			return err
+		}
+		return reportUnroutedEvents(ctx, tx, d.logger, d.aiEnabled, d.metrics)
+	})
+}
+
+// claimDeliveries 只持有数据库锁，不在事务中访问 Redis。
+func (d *Dispatcher) claimDeliveries(ctx context.Context) ([]claimedDelivery, error) {
+	items := make([]claimedDelivery, 0, d.config.BatchSize)
+	recovered := 0
+	err := d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		now := time.Now().UTC()
 		var deliveries []Delivery
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Where("status IN ? AND available_at <= ?", []string{"pending", "failed"}, time.Now().UTC()).
+			Where("transport = 'rabbitmq' AND not_before <= ? AND ((status IN ? AND available_at <= ?) OR (status = 'sending' AND lease_until <= ?))", now, []string{"pending", "failed"}, now, now).
 			Order("available_at ASC, event_id ASC").Limit(d.config.BatchSize).Find(&deliveries).Error; err != nil {
 			return err
 		}
+		if len(deliveries) == 0 {
+			return nil
+		}
+		eventIDs := make([]uuid.UUID, 0, len(deliveries))
 		for _, delivery := range deliveries {
-			var event Event
-			if err := tx.First(&event, "id = ?", delivery.EventID).Error; err != nil {
-				return err
+			eventIDs = append(eventIDs, delivery.EventID)
+		}
+		var events []Event
+		if err := tx.Where("id IN ?", eventIDs).Find(&events).Error; err != nil {
+			return err
+		}
+		eventByID := make(map[uuid.UUID]Event, len(events))
+		for _, event := range events {
+			eventByID[event.ID] = event
+		}
+		for index := range deliveries {
+			if deliveries[index].Status == "sending" {
+				recovered++
 			}
-			target, ok := targetAllowedForEventWithSearch(event.EventType, d.aiEnabled, d.searchEnabled, delivery)
+			event, ok := eventByID[deliveries[index].EventID]
 			if !ok {
-				message := "unsupported delivery transport or destination"
-				if err := markDeliveryFailed(tx, delivery, message); err != nil {
-					return err
-				}
-				d.logger.ErrorContext(ctx, "outbox delivery unroutable", "event_id", event.ID, "transport", delivery.Transport, "destination", delivery.Destination)
-				continue
+				return fmt.Errorf("outbox event %s not found", deliveries[index].EventID)
 			}
-			// A delivery created before AI was disabled is intentionally marked
-			// published without enqueueing: no consumer is enabled for that target.
-			if target.Queue == "ai" && !d.aiEnabled {
-				if err := markDeliveryPublished(tx, delivery, time.Now().UTC()); err != nil {
-					return err
-				}
-				if err := refreshLegacyEventStatus(tx, event.ID); err != nil {
-					return err
-				}
-				continue
+			token := uuid.Must(uuid.NewV7())
+			leaseUntil := now.Add(time.Duration(d.config.BatchSize)*(d.publishTimeout+time.Second) + time.Minute)
+			if leaseUntil.Before(now.Add(time.Minute)) {
+				leaseUntil = now.Add(time.Minute)
 			}
-			payload := payloadWithTrace(event, d.logger)
-			options := []asynq.Option{
-				// TaskID is stable per event and destination. A relay restart
-				// after Redis accepted a task is therefore harmless.
-				asynq.TaskID(event.ID.String() + ":" + delivery.Destination),
-				asynq.MaxRetry(d.config.MaxRetry),
-				asynq.Timeout(d.config.TaskTimeout),
-				asynq.Queue(target.Queue),
-			}
-			if target.TaskType == EventObjectGCRequested {
-				options = append(options, asynq.ProcessAt(time.Now().UTC().Add(d.config.GCDelay)))
-			}
-			_, err := d.client.EnqueueContext(ctx, asynq.NewTask(target.TaskType, payload), options...)
-			if err != nil && !errors.Is(err, asynq.ErrTaskIDConflict) {
-				if markErr := markDeliveryFailed(tx, delivery, err.Error()); markErr != nil {
-					return markErr
-				}
-				continue
-			}
-			if err := d.markPublished(tx, delivery, time.Now().UTC()); err != nil {
+			if err := tx.Model(&Delivery{}).Where("event_id = ? AND transport = ? AND destination = ?", deliveries[index].EventID, deliveries[index].Transport, deliveries[index].Destination).
+				Updates(map[string]any{"status": "sending", "attempt": gorm.Expr("attempt + 1"), "lease_until": leaseUntil, "lease_token": token, "last_error": nil}).Error; err != nil {
 				return err
 			}
-			if err := refreshLegacyEventStatus(tx, event.ID); err != nil {
-				return err
-			}
+			deliveries[index].Status = "sending"
+			deliveries[index].Attempt++
+			deliveries[index].LeaseUntil = &leaseUntil
+			deliveries[index].LeaseToken = &token
+			items = append(items, claimedDelivery{delivery: deliveries[index], event: event})
 		}
 		return nil
 	})
+	if err == nil && d.metrics != nil {
+		d.metrics.LeaseRecoveries.Add(float64(recovered))
+	}
+	return items, err
+}
+
+func (d *Dispatcher) sendDelivery(ctx context.Context, item claimedDelivery) error {
+	delivery, event := item.delivery, item.event
+	target, ok := targetFromDelivery(delivery)
+	if !ok {
+		return d.failDelivery(delivery, "unsupported delivery transport or destination")
+	}
+	if target.Queue == "ai" && !d.aiEnabled {
+		return d.ackDelivery(delivery, event)
+	}
+	if target, ok = targetAllowedForEventWithSearch(event.EventType, d.aiEnabled, d.searchEnabled, delivery); !ok {
+		return d.failDelivery(delivery, "unsupported delivery transport or destination")
+	}
+	payload := payloadWithTrace(event, d.logger)
+	maxRetry, timeout := d.config.MaxRetry, d.config.TaskTimeout
+	if delivery.TaskMaxRetry != nil {
+		maxRetry = *delivery.TaskMaxRetry
+	}
+	if delivery.TaskTimeoutMS != nil {
+		timeout = time.Duration(*delivery.TaskTimeoutMS) * time.Millisecond
+	}
+	err := d.client.Publish(ctx, taskqueue.Task{ID: event.ID.String() + ":" + target.Destination, Kind: target.TaskType, Queue: target.Queue, Body: payload, RetryCount: delivery.TaskRetryCount, MaxRetry: maxRetry, Timeout: timeout})
+	if err != nil {
+		return d.failDelivery(delivery, err.Error())
+	}
+	return d.ackDelivery(delivery, event)
+}
+
+func (d *Dispatcher) ackDelivery(delivery Delivery, event Event) error {
+	err := d.db.Transaction(func(tx *gorm.DB) error {
+		if err := d.markPublished(tx, delivery, time.Now().UTC()); err != nil {
+			return err
+		}
+		return refreshLegacyEventStatus(tx, event.ID)
+	})
+	if err == nil {
+		return nil
+	}
+	// ACK 失败后释放 claim，下一轮可用稳定 TaskID 重试。
+	_ = d.db.Model(&Delivery{}).Where("event_id = ? AND transport = ? AND destination = ? AND status = 'sending' AND lease_token = ?", delivery.EventID, delivery.Transport, delivery.Destination, delivery.LeaseToken).
+		Updates(map[string]any{"status": "pending", "available_at": time.Now().UTC(), "lease_until": nil, "lease_token": nil}).Error
+	return err
+}
+
+func (d *Dispatcher) failDelivery(delivery Delivery, message string) error {
+	err := d.db.Model(&Delivery{}).
+		Where("event_id = ? AND transport = ? AND destination = ? AND status = 'sending' AND lease_token = ?", delivery.EventID, delivery.Transport, delivery.Destination, delivery.LeaseToken).
+		Updates(map[string]any{"status": "failed", "available_at": time.Now().UTC().Add(backoff(delivery.Attempt)), "lease_until": nil, "lease_token": nil, "last_error": message}).Error
+	return errors.Join(errors.New(message), err)
 }
 
 func ensureSearchDeliveries(tx *gorm.DB, enabled bool) error {
@@ -229,10 +342,8 @@ func ensureSearchDeliveries(tx *gorm.DB, enabled bool) error {
 		return err
 	}
 	for _, event := range events {
-		for _, target := range SearchRoutes(event.EventType, true) {
-			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&Delivery{EventID: event.ID, Transport: target.Transport, Destination: target.Destination, Status: "pending", AvailableAt: time.Now().UTC()}).Error; err != nil {
-				return err
-			}
+		if err := addDeliveriesWithSearch(tx, event, false, true); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -249,13 +360,10 @@ func ensureLegacyDeliveries(tx *gorm.DB, aiEnabled bool) error {
 		return err
 	}
 	for _, event := range events {
-		var count int64
-		if err := tx.Model(&Delivery{}).Where("event_id = ?", event.ID).Count(&count).Error; err != nil {
-			return err
-		}
-		if count > 0 {
-			continue
-		}
+		// Reconcile each currently allowed destination independently. During a
+		// rolling upgrade an older relay may have created only a subset of the
+		// fan-out (for example media without AI); counting existing rows would
+		// permanently lose the newly enabled destination.
 		if err := addDeliveries(tx, event, aiEnabled); err != nil {
 			return err
 		}
@@ -296,16 +404,33 @@ func reportUnroutedEvents(ctx context.Context, tx *gorm.DB, logger *slog.Logger,
 }
 
 func markDeliveryPublished(tx *gorm.DB, delivery Delivery, now time.Time) error {
-	return tx.Model(&Delivery{}).
-		Where("event_id = ? AND transport = ? AND destination = ?", delivery.EventID, delivery.Transport, delivery.Destination).
-		Updates(map[string]any{"status": "published", "published_at": now, "attempt": gorm.Expr("attempt + 1"), "last_error": nil}).Error
+	query := tx.Model(&Delivery{}).
+		Where("event_id = ? AND transport = ? AND destination = ?", delivery.EventID, delivery.Transport, delivery.Destination)
+	if delivery.LeaseToken != nil {
+		query = query.Where("status = 'sending' AND lease_token = ?", *delivery.LeaseToken)
+	}
+	updates := map[string]any{"status": "published", "published_at": now, "lease_until": nil, "lease_token": nil, "last_error": nil}
+	if delivery.LeaseToken == nil {
+		updates["attempt"] = gorm.Expr("attempt + 1")
+	}
+	result := query.Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 1 {
+		return nil
+	}
+	return errors.New("outbox delivery lease lost")
 }
 
 func markDeliveryFailed(tx *gorm.DB, delivery Delivery, message string) error {
 	next := time.Now().UTC().Add(time.Second)
-	return tx.Model(&Delivery{}).
-		Where("event_id = ? AND transport = ? AND destination = ?", delivery.EventID, delivery.Transport, delivery.Destination).
-		Updates(map[string]any{"status": "failed", "attempt": gorm.Expr("attempt + 1"), "available_at": next, "last_error": message}).Error
+	query := tx.Model(&Delivery{}).
+		Where("event_id = ? AND transport = ? AND destination = ?", delivery.EventID, delivery.Transport, delivery.Destination)
+	if delivery.LeaseToken != nil {
+		query = query.Where("status = 'sending' AND lease_token = ?", *delivery.LeaseToken)
+	}
+	return query.Updates(map[string]any{"status": "failed", "available_at": next, "lease_until": nil, "lease_token": nil, "last_error": message}).Error
 }
 
 func refreshLegacyEventStatus(tx *gorm.DB, eventID uuid.UUID) error {
@@ -321,7 +446,7 @@ func refreshLegacyEventStatus(tx *gorm.DB, eventID uuid.UUID) error {
 		Updates(map[string]any{"status": "published", "published_at": now, "attempt": gorm.Expr("attempt + 1")}).Error
 }
 
-// TracePayloadKey 是 Asynq payload 里承载 trace context 的字段名。
+// TracePayloadKey 是 RabbitMQ payload 里承载 trace context 的字段名。
 // 业务 handler 用具名 struct 反序列化，多出这个字段不会影响它们。
 const TracePayloadKey = "_trace"
 
@@ -337,7 +462,9 @@ func payloadWithTrace(event Event, logger *slog.Logger) []byte {
 		fields = map[string]json.RawMessage{}
 	}
 	fields["event_id"] = json.RawMessage(fmt.Sprintf("%q", event.ID.String()))
-	fields["task_id"] = fields["event_id"]
+	if _, exists := fields["task_id"]; !exists {
+		fields["task_id"] = fields["event_id"]
+	}
 	fields["event_type"] = json.RawMessage(fmt.Sprintf("%q", event.EventType))
 	fields["event_version"] = json.RawMessage(strconv.Itoa(event.EventVersion))
 	if event.AggregateVersion != nil {
@@ -359,13 +486,13 @@ func payloadWithTrace(event Event, logger *slog.Logger) []byte {
 	return merged
 }
 
-// dispatchTarget 是一条 outbox 行要投递到的一个 Asynq 任务。
+// dispatchTarget 是一条 outbox 行要投递到的一个 RabbitMQ 任务。
 type dispatchTarget struct {
 	taskType string
 	queue    string
 }
 
-// fanout 把一个事件类型映射到一到多个 Asynq 任务。
+// fanout 把一个事件类型映射到一到多个 RabbitMQ 任务。
 //
 // object.ready 是唯一需要扇出的事件：缩略图留在 worker 的 media 队列；
 // AI 开启时再把索引任务投到 aisvc 消费的 ai 队列。两个任务共用同一份
@@ -380,4 +507,14 @@ func fanout(eventType string, aiEnabled bool) []dispatchTarget {
 		result = append(result, dispatchTarget{taskType: item.TaskType, queue: item.Queue})
 	}
 	return result
+}
+
+func backoff(attempt int) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	if attempt > 6 {
+		attempt = 6
+	}
+	return time.Duration(1<<attempt) * time.Second
 }

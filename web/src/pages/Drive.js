@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { App, Button, Dropdown, Grid, Input, Modal, Space, Table, Tooltip, Upload } from 'antd';
-import { DeleteOutlined, DownloadOutlined, EditOutlined, FolderAddOutlined, FolderOpenOutlined, FolderOutlined, ImportOutlined, LeftOutlined, LinkOutlined, MoreOutlined, RightOutlined, RobotOutlined, UploadOutlined } from '@ant-design/icons';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, App, Button, Dropdown, Grid, Input, Modal, Space, Table, Tooltip, Upload } from 'antd';
+import { DeleteOutlined, DownOutlined, DownloadOutlined, EditOutlined, FolderAddOutlined, FolderOpenOutlined, FolderOutlined, ImportOutlined, LeftOutlined, LinkOutlined, MoreOutlined, ReloadOutlined, RightOutlined, RobotOutlined, UploadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useTransfers } from '../contexts/TransferContext';
@@ -88,6 +88,11 @@ const Drive = () => {
   const [folder, setFolder] = useState(null);
   const [items, setItems] = useState([]);
   const [crumbs, setCrumbs] = useState([]);
+  const [page, setPage] = useState({ has_more: false, next_cursor: '' });
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const folderRequest = useRef(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [folderName, setFolderName] = useState('');
   const [creatingFolder, setCreatingFolder] = useState(false);
@@ -105,20 +110,61 @@ const Drive = () => {
   const [aiTarget, setAITarget] = useState(null);
   const [summaryTarget, setSummaryTarget] = useState(null);
 
-  const loadFolder = useCallback(async folderId => {
+  const loadFolder = useCallback(async function fetchFolder(folderId, cursor = '') {
+    folderRequest.current?.abort();
+    const controller = new AbortController();
+    folderRequest.current = controller;
+    const { signal } = controller;
+    setLoading(!cursor);
+    setLoadingMore(Boolean(cursor));
+    setLoadError('');
     try {
-      const [children, breadcrumb] = await Promise.all([getChildren(folderId), getBreadcrumb(folderId)]);
-      setFolder(folderId); setItems(children.items || []); setCrumbs(breadcrumb.items || []);
+      const [children, breadcrumb] = await Promise.all([
+        getChildren(folderId, { cursor, limit: 50, signal }),
+        cursor ? Promise.resolve(null) : getBreadcrumb(folderId, { signal }),
+      ]);
+      if (signal.aborted) return;
+      setFolder(folderId);
+      setItems(current => cursor ? [...current, ...(children.items || [])] : children.items || []);
+      setPage(children.page || { has_more: false, next_cursor: '' });
+      if (breadcrumb) {
+        setCrumbs(breadcrumb.items || []);
+        setPreviews({});
+      }
+      setLoading(false);
+      setLoadingMore(false);
       const imageItems = (children.items || []).filter(item => item.type === 'file' && item.mime_type?.startsWith('image/'));
-      const values = await Promise.all(imageItems.map(async item => [item.id, await getPreview(item.id).catch(() => null)]));
-      setPreviews(current => ({ ...current, ...Object.fromEntries(values.filter(([, value]) => value?.url)) }));
+      for (let offset = 0; offset < imageItems.length && !signal.aborted; offset += 6) {
+        const values = await Promise.all(imageItems.slice(offset, offset + 6).map(async item => [item.id, await getPreview(item.id, { signal }).catch(() => null)]));
+        if (!signal.aborted) setPreviews(current => ({ ...current, ...Object.fromEntries(values.filter(([, value]) => value?.url)) }));
+      }
     } catch (error) {
+      if (signal.aborted || error.name === 'AbortError') return;
+      if (error.code === 'drive.cursor_stale' && cursor) {
+        message.info('目录内容已变化，已重新加载');
+        return fetchFolder(folderId);
+      }
       if (error.status === 401) logout();
-      else message.error(error.message || '目录加载失败');
+      else setLoadError(error.message || '目录加载失败');
+    } finally {
+      if (!signal.aborted) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
   }, [logout, message]);
 
-  useEffect(() => { getRoot().then(value => { setRoot(value); return loadFolder(value.id); }).catch(error => message.error(error.message || '网盘加载失败')); }, [loadFolder, message]);
+  useEffect(() => {
+    const controller = new AbortController();
+    getRoot({ signal: controller.signal }).then(value => {
+      if (controller.signal.aborted) return;
+      setRoot(value);
+      return loadFolder(value.id);
+    }).catch(error => {
+      if (!controller.signal.aborted) setLoadError(error.message || '网盘加载失败');
+    });
+    return () => { controller.abort(); folderRequest.current?.abort(); };
+  }, [loadFolder]);
 
   const folders = useMemo(() => items.filter(item => item.type === 'folder'), [items]);
   const files = useMemo(() => items.filter(item => item.type === 'file'), [items]);
@@ -328,11 +374,13 @@ const Drive = () => {
     return {};
   };
 
-  if (!root || !folder) return <ProductPage><GraphicEmpty title="正在打开你的云盘" description="目录与对象索引加载中。" /></ProductPage>;
+  if (!root || !folder) return <ProductPage>{loadError ? <Alert type="error" showIcon message={loadError} action={<Button icon={<ReloadOutlined />} onClick={() => root ? loadFolder(root.id) : window.location.reload()}>重试</Button>} /> : <GraphicEmpty title="正在打开你的云盘" description="目录与对象索引加载中。" />}</ProductPage>;
   return <ProductPage accent="var(--lime)"><Workspace>
     <PageHeader title="我的云盘" description="目录、秒传、Multipart 上传和对象级缩略图都在这里。" action={<ActionGroup><Button icon={<ImportOutlined />} onClick={openShareImport}>导入分享</Button><Button icon={<FolderAddOutlined />} onClick={() => setCreateOpen(true)}>新建目录</Button><Upload multiple showUploadList={false} beforeUpload={handleUpload}><Button type="primary" icon={<UploadOutlined />}>上传文件</Button></Upload></ActionGroup>} />
     <DirectoryRow aria-label="目录导航"><Tooltip title="返回上级目录"><Button aria-label="返回上级目录" icon={<LeftOutlined />} disabled={!parentFolder} onClick={() => parentFolder && loadFolder(parentFolder.id)} /></Tooltip><FolderRow>{crumbs.map((item, index) => <React.Fragment key={item.id}>{index > 0 && <CrumbSeparator aria-hidden="true" />}<li><FolderCrumb type="button" aria-current={item.id === folder ? 'page' : undefined} onClick={() => loadFolder(item.id)}><FolderOutlined />{item.name === '/' ? '根目录' : item.name}</FolderCrumb></li></React.Fragment>)}</FolderRow></DirectoryRow>
-    {items.length === 0 ? <GraphicEmpty title="这个目录还是空的" description="新建目录或上传第一个文件。" /> : <Table className="editorial-ledger" rowKey="id" columns={columns} dataSource={[...folders, ...files]} pagination={false} tableLayout="fixed" onRow={rowInteraction} />}
+    {loadError && <Alert type="error" showIcon message={loadError} action={<Button icon={<ReloadOutlined />} onClick={() => loadFolder(folder)}>刷新</Button>} />}
+    {items.length === 0 && !loading ? <GraphicEmpty title="这个目录还是空的" description="新建目录或上传第一个文件。" /> : <Table className="editorial-ledger" rowKey="id" columns={columns} dataSource={[...folders, ...files]} loading={loading} pagination={false} tableLayout="fixed" onRow={rowInteraction} />}
+    {page.has_more && <Button icon={<DownOutlined aria-hidden="true" />} loading={loadingMore} disabled={loading} onClick={() => loadFolder(folder, page.next_cursor)}>加载更多</Button>}
     <Modal open={createOpen} title="新建目录" okText="创建" cancelText="取消" confirmLoading={creatingFolder} onOk={handleCreate} onCancel={() => setCreateOpen(false)}><Input autoFocus aria-label="目录名称" value={folderName} onChange={event => setFolderName(event.target.value)} onPressEnter={handleCreate} placeholder="目录名称" /></Modal>
     <Modal open={Boolean(renameTarget)} title="重命名文件" okText="保存" cancelText="取消" confirmLoading={renaming} onOk={handleRename} onCancel={() => setRenameTarget(null)} destroyOnClose><Input autoFocus aria-label="新文件名" value={renameName} onChange={event => setRenameName(event.target.value)} onPressEnter={handleRename} placeholder="新文件名" /></Modal>
     <MoveFileModal open={Boolean(moveTarget)} file={moveTarget} root={root} currentFolderId={folder} onCancel={() => setMoveTarget(null)} onMoved={handleMoved} />

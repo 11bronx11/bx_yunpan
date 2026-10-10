@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/hibiken/asynq"
+	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -17,27 +17,27 @@ import (
 // TracingMiddleware 把 payload 里的 trace context Extract 出来作为 parent，
 // 为每个任务建一个 CONSUMER span。
 //
-// Asynq 没有官方 OTel 中间件，且业务事务与任务消费之间隔着 outbox 表，
+// RabbitMQ 没有官方 OTel 中间件，且业务事务与任务消费之间隔着 outbox 表，
 // context 无法自然传播——所以 trace 的传播链路是：
 // 业务事务 Inject 到 outbox 行 → dispatcher 放进 payload → 这里 Extract。
-func TracingMiddleware() asynq.MiddlewareFunc {
-	return func(next asynq.Handler) asynq.Handler {
-		return asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
+func TracingMiddleware() taskqueue.MiddlewareFunc {
+	return func(next taskqueue.Handler) taskqueue.Handler {
+		return taskqueue.HandlerFunc(func(ctx context.Context, task *taskqueue.Task) error {
 			ctx = otel.GetTextMapPropagator().Extract(ctx, carrierFromPayload(task.Payload()))
 
 			attributes := []attribute.KeyValue{
-				attribute.String("messaging.system", "asynq"),
+				attribute.String("messaging.system", "rabbitmq"),
 				attribute.String("messaging.operation", "process"),
 				attribute.String("messaging.destination.name", task.Type()),
 			}
-			if taskID, ok := asynq.GetTaskID(ctx); ok {
+			if taskID, ok := taskqueue.GetTaskID(ctx); ok {
 				attributes = append(attributes, attribute.String("messaging.message.id", taskID))
 			}
-			if retried, ok := asynq.GetRetryCount(ctx); ok {
-				attributes = append(attributes, attribute.Int("messaging.asynq.retry_count", retried))
+			if retried, ok := taskqueue.GetRetryCount(ctx); ok {
+				attributes = append(attributes, attribute.Int("messaging.taskqueue.retry_count", retried))
 			}
 
-			ctx, span := tracing.Tracer().Start(ctx, "asynq.process "+task.Type(),
+			ctx, span := tracing.Tracer().Start(ctx, "taskqueue.process "+task.Type(),
 				trace.WithSpanKind(trace.SpanKindConsumer),
 				trace.WithAttributes(attributes...),
 			)

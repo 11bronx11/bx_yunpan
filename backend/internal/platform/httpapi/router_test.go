@@ -91,11 +91,11 @@ func TestRouterLimitsRequestBody(t *testing.T) {
 func TestRouterPropagatesOutboxFeatureFlagsToRequests(t *testing.T) {
 	router := NewRouter(RouterConfig{
 		Environment: "test", Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Metrics: NewMetrics(),
-		V2EventsEnabled: true, SearchEnabled: true, KafkaEnabled: true,
+		V2EventsEnabled: true, SearchEnabled: true,
 		Registrars: []func(*gin.RouterGroup){func(v1 *gin.RouterGroup) {
 			v1.GET("/flags", func(c *gin.Context) {
 				ctx := c.Request.Context()
-				if !outbox.V2EventsEnabled(ctx) || !outbox.SearchEnabled(ctx) || !outbox.KafkaEnabled(ctx) {
+				if !outbox.V2EventsEnabled(ctx) || !outbox.SearchEnabled(ctx) {
 					c.Status(http.StatusInternalServerError)
 					return
 				}

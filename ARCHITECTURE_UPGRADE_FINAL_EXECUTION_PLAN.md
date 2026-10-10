@@ -1,5 +1,42 @@
 # BX YunPan 最终架构升级施工计划
 
+> 本文件是历史总架构施工手册，不是本轮高并发专项计划。2026-09-10 的当前计划见 `docs/HIGH_CONCURRENCY_UPGRADE_PLAN.md`，对应测试清单见 `docs/HIGH_CONCURRENCY_TEST_CHECKLIST.md`。
+
+## 2026-09-10 本轮核心升级
+
+### 目标
+
+先缩短在线请求路径，再让缓存和索引承接可重复的读压力。本轮不改变 PostgreSQL 的事实所有权，也不把配额、权限、最终上传状态放入缓存。
+
+### 已写入代码的 P0
+
+1. **上传创建异步化**：事务只写 `upload_sessions` 和 `storage_operations(multipart.create)`；HTTP 直接返回 `initializing` 会话，不调用 MinIO，不做轮询。
+2. **上传完成异步化**：请求只校验分片数量、切换 `completing` 并写唯一的 `multipart.complete` 操作；worker 完成外部操作后切换 `verifying` 并写校验事件。
+3. **取消和过期清理异步化**：请求或清理循环只释放配额、切换状态和写 abort 操作，multipart abort 由 storage operation worker 执行。
+4. **Outbox relay 短事务化**：事务只做 delivery claim，提交后调用 Redis/Asynq，再用独立事务 ack；稳定 TaskID 支持崩溃重试。
+5. **业务缓存和热点索引**：新增有界 LRU + Redis + singleflight 的 JSON 读缓存；API 首批缓存目录 children 和文件详情；新增上传、operation、delivery、GC、async task、文件名查询索引。
+
+### 关键不变量
+
+- PostgreSQL 仍是目录、文件、对象引用、配额、上传状态和权限的唯一事实源。
+- 缓存只保存可重建读模型；权限查询仍带 `owner_id`，缓存 key 也必须带用户 ID。
+- `quota`、`reference_count`、最终状态和最终权限不走普通缓存。
+- 所有外部对象存储调用都在数据库事务之外；异步投递至少一次，重复执行由唯一键、租约 token 和稳定 TaskID 吸收。
+
+### 后续顺序
+
+1. staging 验证 `000022` 迁移、索引命中和 `sending` 租约回收。
+2. 用真实 MinIO/Redis 跑上传创建、完成、取消的故障窗口测试。
+3. 增加缓存命中率、回源率、错误率指标，再调 TTL 和 L1 容量。
+4. 观察 PostgreSQL 连接池、Outbox backlog、storage operation backlog 后再扩大 worker 并发。
+5. 搜索继续按 PostgreSQL 权限过滤；ES/Qdrant 只作为通过影子查询验证后的派生索引。
+
+### 回滚
+
+- 应用回滚前保留 `000022`；旧版本不依赖 `sending` 状态。
+- 缓存可通过 `CACHE_ENABLED=false` 关闭，关闭后直接走 PostgreSQL。
+- Outbox claim 只处理 `asynq` delivery；Kafka 路径不与本轮混用。
+
 > 读者：Codex（执行者）
 >
 > 架构基线：`/home/bronx/remote/bx_yunpan/ARCHITECTURE_UPGRADE_FINAL.md`

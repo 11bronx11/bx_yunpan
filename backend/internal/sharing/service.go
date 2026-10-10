@@ -25,8 +25,9 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("share not found")
-	ErrConflict = errors.New("share conflict")
+	ErrNotFound     = errors.New("share not found")
+	ErrConflict     = errors.New("share conflict")
+	ErrInvalidInput = errors.New("invalid share input")
 )
 
 type Share struct {
@@ -81,7 +82,7 @@ func (s *Service) CreateWithContext(ctx context.Context, ownerID, fileID uuid.UU
 		return Share{}, "", ErrNotFound
 	}
 	if expiresAt != nil && !expiresAt.After(time.Now().UTC()) {
-		return Share{}, "", ErrConflict
+		return Share{}, "", ErrInvalidInput
 	}
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
@@ -213,11 +214,25 @@ func (s *Service) Import(ctx context.Context, userID, shareID, targetFolderID uu
 		var prior Import
 		err := tx.Where("user_id = ? AND share_id = ? AND idempotency_key = ?", userID, shareID, idempotencyKey).Take(&prior).Error
 		if err == nil {
+			if prior.TargetFolderID != targetFolderID {
+				return ErrConflict
+			}
 			importedID = prior.ImportedEntryID
 			return nil
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
+		}
+		var current Share
+		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&current, "id = ?", shareID).Error; err != nil {
+			return ErrNotFound
+		}
+		if err := validateShare(current); err != nil {
+			return err
+		}
+		var sourceEntry drive.FileEntry
+		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ? AND owner_id = ? AND deleted_at IS NULL", share.FileEntryID, share.OwnerID).First(&sourceEntry).Error; err != nil {
+			return ErrNotFound
 		}
 		if err := s.quota.AddLogicalUsage(tx, userID, object.SizeBytes); err != nil {
 			return ErrConflict
@@ -246,7 +261,7 @@ func (s *Service) Import(ctx context.Context, userID, shareID, targetFolderID uu
 		}
 		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
 			EventType: eventcontract.EventFileCreatedV1, AggregateID: entry.ID, AggregateVersion: entry.Version,
-			Producer: "core-api", Payload: eventcontract.FileCreatedV1{OwnerID: userID, FileEntryID: entry.ID, ObjectID: object.ID},
+			Producer: "core-api", Payload: eventcontract.FileCreatedV1{OwnerID: userID, FileEntryID: entry.ID, ObjectID: object.ID, ContentEpoch: epoch.ContentEpoch},
 		})
 	})
 	if err != nil {

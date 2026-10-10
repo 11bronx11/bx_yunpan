@@ -9,6 +9,9 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
+	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 )
 
 func recoveryDB(t *testing.T) *gorm.DB {
@@ -22,6 +25,63 @@ func recoveryDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	return db
+}
+
+func TestRecoveryReplaysMissingTaskWithStableIdentityAndKeepsTerminal(t *testing.T) {
+	db := recoveryDB(t)
+	id := uuid.New()
+	key := "repeat-loss:" + id.String()
+	input := eventcontract.EnvelopeInput{
+		EventType: eventcontract.EventStorageOperationRecoverV1, AggregateID: id, AggregateVersion: 1,
+		Producer: "maintenance-recovery", Payload: eventcontract.StorageOperationRecoverV1{OperationID: id, OperationType: "object.delete", RecoveryKey: key},
+	}
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM outbox_recoveries WHERE resource_id = ?", id).Error
+		_ = db.Exec("DELETE FROM outbox_events WHERE aggregate_id = ?", id).Error
+	})
+	now := time.Now().UTC()
+	r := New(db, false).WithStaleAfter(time.Minute).WithClock(func() time.Time { return now })
+	ensure := func(want bool) {
+		t.Helper()
+		created, err := r.ensure(context.Background(), key, "broker_task_missing", "storage_operation", id, 1, input)
+		if err != nil || created != want {
+			t.Fatalf("created=%v want=%v error=%v", created, want, err)
+		}
+	}
+	ensure(true)
+	for i := 0; i < 3; i++ {
+		ensure(false)
+		if err := db.Exec("UPDATE outbox_deliveries SET status = 'sending' WHERE event_id IN (SELECT id FROM outbox_events WHERE aggregate_id = ?) AND status = 'pending'", id).Error; err != nil {
+			t.Fatal(err)
+		}
+		ensure(false)
+		if err := db.Exec("UPDATE outbox_deliveries SET status = 'published', published_at = ? WHERE event_id IN (SELECT id FROM outbox_events WHERE aggregate_id = ?)", now, id).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Exec("UPDATE outbox_events SET status = 'published', published_at = ? WHERE aggregate_id = ? AND status = 'pending'", now, id).Error; err != nil {
+			t.Fatal(err)
+		}
+		ensure(false)
+		now = now.Add(2 * time.Hour)
+		ensure(true)
+	}
+	var published outbox.Event
+	if err := db.Where("aggregate_id = ?", id).First(&published).Error; err != nil {
+		t.Fatal(err)
+	}
+	taskID := published.ID.String() + ":" + outbox.EventStorageOperationRecover + "@maintenance"
+	if err := db.Exec("INSERT INTO task_results(task_id,status,finished_at) VALUES(?,'dead',now())", taskID).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Exec("DELETE FROM task_results WHERE task_id = ?", taskID) })
+	if err := db.Exec("UPDATE outbox_deliveries SET status='published' WHERE event_id=?", published.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	ensure(false)
+	var count int64
+	if err := db.Model(&outbox.Event{}).Where("aggregate_id = ?", id).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("recovery events=%d error=%v", count, err)
+	}
 }
 
 func TestRunOnceRebuildsEveryPersistentWorkClassIdempotently(t *testing.T) {

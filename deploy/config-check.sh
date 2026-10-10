@@ -38,15 +38,16 @@ S3_ACCESS_KEY="${S3_ACCESS_KEY:-${MINIO_ROOT_USER:-yunpan}}"
 S3_SECRET_KEY="${S3_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-yunpan-dev-secret}}"
 POSTGRES_PRIMARY_DSN="${POSTGRES_PRIMARY_DSN:-${POSTGRES_DSN:-postgres://${POSTGRES_USER:-yunpan}:${POSTGRES_PASSWORD:-yunpan}@postgres:5432/${POSTGRES_DB:-yunpan}?sslmode=disable}}"
 POSTGRES_DSN="${POSTGRES_DSN:-$POSTGRES_PRIMARY_DSN}"
-REDIS_BROKER_ADDR="${REDIS_BROKER_ADDR:-redis:6379}"
-REDIS_BROKER_PASSWORD="${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}"
-REDIS_BROKER_DB="${REDIS_BROKER_DB:-${REDIS_DB:-0}}"
 REDIS_COORDINATION_ADDR="${REDIS_COORDINATION_ADDR:-redis:6379}"
 REDIS_COORDINATION_PASSWORD="${REDIS_COORDINATION_PASSWORD:-${REDIS_PASSWORD:-}}"
 REDIS_COORDINATION_DB="${REDIS_COORDINATION_DB:-${REDIS_DB:-0}}"
 REDIS_CACHE_ADDR="${REDIS_CACHE_ADDR:-redis:6379}"
 REDIS_CACHE_PASSWORD="${REDIS_CACHE_PASSWORD:-${REDIS_PASSWORD:-}}"
 REDIS_CACHE_DB="${REDIS_CACHE_DB:-${REDIS_DB:-0}}"
+RABBITMQ_URL="${RABBITMQ_URL:-amqp://${RABBITMQ_USER:-yunpan}:${RABBITMQ_PASSWORD:-yunpan-dev-secret}@rabbitmq:5672/}"
+RABBITMQ_EXCHANGE="${RABBITMQ_EXCHANGE:-yunpan.tasks}"
+RABBITMQ_PREFETCH="${RABBITMQ_PREFETCH:-16}"
+RABBITMQ_PUBLISH_TIMEOUT="${RABBITMQ_PUBLISH_TIMEOUT:-5s}"
 CACHE_ENABLED="${CACHE_ENABLED:-true}"
 CACHE_TTL="${CACHE_TTL:-5m}"
 CACHE_L1_MAX_ITEMS="${CACHE_L1_MAX_ITEMS:-512}"
@@ -56,8 +57,13 @@ SEARCH_WRITE_BACKENDS="${SEARCH_WRITE_BACKENDS:-postgres}"
 SEARCH_READ_BACKEND="${SEARCH_READ_BACKEND:-postgres}"
 SEARCH_SHADOW_SAMPLE_RATE="${SEARCH_SHADOW_SAMPLE_RATE:-0}"
 SEARCH_INDEX_EPOCH="${SEARCH_INDEX_EPOCH:-v1}"
-KAFKA_ENABLED="${KAFKA_ENABLED:-false}"
-KAFKA_BROKERS="${KAFKA_BROKERS:-kafka:9092}"
+SEARCH_ES_ENDPOINT="${SEARCH_ES_ENDPOINT:-}"
+SEARCH_QDRANT_ENDPOINT="${SEARCH_QDRANT_ENDPOINT:-}"
+SEARCH_EXTERNAL_TIMEOUT="${SEARCH_EXTERNAL_TIMEOUT:-2s}"
+SEARCH_EXTERNAL_WRITE_TIMEOUT="${SEARCH_EXTERNAL_WRITE_TIMEOUT:-10s}"
+SEARCH_INDEX_BATCH_SIZE="${SEARCH_INDEX_BATCH_SIZE:-100}"
+SEARCH_VECTOR_OVERSAMPLE="${SEARCH_VECTOR_OVERSAMPLE:-4}"
+SEARCH_EXTERNAL_FALLBACK="${SEARCH_EXTERNAL_FALLBACK:-true}"
 
 keys=(
   APP_ENV LOG_LEVEL AI_ENABLED
@@ -66,9 +72,9 @@ keys=(
   POSTGRES_PRIMARY_DSN POSTGRES_DSN
   POSTGRES_MAX_OPEN_CONNS POSTGRES_MAX_IDLE_CONNS POSTGRES_CONN_MAX_LIFETIME POSTGRES_CONN_MAX_IDLE_TIME
   REDIS_PASSWORD REDIS_DB
-  REDIS_BROKER_ADDR REDIS_BROKER_PASSWORD REDIS_BROKER_DB
   REDIS_COORDINATION_ADDR REDIS_COORDINATION_PASSWORD REDIS_COORDINATION_DB
   REDIS_CACHE_ADDR REDIS_CACHE_PASSWORD REDIS_CACHE_DB
+  RABBITMQ_URL RABBITMQ_EXCHANGE RABBITMQ_PREFETCH RABBITMQ_PUBLISH_TIMEOUT
   CACHE_ENABLED CACHE_TTL CACHE_L1_MAX_ITEMS
   S3_PUBLIC_ENDPOINT S3_PUBLIC_PATH_PREFIX S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET S3_REGION
   S3_SECURE S3_PUBLIC_SECURE S3_READ_URL_TTL
@@ -91,10 +97,22 @@ keys=(
   ETCD_SERVICE_PREFIX ETCD_LEASE_TTL AISVC_ADVERTISE_ADDR
   OUTBOX_LEADER_LOCK_ENABLED OUTBOX_LEADER_LOCK_KEY OUTBOX_LEADER_LOCK_TTL
   SEARCH_INDEX_ENABLED SEARCH_WRITE_BACKENDS SEARCH_READ_BACKEND SEARCH_SHADOW_SAMPLE_RATE SEARCH_INDEX_EPOCH
-  KAFKA_ENABLED KAFKA_BROKERS
+  SEARCH_ES_ENDPOINT SEARCH_ES_USERNAME SEARCH_ES_PASSWORD SEARCH_QDRANT_ENDPOINT SEARCH_QDRANT_API_KEY
+  SEARCH_EXTERNAL_TIMEOUT SEARCH_EXTERNAL_WRITE_TIMEOUT SEARCH_INDEX_BATCH_SIZE SEARCH_VECTOR_OVERSAMPLE SEARCH_EXTERNAL_FALLBACK
 )
 
-profiles=(--profile app --profile distributed --profile ai --profile ai-split --profile redis-split)
+profiles=(--profile app --profile distributed --profile ai --profile ai-split --profile redis-split --profile search-external)
+
+if [[ "$SEARCH_READ_BACKEND" == "es_qdrant" ]]; then
+  [[ -n "$SEARCH_ES_ENDPOINT" && -n "$SEARCH_QDRANT_ENDPOINT" ]] || {
+    echo "SEARCH_ES_ENDPOINT and SEARCH_QDRANT_ENDPOINT are required for SEARCH_READ_BACKEND=es_qdrant." >&2
+    exit 1
+  }
+  [[ ",${SEARCH_WRITE_BACKENDS}," == *,es_qdrant,* ]] || {
+    echo "SEARCH_WRITE_BACKENDS must include es_qdrant for SEARCH_READ_BACKEND=es_qdrant." >&2
+    exit 1
+  }
+fi
 services=(api)
 
 search_container_ids=()
@@ -104,9 +122,15 @@ if ((${#search_container_ids[@]} > 0)); then
   profiles+=(--profile search)
   SEARCH_INDEX_ENABLED=true
 fi
+search_external_mode=false
+search_external_ids=()
+mapfile -t search_external_ids < <(docker compose --env-file "$env_file" -f "$compose_file" --profile search-external ps -q elasticsearch)
+if ((${#search_external_ids[@]} > 0)); then
+  search_external_mode=true
+fi
 redis_split_mode=false
 redis_split_container_ids=()
-mapfile -t redis_split_container_ids < <(docker compose --env-file "$env_file" -f "$compose_file" --profile redis-split ps -q redis-broker)
+mapfile -t redis_split_container_ids < <(docker compose --env-file "$env_file" -f "$compose_file" --profile redis-split ps -q redis-coordination)
 if ((${#redis_split_container_ids[@]} > 0)); then
   redis_split_mode=true
 fi
@@ -146,7 +170,6 @@ for service in "${services[@]}"; do
       expected=${!key-}
       if [[ "$redis_split_mode" == true ]]; then
         case "$key" in
-          REDIS_BROKER_ADDR) expected="redis-broker:6379" ;;
           REDIS_COORDINATION_ADDR) expected="redis-coordination:6379" ;;
           REDIS_CACHE_ADDR) expected="redis-cache:6379" ;;
         esac
@@ -157,6 +180,12 @@ for service in "${services[@]}"; do
         case "$service" in
           ai-query) expected=query ;;
           ai-indexer) expected=indexer ;;
+        esac
+      elif [[ "$search_external_mode" == true ]]; then
+        case "$key" in
+          SEARCH_WRITE_BACKENDS) expected=es_qdrant ;;
+          SEARCH_ES_ENDPOINT) expected="${SEARCH_ES_ENDPOINT:-http://elasticsearch:9200}" ;;
+          SEARCH_QDRANT_ENDPOINT) expected="${SEARCH_QDRANT_ENDPOINT:-http://qdrant:6333}" ;;
         esac
       fi
       actual=$(awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' <<<"$container_env")

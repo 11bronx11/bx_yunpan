@@ -1,5 +1,21 @@
 import { api } from './api';
 
+test('explains invalid share parameters without reporting a file conflict', async () => {
+  const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+    status: 422,
+    ok: false,
+    headers: { get: () => 'application/json' },
+    json: async () => ({ error: { code: 'share.invalid_input', message: 'invalid share request' } }),
+  });
+  try {
+    await expect(api('/api/v1/shares', {}, false)).rejects.toMatchObject({
+      status: 422, code: 'share.invalid_input', message: '分享信息不符合要求，请检查后重试',
+    });
+  } finally {
+    fetchMock.mockRestore();
+  }
+});
+
 test('uses the Chinese message for backend error codes', async () => {
   const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
     status: 409,

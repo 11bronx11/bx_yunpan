@@ -41,7 +41,7 @@ func (h *HTTP) create(c *gin.Context) {
 		ExpiresAt *time.Time `json:"expires_at"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		h.writeError(c, ErrConflict)
+		h.writeError(c, ErrInvalidInput)
 		return
 	}
 	ownerID, _ := httpapi.PrincipalID(c)
@@ -135,7 +135,7 @@ func (h *HTTP) importShare(c *gin.Context) {
 		TargetFolderID uuid.UUID `json:"target_folder_id" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		h.writeError(c, ErrConflict)
+		h.writeError(c, ErrInvalidInput)
 		return
 	}
 	userID, _ := httpapi.PrincipalID(c)
@@ -153,6 +153,10 @@ func (h *HTTP) importShare(c *gin.Context) {
 }
 
 func (h *HTTP) writeError(c *gin.Context, err error) {
+	if errors.Is(err, ErrInvalidInput) {
+		c.JSON(http.StatusUnprocessableEntity, httpapi.ErrorEnvelope(c, "share.invalid_input", "invalid share request"))
+		return
+	}
 	if errors.Is(err, ErrNotFound) {
 		c.JSON(http.StatusNotFound, httpapi.ErrorEnvelope(c, "share.not_found", "share not found"))
 		return

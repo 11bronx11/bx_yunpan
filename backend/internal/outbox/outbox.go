@@ -26,7 +26,7 @@ const (
 	EventAIReprocessRequested  = eventcontract.EventAIReprocessRequestedV1
 	// EventAIIndexRequested 不由业务事务写入 outbox，而是 dispatcher 投递
 	// EventObjectReady 时额外扇出的任务类型：对象就绪要同时触发缩略图
-	// （worker，media 队列）与 AI 索引（aisvc，ai 队列），而 Asynq 一个任务
+	// （worker，media 队列）与 AI 索引（aisvc，ai 队列），而 RabbitMQ 一个任务
 	// 只会被一个消费者处理，所以在投递侧扇出成两个任务。
 	EventAIIndexRequested        = eventcontract.EventAIIndexRequestedV1
 	EventStorageOperationRecover = eventcontract.EventStorageOperationRecoverV1
@@ -76,14 +76,20 @@ func (Event) TableName() string { return "outbox_events" }
 // Delivery is the per-transport state for one outbox event. The composite key
 // makes fan-out destinations independent and makes retries safe to repeat.
 type Delivery struct {
-	EventID     uuid.UUID `gorm:"type:uuid;primaryKey"`
-	Transport   string    `gorm:"primaryKey"`
-	Destination string    `gorm:"primaryKey"`
-	Status      string
-	Attempt     int
-	AvailableAt time.Time
-	PublishedAt *time.Time
-	LastError   *string
+	EventID        uuid.UUID `gorm:"type:uuid;primaryKey"`
+	Transport      string    `gorm:"primaryKey"`
+	Destination    string    `gorm:"primaryKey"`
+	Status         string
+	Attempt        int
+	AvailableAt    time.Time
+	NotBefore      *time.Time
+	TaskRetryCount int
+	TaskMaxRetry   *int
+	TaskTimeoutMS  *int64 `gorm:"column:task_timeout_ms"`
+	LeaseUntil     *time.Time
+	LeaseToken     *uuid.UUID `gorm:"type:uuid"`
+	PublishedAt    *time.Time
+	LastError      *string
 }
 
 func (Delivery) TableName() string { return "outbox_deliveries" }
@@ -153,14 +159,48 @@ func HasActiveDelivery(tx *gorm.DB, eventType string, aggregateID uuid.UUID) (bo
 	if tx == nil || eventType == "" || aggregateID == uuid.Nil {
 		return false, fmt.Errorf("outbox: invalid delivery lookup")
 	}
-	var count int64
-	err := tx.Table("outbox_deliveries d").Joins("JOIN outbox_events e ON e.id = d.event_id").
-		Where("e.event_type = ? AND e.aggregate_id = ? AND d.status IN ?", eventType, aggregateID, []string{"pending", "failed"}).
-		Count(&count).Error
-	return count > 0, err
+	var rows []struct {
+		EventID     uuid.UUID
+		Destination string
+		Transport   string
+		Status      string
+	}
+	if err := tx.Table("outbox_deliveries d").Select("d.event_id,d.destination,d.transport,d.status").
+		Joins("JOIN outbox_events e ON e.id=d.event_id").Where("e.aggregate_id = ?", aggregateID).Scan(&rows).Error; err != nil {
+		return false, err
+	}
+	wanted := Routes(eventType, true)
+	for _, row := range rows {
+		parsed, ok := targetFromDelivery(Delivery{Transport: "rabbitmq", Destination: row.Destination})
+		if !ok {
+			continue
+		}
+		matched := false
+		for _, route := range wanted {
+			if parsed.Destination == route.Destination || (parsed.Queue == "media" && route.Queue == "media") {
+				matched = true
+			}
+		}
+		if !matched {
+			continue
+		}
+		if row.Status != "published" {
+			return true, nil
+		}
+		if row.Transport == "rabbitmq" || row.Transport == "asynq" {
+			var succeeded int64
+			if err := tx.Table("task_results").Where("task_id = ? AND status='succeeded'", row.EventID.String()+":"+parsed.Destination).Count(&succeeded).Error; err != nil {
+				return false, err
+			}
+			if succeeded == 0 {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
-// TraceCarrier 是写入 outbox 行与 Asynq payload 的 trace context 载体，
+// TraceCarrier 是写入 outbox 行与 RabbitMQ payload 的 trace context 载体，
 // 形如 {"traceparent": "...", "tracestate": "..."}。
 type TraceCarrier map[string]string
 
@@ -244,10 +284,7 @@ func AddEnvelope(tx *gorm.DB, envelope eventcontract.Envelope) error {
 }
 
 func addEnvelopeWithSearch(tx *gorm.DB, envelope eventcontract.Envelope, searchEnabled bool) error {
-	return addEnvelopeWithTransports(tx, envelope, searchEnabled, false)
-}
 
-func addEnvelopeWithTransports(tx *gorm.DB, envelope eventcontract.Envelope, searchEnabled, kafkaEnabled bool) error {
 	if tx == nil {
 		return fmt.Errorf("outbox: nil transaction")
 	}
@@ -280,7 +317,7 @@ func addEnvelopeWithTransports(tx *gorm.DB, envelope eventcontract.Envelope, sea
 	if err := tx.Create(&event).Error; err != nil {
 		return err
 	}
-	return addDeliveriesWithTransports(tx, event, true, searchEnabled, kafkaEnabled)
+	return addDeliveriesWithSearch(tx, event, true, searchEnabled)
 }
 
 func ptr[T any](value T) *T { return &value }
@@ -290,14 +327,27 @@ func addDeliveries(tx *gorm.DB, event Event, aiEnabled bool) error {
 }
 
 func addDeliveriesWithSearch(tx *gorm.DB, event Event, aiEnabled, searchEnabled bool) error {
-	return addDeliveriesWithTransports(tx, event, aiEnabled, searchEnabled, false)
-}
 
-func addDeliveriesWithTransports(tx *gorm.DB, event Event, aiEnabled, searchEnabled, kafkaEnabled bool) error {
 	now := time.Now().UTC()
 	targets := append(Routes(event.EventType, aiEnabled), SearchRoutes(event.EventType, searchEnabled)...)
-	targets = append(targets, KafkaRoutes(event.EventType, kafkaEnabled)...)
 	for _, target := range targets {
+		var existing []Delivery
+		if err := tx.Where("event_id = ? AND transport IN ?", event.ID, []string{"asynq", "rabbitmq"}).Find(&existing).Error; err != nil {
+			return err
+		}
+		owned := false
+		for _, row := range existing {
+			legacy := row
+			legacy.Transport = "rabbitmq"
+			parsed, ok := targetFromDelivery(legacy)
+			if ok && parsed.Destination == target.Destination {
+				owned = true
+				break
+			}
+		}
+		if owned {
+			continue
+		}
 		delivery := Delivery{
 			EventID: event.ID, Transport: target.Transport, Destination: target.Destination,
 			Status: "pending", Attempt: 0, AvailableAt: now,

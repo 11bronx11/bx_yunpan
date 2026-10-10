@@ -1,9 +1,16 @@
 import { api, clientError } from './api';
 import { hashFile } from './fileHash';
 
-export const getRoot = () => api('/api/v1/folders/root');
-export const getChildren = folderId => api(`/api/v1/folders/${folderId}/children`);
-export const getBreadcrumb = folderId => api(`/api/v1/folders/${folderId}/breadcrumb`);
+export const getRoot = ({ signal } = {}) => api('/api/v1/folders/root', { signal });
+export const getChildren = (folderId, { cursor, limit, sort, signal } = {}) => {
+  const params = new URLSearchParams();
+  if (cursor) params.set('cursor', cursor);
+  if (limit) params.set('limit', String(limit));
+  if (sort) params.set('sort', sort);
+  const query = params.toString();
+  return api(`/api/v1/folders/${folderId}/children${query ? `?${query}` : ''}`, { signal });
+};
+export const getBreadcrumb = (folderId, { signal } = {}) => api(`/api/v1/folders/${folderId}/breadcrumb`, { signal });
 export const createFolder = (parentId, name) => api('/api/v1/folders', { method: 'POST', body: JSON.stringify({ parent_id: parentId, name }) });
 export const renameFolder = (id, version, name) => api(`/api/v1/folders/${id}`, { method: 'PATCH', headers: { 'If-Match': String(version) }, body: JSON.stringify({ name }) });
 export const deleteFolder = (id, version) => api(`/api/v1/folders/${id}`, { method: 'DELETE', headers: { 'If-Match': String(version) } });
@@ -11,7 +18,7 @@ export const renameFile = (id, version, name) => api(`/api/v1/files/${id}`, { me
 export const moveFile = (id, version, targetFolderId) => api(`/api/v1/files/${id}/move`, { method: 'POST', headers: { 'If-Match': String(version) }, body: JSON.stringify({ target_folder_id: targetFolderId }) });
 export const deleteFile = (id, version) => api(`/api/v1/files/${id}`, { method: 'DELETE', headers: { 'If-Match': String(version) } });
 export const getDownloadURL = id => api(`/api/v1/files/${id}/download-url`);
-export const getPreview = id => api(`/api/v1/files/${id}/preview`);
+export const getPreview = (id, { signal } = {}) => api(`/api/v1/files/${id}/preview`, { signal });
 
 const sleep = (milliseconds, signal) => new Promise((resolve, reject) => {
   if (signal?.aborted) {
@@ -68,7 +75,7 @@ export const uploadFile = async (file, folderId, onProgress, control = {}, exist
     onProgress?.(100);
     return { file: { id: existingSession.completed_entry_id, name: existingSession.filename }, session: existingSession };
   }
-  if (existingSession?.status === 'verifying') return waitForUpload(existingSession, onProgress, control);
+  if (['completing', 'verifying'].includes(existingSession?.status)) return waitForUpload(existingSession, onProgress, control);
 
   const hash = existingSession ? await validateResumeFile(file, existingSession) : await hashFile(file);
   if (control.isCanceled?.()) throw new DOMException('Upload canceled', 'AbortError');
@@ -82,11 +89,19 @@ export const uploadFile = async (file, folderId, onProgress, control = {}, exist
     session = created.upload;
   }
   control.onSession?.(session);
+  while (session.status === 'initializing') {
+    if (control.isCanceled?.()) throw new DOMException('Upload canceled', 'AbortError');
+    if (control.isPaused?.()) return { paused: true, session };
+    await sleep(control.pollInterval ?? 1000, control.signal);
+    session = await api(`/api/v1/uploads/${session.id}`, { signal: control.signal });
+    control.onSession?.(session);
+  }
   if (session.status === 'completed') {
     onProgress?.(100);
     return { file: { id: session.completed_entry_id, name: session.filename }, session };
   }
-  if (session.status === 'verifying') return waitForUpload(session, onProgress, control);
+  if (['completing', 'verifying'].includes(session.status)) return waitForUpload(session, onProgress, control);
+  if (!['created', 'uploading'].includes(session.status)) throw clientError(session.error_code || 'upload.conflict');
 
   const partSize = session.part_size;
   const confirmed = new Set((session.confirmed_parts || []).map(part => part.part_number));

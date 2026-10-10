@@ -20,17 +20,19 @@ x-app-environment: &app-environment
   REDIS_ADDR: redis:6379
   REDIS_PASSWORD: ${REDIS_PASSWORD:-}
   REDIS_DB: ${REDIS_DB:-0}
-  # Compatibility defaults keep all three responsibilities on the bundled
+  # Compatibility defaults keep cache and coordination on the bundled
   # Redis. Set role-specific values to separate instances in staging/production.
-  REDIS_BROKER_ADDR: ${REDIS_BROKER_ADDR:-redis:6379}
-  REDIS_BROKER_PASSWORD: ${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}
-  REDIS_BROKER_DB: ${REDIS_BROKER_DB:-${REDIS_DB:-0}}
   REDIS_COORDINATION_ADDR: ${REDIS_COORDINATION_ADDR:-redis:6379}
   REDIS_COORDINATION_PASSWORD: ${REDIS_COORDINATION_PASSWORD:-${REDIS_PASSWORD:-}}
   REDIS_COORDINATION_DB: ${REDIS_COORDINATION_DB:-${REDIS_DB:-0}}
   REDIS_CACHE_ADDR: ${REDIS_CACHE_ADDR:-redis:6379}
   REDIS_CACHE_PASSWORD: ${REDIS_CACHE_PASSWORD:-${REDIS_PASSWORD:-}}
   REDIS_CACHE_DB: ${REDIS_CACHE_DB:-${REDIS_DB:-0}}
+  RABBITMQ_URL: ${RABBITMQ_URL:-amqp://${RABBITMQ_USER:-yunpan}:${RABBITMQ_PASSWORD:-yunpan-dev-secret}@rabbitmq:5672/}
+  RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-yunpan.tasks}
+  RABBITMQ_PREFETCH: ${RABBITMQ_PREFETCH:-16}
+  RABBITMQ_PUBLISH_TIMEOUT: ${RABBITMQ_PUBLISH_TIMEOUT:-5s}
+  TASK_CANCEL_GRACE: ${TASK_CANCEL_GRACE:-10s}
   CACHE_ENABLED: ${CACHE_ENABLED:-true}
   CACHE_TTL: ${CACHE_TTL:-5m}
   CACHE_L1_MAX_ITEMS: ${CACHE_L1_MAX_ITEMS:-512}
@@ -127,10 +129,40 @@ x-app-environment: &app-environment
   SEARCH_READ_BACKEND: ${SEARCH_READ_BACKEND:-postgres}
   SEARCH_SHADOW_SAMPLE_RATE: ${SEARCH_SHADOW_SAMPLE_RATE:-0}
   SEARCH_INDEX_EPOCH: ${SEARCH_INDEX_EPOCH:-v1}
-  KAFKA_ENABLED: ${KAFKA_ENABLED:-false}
-  KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+  SEARCH_ES_ENDPOINT: ${SEARCH_ES_ENDPOINT:-}
+  SEARCH_ES_USERNAME: ${SEARCH_ES_USERNAME:-}
+  SEARCH_ES_PASSWORD: ${SEARCH_ES_PASSWORD:-}
+  SEARCH_QDRANT_ENDPOINT: ${SEARCH_QDRANT_ENDPOINT:-}
+  SEARCH_QDRANT_API_KEY: ${SEARCH_QDRANT_API_KEY:-}
+  SEARCH_EXTERNAL_TIMEOUT: ${SEARCH_EXTERNAL_TIMEOUT:-2s}
+  SEARCH_EXTERNAL_WRITE_TIMEOUT: ${SEARCH_EXTERNAL_WRITE_TIMEOUT:-10s}
+  SEARCH_INDEX_BATCH_SIZE: ${SEARCH_INDEX_BATCH_SIZE:-100}
+  SEARCH_VECTOR_OVERSAMPLE: ${SEARCH_VECTOR_OVERSAMPLE:-4}
+  SEARCH_EXTERNAL_FALLBACK: ${SEARCH_EXTERNAL_FALLBACK:-true}
 
 services:
+  rabbitmq:
+    image: ${RABBITMQ_IMAGE:-rabbitmq:4.1-management-alpine}
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-yunpan}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-yunpan-dev-secret}
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "+S 2:2"
+    ports:
+      - "${INFRA_BIND_IP:-127.0.0.1}:${RABBITMQ_PORT:-5672}:5672"
+      - "${INFRA_BIND_IP:-127.0.0.1}:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+      - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    restart: unless-stopped
+    stop_grace_period: 60s
+
   postgres:
     image: ${DOCKER_REGISTRY:-docker.io}/pgvector/pgvector:0.8.6-pg17
     environment:
@@ -175,29 +207,6 @@ services:
 
   # Optional P4 role isolation. The compatibility redis service remains the
   # default; deploy/up.sh --redis-split points application clients here.
-  redis-broker:
-    profiles: ["redis-split"]
-    image: ${DOCKER_REGISTRY:-docker.io}/library/redis:8.10-alpine
-    environment:
-      ROLE_REDIS_PASSWORD: ${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        if [ -n "$${ROLE_REDIS_PASSWORD}" ]; then
-          exec redis-server --appendonly yes --requirepass "$${ROLE_REDIS_PASSWORD}"
-        fi
-        exec redis-server --appendonly yes
-    volumes:
-      - redis-broker-data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "if [ -n \"$$ROLE_REDIS_PASSWORD\" ]; then redis-cli --no-auth-warning -a \"$$ROLE_REDIS_PASSWORD\" ping; else redis-cli ping; fi"]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-      start_period: 5s
-    restart: unless-stopped
-
   redis-coordination:
     profiles: ["redis-split"]
     image: ${DOCKER_REGISTRY:-docker.io}/library/redis:8.10-alpine
@@ -266,7 +275,7 @@ services:
     restart: unless-stopped
 
   minio:
-    image: ${DOCKER_REGISTRY:-docker.io}/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: coollabsio/minio:RELEASE.2025-10-15T17-29-55Z
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-yunpan}
@@ -277,7 +286,7 @@ services:
     volumes:
       - minio-data:/data
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
+      test: ["CMD-SHELL", 'mc alias set health http://127.0.0.1:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" >/dev/null 2>&1 && mc ready --quiet health']
       interval: 3s
       timeout: 3s
       retries: 20
@@ -285,10 +294,7 @@ services:
     restart: unless-stopped
 
   minio-init:
-    # The pinned MinIO server image also contains the mc CLI. Reusing it keeps
-    # local startup self-contained when the separate mc image is unavailable;
-    # MINIO_INIT_IMAGE may override this in environments with a dedicated CLI.
-    image: ${MINIO_INIT_IMAGE:-${DOCKER_REGISTRY:-docker.io}/minio/minio:RELEASE.2025-09-07T16-13-09Z}
+    image: coollabsio/minio:RELEASE.2025-10-15T17-29-55Z
     depends_on:
       minio:
         condition: service_healthy
@@ -321,6 +327,25 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    restart: "no"
+
+  # Offline one-time import; legacy workers must stay stopped.
+  migrate-asynq:
+    profiles: ["migration"]
+    image: bx-yunpan-migrate-asynq:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args:
+        DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
+        GO_VERSION: ${GO_VERSION:-1.25.13}
+        GO_PROXY: ${GO_PROXY:-https://proxy.golang.org,direct}
+        TARGET: migrate-asynq
+    environment:
+      <<: *app-environment
+      LEGACY_REDIS_ADDR: ${LEGACY_REDIS_ADDR:-}
+      LEGACY_REDIS_PASSWORD: ${LEGACY_REDIS_PASSWORD:-}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
     restart: "no"
 
   api:
@@ -376,6 +401,7 @@ services:
     expose:
       - "8083"
     depends_on:
+      rabbitmq: {condition: service_healthy}
       migrate:
         condition: service_completed_successfully
       minio-init:
@@ -403,6 +429,7 @@ services:
     environment: *app-environment
     expose: ["8083"]
     depends_on:
+      rabbitmq: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
       minio-init: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
@@ -425,6 +452,7 @@ services:
     environment: *app-environment
     expose: ["8083"]
     depends_on:
+      rabbitmq: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
       minio-init: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
@@ -447,6 +475,7 @@ services:
     environment: *app-environment
     expose: ["8083"]
     depends_on:
+      rabbitmq: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
       minio-init: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
@@ -469,12 +498,50 @@ services:
     environment: *app-environment
     expose: ["8083"]
     depends_on:
+      rabbitmq: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
       minio-init: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
+
+  # Opt-in single-node derived search backends. They are for rebuild, shadow,
+  # and failure-recovery rehearsal; PostgreSQL remains the authority.
+  elasticsearch:
+    profiles: ["search-external"]
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: ${SEARCH_ES_JAVA_OPTS:--Xms512m -Xmx512m}
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    expose: ["9200"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9200/_cluster/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  qdrant:
+    profiles: ["search-external"]
+    image: qdrant/qdrant:v1.15.5
+    volumes:
+      - qdrant-data:/qdrant/storage
+    expose: ["6333"]
+    healthcheck:
+      # The official image is intentionally minimal and does not ship wget or
+      # curl. Use bash's TCP client so the readiness probe works with the
+      # image we actually deploy.
+      test: ["CMD-SHELL", "bash -lc 'exec 3<>/dev/tcp/127.0.0.1/6333 && printf \"GET /readyz HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3 && grep -q \"200 OK\" <&3'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
 
   search-indexer:
     profiles: ["search"]
@@ -491,6 +558,7 @@ services:
     environment: *app-environment
     expose: ["8083"]
     depends_on:
+      rabbitmq: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
       minio-init: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
@@ -498,7 +566,7 @@ services:
     init: true
     stop_grace_period: 30s
 
-  # AI 服务：gRPC server + 独占 ai 队列的 Asynq worker。
+  # AI 服务：gRPC server + 独占 ai 队列的 RabbitMQ worker。
   # 抽取、OCR、Embedding 是 CPU/IO 重活，独立进程才能独立扩容：
   # docker compose up -d --scale aisvc=2
   aisvc:
@@ -515,6 +583,7 @@ services:
         TARGET: aisvc
     environment: *app-environment
     depends_on:
+      rabbitmq: {condition: service_healthy}
       migrate:
         condition: service_completed_successfully
       minio-init:
@@ -568,6 +637,7 @@ services:
       AI_SERVICE_ROLE: indexer
     expose: ["8083"]
     depends_on:
+      rabbitmq: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
       minio-init: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
@@ -625,6 +695,7 @@ services:
     command: ["--config.file=/etc/prometheus/prometheus.yaml", "--storage.tsdb.retention.time=3d"]
     volumes:
       - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./prometheus/high-concurrency.rules.yaml:/etc/prometheus/high-concurrency.rules.yaml:ro
       - prometheus-data:/prometheus
     ports:
       - "127.0.0.1:9090:9090"
@@ -647,10 +718,12 @@ services:
     restart: unless-stopped
 
 volumes:
+  rabbitmq-data:
   postgres-data:
   redis-data:
-  redis-broker-data:
   minio-data:
   etcd-data:
+  elasticsearch-data:
+  qdrant-data:
   prometheus-data:
   grafana-data:

@@ -12,6 +12,7 @@ import (
 type Metrics struct {
 	UnroutedEventsTotal *prometheus.GaugeVec
 	UnroutedOldestAge   prometheus.Gauge
+	LeaseRecoveries     prometheus.Counter
 }
 
 // UnroutedCount is the aggregate form used by the dispatcher. Keeping the
@@ -28,6 +29,9 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 		registerer = prometheus.DefaultRegisterer
 	}
 	metrics := &Metrics{
+		LeaseRecoveries: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "yunpan_outbox_lease_recoveries_total", Help: "Expired delivery leases successfully reclaimed by this relay.",
+		}),
 		UnroutedEventsTotal: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: "yunpan",
 			Subsystem: "outbox",
@@ -41,7 +45,7 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 			Help:      "Age in seconds of the oldest unresolved unrouted outbox event.",
 		}),
 	}
-	registerer.MustRegister(metrics.UnroutedEventsTotal, metrics.UnroutedOldestAge)
+	registerer.MustRegister(metrics.UnroutedEventsTotal, metrics.UnroutedOldestAge, metrics.LeaseRecoveries)
 	return metrics
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -125,5 +126,12 @@ func TestImportSerializesConcurrentIdempotentRequests(t *testing.T) {
 	var stored objectstore.Object
 	if err := db.First(&stored, "id = ?", object.ID).Error; err != nil || stored.ReferenceCount != 2 {
 		t.Fatalf("object references = %d, err = %v", stored.ReferenceCount, err)
+	}
+	other, err := driveService.Create(recipientID, recipientRoot.ID, "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Import(context.Background(), recipientID, share.ID, other.ID, idempotencyKey, accessToken); !errors.Is(err, ErrConflict) {
+		t.Fatalf("idempotency target change=%v", err)
 	}
 }

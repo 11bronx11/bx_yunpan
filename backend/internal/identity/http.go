@@ -29,8 +29,8 @@ func (h *HTTP) RegisterRoutes(v1 *gin.RouterGroup) {
 	auth := v1.Group("/auth")
 	auth.POST("/register", h.register)
 	auth.POST("/login", h.login)
-	auth.POST("/refresh", h.refresh)
-	auth.POST("/logout", h.Authenticate(), h.logout)
+	auth.POST("/refresh", protectRefreshCookie(), h.refresh)
+	auth.POST("/logout", protectRefreshCookie(), h.Authenticate(), h.logout)
 
 	users := v1.Group("/users", h.Authenticate())
 	users.GET("/me", h.me)
@@ -51,6 +51,21 @@ func (h *HTTP) Authenticate() gin.HandlerFunc {
 			return
 		}
 		httpapi.SetPrincipalID(c, userID)
+		c.Next()
+	}
+}
+
+// Cookie-authenticated commands must reject cross-origin browser requests
+// before rotating or revoking a session. Requests from non-browser clients
+// without Origin or Fetch Metadata remain supported. The proxy must preserve
+// the original Host, including its port, for the Origin fallback check.
+func protectRefreshCookie() gin.HandlerFunc {
+	var protection http.CrossOriginProtection
+	return func(c *gin.Context) {
+		if err := protection.Check(c.Request); err != nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, httpapi.ErrorEnvelope(c, "auth.origin_forbidden", "cross-origin session request forbidden"))
+			return
+		}
 		c.Next()
 	}
 }

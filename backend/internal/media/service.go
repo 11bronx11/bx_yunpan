@@ -3,6 +3,7 @@ package media
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -14,8 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 	"github.com/google/uuid"
-	"github.com/hibiken/asynq"
 	"github.com/minio/minio-go/v7"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -88,7 +89,7 @@ func (s *Service) Process(ctx context.Context, objectID uuid.UUID) error {
 	if err := jpeg.Encode(&encoded, thumbnail, &jpeg.Options{Quality: 82}); err != nil {
 		return err
 	}
-	key := fmt.Sprintf("variants/%s/thumbnail/%s.jpg", objectID, thumbnailPipeline)
+	key := fmt.Sprintf("variants/%s/thumbnail/%s/%x.jpg", objectID, thumbnailPipeline, sha256.Sum256([]byte(object.ObjectKey)))
 	if _, err := s.storage.PutObject(ctx, s.bucket, key, bytes.NewReader(encoded.Bytes()), int64(encoded.Len()), minio.PutObjectOptions{ContentType: "image/jpeg"}); err != nil {
 		return err
 	}
@@ -97,7 +98,13 @@ func (s *Service) Process(ctx context.Context, objectID uuid.UUID) error {
 		ID: uuid.Must(uuid.NewV7()), ObjectID: objectID, VariantType: "thumbnail", ObjectKey: key,
 		MimeType: "image/jpeg", Width: bounds.Dx(), Height: bounds.Dy(), PipelineVersion: thumbnailPipeline, Status: "ready",
 	}
-	return s.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&variant).Error
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var current objectstore.Object
+		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ? AND status = 'ready' AND object_key = ?", objectID, object.ObjectKey).First(&current).Error; err != nil {
+			return err
+		}
+		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&variant).Error
+	})
 }
 
 func validSourceDimensions(width, height int) bool {
@@ -150,13 +157,13 @@ func (s *Service) PreviewURL(ctx context.Context, objectID uuid.UUID) (string, t
 	return value.String(), expiresAt, true, nil
 }
 
-func Handler(service *Service) asynq.HandlerFunc {
-	return func(ctx context.Context, task *asynq.Task) error {
+func Handler(service *Service) taskqueue.HandlerFunc {
+	return func(ctx context.Context, task *taskqueue.Task) error {
 		var payload struct {
 			ObjectID uuid.UUID `json:"object_id"`
 		}
 		if json.Unmarshal(task.Payload(), &payload) != nil {
-			return asynq.SkipRetry
+			return taskqueue.SkipRetry
 		}
 		return service.Process(ctx, payload.ObjectID)
 	}

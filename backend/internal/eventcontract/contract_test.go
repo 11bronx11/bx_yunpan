@@ -96,3 +96,23 @@ func TestEnvelopeAcceptsAdditivePayloadFields(t *testing.T) {
 		t.Fatalf("additive payload rejected: %v", err)
 	}
 }
+
+func TestAIPayloadMetadataIsOptionalAndRoundTrips(t *testing.T) {
+	objectID, runID := uuid.New(), uuid.New()
+	legacy, err := DecodePayload(EventAIIndexRequestedV1, []byte(`{"object_id":"`+objectID.String()+`"}`))
+	if err != nil || legacy.(*AIIndexRequestedV1).ObjectID != objectID {
+		t.Fatalf("legacy AI payload decode = %#v, err=%v", legacy, err)
+	}
+	encoded, err := json.Marshal(AIIndexRequestedV1{ObjectID: objectID, RunID: &runID, ContentHash: "abc", ParserProfileVersion: "builtin-v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodePayload(EventAIIndexRequestedV1, encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := decoded.(*AIIndexRequestedV1)
+	if payload.RunID == nil || *payload.RunID != runID || payload.ContentHash != "abc" {
+		t.Fatalf("metadata did not round trip: %#v", payload)
+	}
+}

@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"sync"
 	"time"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 	"github.com/google/uuid"
-	"github.com/hibiken/asynq"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -29,9 +30,10 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/registry"
 	platformworker "github.com/11bronx11/bx_yunpan/backend/internal/platform/worker"
+	searchindex "github.com/11bronx11/bx_yunpan/backend/internal/search"
 )
 
-// RunAISvc 在同一进程内跑 gRPC server 与 AI 专属 Asynq worker。
+// RunAISvc 在同一进程内跑 gRPC server 与 AI 专属 RabbitMQ worker。
 //
 // AI 模块是唯一有真实独立扩容理由的模块：抽取、OCR、Embedding 都是 CPU/IO
 // 重活，与 API 的请求特征不同，混在一个进程里会互相挤资源。
@@ -57,6 +59,7 @@ func runCombinedAISvc(ctx context.Context, cfg config.Config, logger *slog.Logge
 	objects := objectstore.NewService(deps.GORM)
 	aiCache := newQueryEmbeddingCache(cfg, deps)
 	aiService := ai.NewServiceWithCache(deps.GORM, driveService, objects, deps.Storage, cfg.AI, aiCache)
+	configureAISearch(aiService, cfg)
 
 	// 限流下移到 aisvc：放 API 侧的话多副本各自计数，总量会是副本数的倍数，
 	// 对下游 LLM 配额没有保护作用。
@@ -75,6 +78,7 @@ func runCombinedAISvc(ctx context.Context, cfg config.Config, logger *slog.Logge
 		Metrics: grpcx.NewMetrics(registry, "server"),
 		Mapper:  ai.GRPCStatus,
 	})...)
+	defer server.Stop()
 	pb.RegisterAIServiceServer(server, grpcserver.New(aiService, limiter))
 
 	healthServer := health.NewServer()
@@ -104,11 +108,13 @@ func runCombinedAISvc(ctx context.Context, cfg config.Config, logger *slog.Logge
 
 	workerErr := make(chan error, 1)
 	workerCtx, stopWorker := context.WithCancel(ctx)
-	defer stopWorker()
+	workerDone := make(chan struct{})
+	defer func() { stopWorker(); <-workerDone }()
 	aiQueues := map[string]int{platformworker.QueueAI: cfg.Worker.Queues[platformworker.QueueAI]}
-	workerMetrics := platformworker.NewMetrics(registry, platformworker.Role("aisvc"), aiQueues, deps.RedisBroker)
+	workerMetrics := platformworker.NewMetrics(registry, platformworker.Role("aisvc"), aiQueues)
 	go func() {
-		workerErr <- platformworker.RunQueuesWithMetrics(workerCtx, cfg, aiQueues, logger, aiWorkerHandlers(aiService, logger), workerMetrics)
+		defer close(workerDone)
+		workerErr <- platformworker.RunQueuesWithMetrics(workerCtx, cfg, aiQueues, logger, aiWorkerHandlers(aiService, logger), workerMetrics, deps.GORM)
 	}()
 
 	select {
@@ -141,6 +147,7 @@ func RunAIQuery(ctx context.Context, cfg config.Config, logger *slog.Logger) err
 	defer deps.Close()
 	service := ai.NewServiceWithCache(deps.GORM, drive.NewService(deps.GORM), objectstore.NewService(deps.GORM), deps.Storage, cfg.AI,
 		newQueryEmbeddingCache(cfg, deps))
+	configureAISearch(service, cfg)
 	var limiter ai.RequestLimiter
 	if cfg.AI.RateLimitEnabled {
 		limiter = ai.NewRequestLimiter(deps.RedisCoordination, ai.RateLimits{
@@ -177,9 +184,9 @@ func RunAIIndexer(ctx context.Context, cfg config.Config, logger *slog.Logger) e
 	service := ai.NewServiceWithCache(deps.GORM, drive.NewService(deps.GORM), objectstore.NewService(deps.GORM), deps.Storage, cfg.AI, nil)
 	aiQueues := map[string]int{platformworker.QueueAI: cfg.Worker.Queues[platformworker.QueueAI]}
 	metricsRegistry := prometheus.NewRegistry()
-	workerMetrics := platformworker.NewMetrics(metricsRegistry, platformworker.Role("ai-indexer"), aiQueues, deps.RedisBroker)
+	workerMetrics := platformworker.NewMetrics(metricsRegistry, platformworker.Role("ai-indexer"), aiQueues)
 	go serveWorkerMetrics(ctx, cfg.Worker.MetricsAddr, metricsRegistry, logger)
-	return platformworker.RunQueuesWithMetrics(ctx, cfg, aiQueues, logger, aiWorkerHandlers(service, logger), workerMetrics)
+	return platformworker.RunQueuesWithMetrics(ctx, cfg, aiQueues, logger, aiWorkerHandlers(service, logger), workerMetrics, deps.GORM)
 }
 
 func newQueryEmbeddingCache(cfg config.Config, deps *dependencies.Set) ai.QueryEmbeddingCache {
@@ -187,6 +194,21 @@ func newQueryEmbeddingCache(cfg config.Config, deps *dependencies.Set) ai.QueryE
 		return nil
 	}
 	return platformcache.NewEmbeddingStore(deps.RedisCache, cfg.Cache.TTL, cfg.Cache.L1MaxItems)
+}
+
+func configureAISearch(service *ai.Service, cfg config.Config) {
+	if service == nil || (cfg.Search.ReadBackend != "es_qdrant" && cfg.Search.ReadBackend != "shadow") {
+		return
+	}
+	client := &http.Client{Timeout: cfg.Search.ExternalTimeout}
+	var textBackend, vectorBackend searchindex.RetrievalBackend
+	if cfg.Search.ESEndpoint != "" {
+		textBackend = searchindex.NewElasticsearchIndex(cfg.Search.ESEndpoint, cfg.Search.ESUsername, cfg.Search.ESPassword, client)
+	}
+	if cfg.Search.QdrantEndpoint != "" {
+		vectorBackend = searchindex.NewQdrantIndex(cfg.Search.QdrantEndpoint, cfg.Search.QdrantAPIKey, cfg.AI.Dimension, client)
+	}
+	service.WithRetrieval(searchindex.NewRetrievalRouter(textBackend, vectorBackend), cfg.Search)
 }
 
 func startAIServer(ctx context.Context, cfg config.Config, logger *slog.Logger, aiService *ai.Service, limiter ai.RequestLimiter) (*grpc.Server, *health.Server, net.Listener, func(), <-chan error, *prometheus.Registry, error) {
@@ -280,8 +302,8 @@ func advertiseAddress(listener net.Listener) (string, error) {
 
 // aiWorkerHandlers 只消费 ai:* 任务：索引与重建索引。
 // 缩略图、对象校验、GC 与清理留在 cmd/worker。
-func aiWorkerHandlers(service *ai.Service, logger *slog.Logger) map[string]asynq.HandlerFunc {
-	return map[string]asynq.HandlerFunc{
+func aiWorkerHandlers(service *ai.Service, logger *slog.Logger) map[string]taskqueue.HandlerFunc {
+	return map[string]taskqueue.HandlerFunc{
 		outbox.EventAIIndexRequested:     ai.ObjectReadyHandler(service, logger),
 		outbox.TaskAIIndexV1:             ai.ObjectReadyHandler(service, logger),
 		outbox.EventAIReprocessRequested: ai.ReprocessHandler(service, logger),

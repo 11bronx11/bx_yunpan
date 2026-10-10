@@ -205,14 +205,10 @@ func TestLoadSupportsRedisRoleIsolationWithLegacyFallback(t *testing.T) {
 	t.Setenv("REDIS_DB", "2")
 	// A partially migrated environment may override only one role. Every
 	// unspecified role must still inherit the legacy connection settings.
-	t.Setenv("REDIS_BROKER_ADDR", "broker:6379")
 	t.Setenv("REDIS_COORDINATION_DB", "4")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("load role-isolated config: %v", err)
-	}
-	if cfg.Redis.BrokerAddr != "broker:6379" || cfg.Redis.BrokerPassword != "legacy-password" || cfg.Redis.BrokerDB != 2 {
-		t.Fatalf("unexpected broker config: addr=%q db=%d password_set=%t", cfg.Redis.BrokerAddr, cfg.Redis.BrokerDB, cfg.Redis.BrokerPassword != "")
 	}
 	if cfg.Redis.CoordinationAddr != "legacy:6379" || cfg.Redis.CoordinationPassword != "legacy-password" || cfg.Redis.CoordinationDB != 4 {
 		t.Fatalf("unexpected coordination config: addr=%q db=%d password_set=%t", cfg.Redis.CoordinationAddr, cfg.Redis.CoordinationDB, cfg.Redis.CoordinationPassword != "")
@@ -244,5 +240,30 @@ func TestLoadRejectsUnknownAIServiceRole(t *testing.T) {
 	t.Setenv("AI_SERVICE_ROLE", "sidecar")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected unknown AI service role to fail validation")
+	}
+}
+
+func TestLoadRejectsExternalReadWithoutEndpoints(t *testing.T) {
+	t.Setenv("SEARCH_READ_BACKEND", "es_qdrant")
+	t.Setenv("SEARCH_WRITE_BACKENDS", "es_qdrant")
+	t.Setenv("SEARCH_ES_ENDPOINT", "")
+	t.Setenv("SEARCH_QDRANT_ENDPOINT", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected external read endpoints to be required")
+	}
+}
+
+func TestLoadAcceptsExternalSearchSettings(t *testing.T) {
+	t.Setenv("SEARCH_INDEX_ENABLED", "true")
+	t.Setenv("SEARCH_READ_BACKEND", "es_qdrant")
+	t.Setenv("SEARCH_WRITE_BACKENDS", "postgres,es_qdrant")
+	t.Setenv("SEARCH_ES_ENDPOINT", "http://elasticsearch:9200")
+	t.Setenv("SEARCH_QDRANT_ENDPOINT", "http://qdrant:6333")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Search.ExternalTimeout != 2*time.Second || cfg.Search.VectorOversample != 4 || !cfg.Search.ExternalFallback {
+		t.Fatalf("unexpected search settings: %#v", cfg.Search)
 	}
 }

@@ -1,5 +1,5 @@
 import { api } from './api';
-import { deleteFolder, moveFile, uploadFile, waitForUpload } from './drive';
+import { deleteFolder, getChildren, moveFile, uploadFile, waitForUpload } from './drive';
 import { hashFile } from './fileHash';
 
 jest.mock('./api', () => ({
@@ -16,6 +16,18 @@ jest.mock('./fileHash', () => ({
 }));
 
 const hash = 'a'.repeat(64);
+
+test('encodes directory pagination and forwards request cancellation', async () => {
+  api.mockResolvedValue({ items: [], page: { has_more: false } });
+  const controller = new AbortController();
+  await getChildren('folder-1', { cursor: 'a+b/c=', limit: 50, sort: 'name_desc', signal: controller.signal });
+  const [path, options] = api.mock.calls.at(-1);
+  const url = new URL(path, 'http://localhost');
+  expect(url.searchParams.get('cursor')).toBe('a+b/c=');
+  expect(url.searchParams.get('limit')).toBe('50');
+  expect(url.searchParams.get('sort')).toBe('name_desc');
+  expect(options.signal).toBe(controller.signal);
+});
 
 test('resume skips confirmed parts and uploads only missing parts', async () => {
   const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
@@ -68,6 +80,38 @@ test('server verification keeps polling beyond the old timeout', async () => {
 
 	expect(polls).toBe(61);
 	expect(result.file.id).toBe('file-large');
+});
+
+test('asynchronous create waits for initialization before signing parts', async () => {
+  const session = { id: 'async-upload', status: 'initializing', filename: 'async.txt', part_size: 3, part_count: 1 };
+  let initialized = false;
+  let initializedAtPresign = false;
+  let completing = false;
+  const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({ ok: true, headers: { get: () => 'etag' } });
+  api.mockImplementation(async path => {
+    if (path === '/api/v1/uploads') return { mode: 'multipart', upload: session };
+    if (path === '/api/v1/uploads/async-upload') {
+      initialized = true;
+      return { ...session, status: completing ? 'completed' : 'created', completed_entry_id: 'async-file' };
+    }
+    if (path.endsWith('/parts/presign')) {
+      initializedAtPresign = initialized;
+      return { parts: [{ url: 'https://storage.test/part' }] };
+    }
+    if (path.endsWith('/parts/confirm')) return { ...session, status: 'uploading' };
+    if (path.endsWith('/complete')) { completing = true; return { ...session, status: 'completing' }; }
+    throw new Error(path);
+  });
+  const result = await uploadFile(new File(['abc'], 'async.txt'), 'folder-1', jest.fn(), { pollInterval: 0 });
+  expect(result.file.id).toBe('async-file');
+  expect(initializedAtPresign).toBe(true);
+  fetchMock.mockRestore();
+});
+
+test('resuming completion polls without requiring the original file', async () => {
+  api.mockResolvedValue({ id: 'complete-upload', status: 'completed', completed_entry_id: 'complete-file' });
+  const result = await uploadFile(null, 'folder', jest.fn(), {}, { id: 'complete-upload', status: 'completing' });
+  expect(result.file.id).toBe('complete-file');
 });
 
 test('moves a file with optimistic concurrency metadata', async () => {

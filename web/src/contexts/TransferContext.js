@@ -52,7 +52,7 @@ const recoveredUpload = (session, local) => {
     name: session.filename,
     size: session.size_bytes,
     mimeType: local?.mimeType || 'application/octet-stream',
-    status: session.status === 'verifying' ? 'verifying' : 'interrupted',
+    status: ['completing', 'verifying'].includes(session.status) ? 'verifying' : 'interrupted',
     progress,
     transferred: Math.round(session.size_bytes * progress / 100),
     speed: 0,
@@ -182,7 +182,7 @@ export const TransferProvider = ({ children }) => {
       isCanceled: () => control.canceled,
       onSession: session => updateUpload(id, current => ({
         session,
-        status: session.status === 'verifying' ? 'verifying' : (current.status === 'checking' ? 'uploading' : current.status),
+        status: ['completing', 'verifying'].includes(session.status) ? 'verifying' : (current.status === 'checking' ? 'uploading' : current.status),
       })),
     };
     const startedAt = Date.now();

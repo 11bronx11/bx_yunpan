@@ -36,7 +36,6 @@ type RouterConfig struct {
 	Metrics         *Metrics
 	V2EventsEnabled bool
 	SearchEnabled   bool
-	KafkaEnabled    bool
 	Readiness       *Readiness
 	Registrars      []func(*gin.RouterGroup)
 }
@@ -50,7 +49,7 @@ func NewRouter(cfg RouterConfig) *gin.Engine {
 	// otelgin 放在最前：它负责从 traceparent 头恢复上游 trace 并开出 server span，
 	// 后面所有中间件与 handler 都能从 ctx 拿到这个 span 作为父节点。
 	router.Use(otelgin.Middleware(cfg.ServiceName, otelgin.WithGinFilter(tracedRequest)))
-	router.Use(RequestID(), outboxContext(cfg.V2EventsEnabled, cfg.SearchEnabled, cfg.KafkaEnabled), cfg.Metrics.Middleware(), AccessLog(cfg.Logger), Recovery(cfg.Logger), LimitRequestBody(cfg.MaxBodyBytes))
+	router.Use(RequestID(), outboxContext(cfg.V2EventsEnabled, cfg.SearchEnabled), cfg.Metrics.Middleware(), AccessLog(cfg.Logger), Recovery(cfg.Logger), LimitRequestBody(cfg.MaxBodyBytes))
 
 	router.GET("/health/live", func(c *gin.Context) {
 		c.JSON(http.StatusOK, health.Result{Status: "ok"})
@@ -92,12 +91,11 @@ func NewRouter(cfg RouterConfig) *gin.Engine {
 	return router
 }
 
-func outboxContext(v2Enabled, searchEnabled, kafkaEnabled bool) gin.HandlerFunc {
+func outboxContext(v2Enabled, searchEnabled bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		ctx = outbox.WithV2EventsEnabled(ctx, v2Enabled)
 		ctx = outbox.WithSearchEnabled(ctx, searchEnabled)
-		ctx = outbox.WithKafkaEnabled(ctx, kafkaEnabled)
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}

@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, App, Button, Modal, Spin, Tree } from 'antd';
-import { FolderOutlined } from '@ant-design/icons';
+import { DownOutlined, FolderOutlined } from '@ant-design/icons';
 import styled from '@emotion/styled';
 import { getBreadcrumb, getChildren, moveFile } from '../services/drive';
 
@@ -50,15 +50,24 @@ const folderNode = (folder, currentFolderId) => ({
   isLeaf: false,
 });
 
-const replaceChildren = (nodes, key, children) => nodes.map(node => {
-  if (node.key === key) return { ...node, children, isLeaf: children.length === 0 };
+const replaceChildren = (nodes, key, children, append = false) => nodes.map(node => {
+  if (node.key === key) {
+    const merged = append ? [...(node.children || []).filter(child => !child.pageCursor), ...children] : children;
+    return { ...node, children: merged, isLeaf: merged.length === 0 };
+  }
   if (!node.children) return node;
-  return { ...node, children: replaceChildren(node.children, key, children) };
+  return { ...node, children: replaceChildren(node.children, key, children, append) };
 });
 
-const directoryChildren = (response, currentFolderId) => (response.items || [])
-  .filter(item => item.type === 'folder')
-  .map(item => folderNode(item, currentFolderId));
+const directoryChildren = (response, currentFolderId, parentId) => {
+  const items = response.items || [];
+  const children = items.filter(item => item.type === 'folder').map(item => folderNode(item, currentFolderId));
+  // Directories sort first; once a file appears, all directories are loaded.
+  if (response.page?.has_more && response.page.next_cursor && !items.some(item => item.type === 'file')) {
+    children.push({ key: `more:${parentId}`, parentId, pageCursor: response.page.next_cursor, selectable: false, isLeaf: true });
+  }
+  return children;
+};
 
 const MoveFileModal = ({ open, file, root, currentFolderId, onCancel, onMoved }) => {
   const { message } = App.useApp();
@@ -69,22 +78,38 @@ const MoveFileModal = ({ open, file, root, currentFolderId, onCancel, onMoved })
   const [loading, setLoading] = useState(false);
   const [moving, setMoving] = useState(false);
   const [browseError, setBrowseError] = useState('');
+  const [loadingKeys, setLoadingKeys] = useState([]);
+  const [loadedKeys, setLoadedKeys] = useState([]);
+  const browseRequest = useRef(null);
+  const selectionRequest = useRef(null);
+  const pendingFolders = useRef(new Set());
 
   const loadRoot = useCallback(async () => {
     if (!root) return;
+    browseRequest.current?.abort();
+    selectionRequest.current?.abort();
+    const controller = new AbortController();
+    browseRequest.current = controller;
+    const { signal } = controller;
+    pendingFolders.current = new Set();
+    setLoadingKeys([]);
+    setLoadedKeys([]);
+    setSelectedFolderId(null);
+    setDestination('');
     setLoading(true);
     setBrowseError('');
     try {
-      const response = await getChildren(root.id);
+      const response = await getChildren(root.id, { limit: 50, signal });
+      if (signal.aborted) return;
       const node = folderNode(root, currentFolderId);
-      node.children = directoryChildren(response, currentFolderId);
+      node.children = directoryChildren(response, currentFolderId, root.id);
       node.isLeaf = node.children.length === 0;
       setTreeData([node]);
       setExpandedKeys([root.id]);
     } catch (error) {
-      setBrowseError(error.message || '目录加载失败，请重试');
+      if (!signal.aborted) setBrowseError(error.message || '目录加载失败，请重试');
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
   }, [currentFolderId, root]);
 
@@ -94,29 +119,51 @@ const MoveFileModal = ({ open, file, root, currentFolderId, onCancel, onMoved })
     setDestination('');
     setTreeData([]);
     loadRoot();
+    return () => { browseRequest.current?.abort(); selectionRequest.current?.abort(); };
   }, [loadRoot, open]);
 
-  const loadTreeNode = async node => {
-    if (node.children || node.isLeaf) return;
+  const loadTreePage = async (folderId, cursor = '') => {
+    const signal = browseRequest.current?.signal;
+    if (!signal || signal.aborted || pendingFolders.current.has(folderId)) return;
+    pendingFolders.current.add(folderId);
+    setLoadingKeys(current => [...current, folderId]);
     try {
-      const response = await getChildren(node.key);
-      setTreeData(current => replaceChildren(current, node.key, directoryChildren(response, currentFolderId)));
+      const response = await getChildren(folderId, { limit: 50, cursor, signal });
+      if (signal.aborted) return;
+      setTreeData(current => replaceChildren(current, folderId, directoryChildren(response, currentFolderId, folderId), Boolean(cursor)));
       setBrowseError('');
     } catch (error) {
+      if (signal.aborted) return;
+      if (error.code === 'drive.cursor_stale') {
+        await loadRoot();
+        return;
+      }
       setBrowseError(error.message || '子目录加载失败，请重试展开');
       throw error;
+    } finally {
+      if (!signal.aborted) {
+        pendingFolders.current.delete(folderId);
+        setLoadingKeys(current => current.filter(key => key !== folderId));
+      }
     }
+  };
+
+  const loadTreeNode = async node => {
+    if (!node.children && !node.isLeaf) await loadTreePage(node.key);
   };
 
   const selectDestination = async (keys, info) => {
     const folderId = keys[0];
     if (!folderId) return;
+    selectionRequest.current?.abort();
+    const controller = new AbortController();
+    selectionRequest.current = controller;
     setSelectedFolderId(folderId);
     setDestination(info.node.folderName);
     try {
-      const response = await getBreadcrumb(folderId);
+      const response = await getBreadcrumb(folderId, { signal: controller.signal });
       const path = (response.items || []).map(item => item.name === '/' ? '根目录' : item.name).join(' / ');
-      if (path) setDestination(path);
+      if (path && !controller.signal.aborted) setDestination(path);
     } catch {
       // The selected folder name remains usable if the path preview fails.
     }
@@ -162,6 +209,11 @@ const MoveFileModal = ({ open, file, root, currentFolderId, onCancel, onMoved })
                 expandedKeys={expandedKeys}
                 selectedKeys={selectedFolderId ? [selectedFolderId] : []}
                 loadData={loadTreeNode}
+                loadedKeys={loadedKeys}
+                onLoad={setLoadedKeys}
+                titleRender={node => node.pageCursor
+                  ? <Button type="text" icon={<DownOutlined aria-hidden="true" />} loading={loadingKeys.includes(node.parentId)} onClick={event => { event.stopPropagation(); loadTreePage(node.parentId, node.pageCursor).catch(() => {}); }}>加载更多</Button>
+                  : node.title}
                 onExpand={setExpandedKeys}
                 onSelect={selectDestination}
               />}

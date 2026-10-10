@@ -5,25 +5,25 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 	"github.com/google/uuid"
-	"github.com/hibiken/asynq"
 	"github.com/minio/minio-go/v7"
 )
 
-func VerifyHandler(service *Service) asynq.HandlerFunc {
-	return func(ctx context.Context, task *asynq.Task) error {
+func VerifyHandler(service *Service) taskqueue.HandlerFunc {
+	return func(ctx context.Context, task *taskqueue.Task) error {
 		var payload struct {
 			UploadID uuid.UUID `json:"upload_id"`
 		}
 		if err := json.Unmarshal(task.Payload(), &payload); err != nil {
-			return asynq.SkipRetry
+			return taskqueue.SkipRetry
 		}
 		err := service.Verify(ctx, payload.UploadID)
 		if err == nil {
 			return nil
 		}
-		retried, retryOK := asynq.GetRetryCount(ctx)
-		maxRetry, maxRetryOK := asynq.GetMaxRetry(ctx)
+		retried, retryOK := taskqueue.GetRetryCount(ctx)
+		maxRetry, maxRetryOK := taskqueue.GetMaxRetry(ctx)
 		if retryOK && maxRetryOK && retried >= maxRetry {
 			if failErr := service.FailVerification(ctx, payload.UploadID, verificationFailureCode(err)); failErr != nil {
 				return failErr

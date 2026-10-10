@@ -14,7 +14,6 @@ import (
 type v2EventsContextKey struct{}
 
 type searchEnabledContextKey struct{}
-type kafkaEnabledContextKey struct{}
 
 func WithSearchEnabled(ctx context.Context, enabled bool) context.Context {
 	if ctx == nil {
@@ -28,21 +27,6 @@ func SearchEnabled(ctx context.Context) bool {
 		return false
 	}
 	enabled, _ := ctx.Value(searchEnabledContextKey{}).(bool)
-	return enabled
-}
-
-func WithKafkaEnabled(ctx context.Context, enabled bool) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return context.WithValue(ctx, kafkaEnabledContextKey{}, enabled)
-}
-
-func KafkaEnabled(ctx context.Context) bool {
-	if ctx == nil {
-		return false
-	}
-	enabled, _ := ctx.Value(kafkaEnabledContextKey{}).(bool)
 	return enabled
 }
 
@@ -109,5 +93,5 @@ func AddEnvelopeContext(ctx context.Context, tx *gorm.DB, envelope eventcontract
 	if IsV2Event(envelope.EventType) && !V2EventsEnabled(ctx) {
 		return nil
 	}
-	return addEnvelopeWithTransports(tx, envelope, SearchEnabled(ctx), KafkaEnabled(ctx))
+	return addEnvelopeWithSearch(tx, envelope, SearchEnabled(ctx))
 }

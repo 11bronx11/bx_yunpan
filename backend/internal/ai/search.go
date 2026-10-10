@@ -5,32 +5,35 @@ import (
 	"database/sql"
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	searchindex "github.com/11bronx11/bx_yunpan/backend/internal/search"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"go.opentelemetry.io/otel/attribute"
 )
 
 type searchCandidate struct {
-	FileID     uuid.UUID
-	OwnerID    uuid.UUID
-	FolderID   uuid.UUID
-	ObjectID   uuid.UUID
-	DocumentID uuid.UUID
-	Name       string
-	SizeBytes  int64
-	MimeType   string
-	Version    int64
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-	ChunkID    *uuid.UUID
-	PageNumber *int
-	Section    *string
-	Content    *string
-	Score      float64
+	FileID            uuid.UUID
+	OwnerID           uuid.UUID
+	FolderID          uuid.UUID
+	ObjectID          uuid.UUID
+	DocumentID        uuid.UUID
+	DocumentVersionID uuid.UUID
+	Name              string
+	SizeBytes         int64
+	MimeType          string
+	Version           int64
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	ChunkID           *uuid.UUID
+	PageNumber        *int
+	Section           *string
+	Content           *string
+	Score             float64
 }
 
 const (
@@ -369,6 +372,106 @@ func (s *Service) queryCandidates(ctx context.Context, ownerID uuid.UUID, input 
 		return nil, err
 	}
 	return candidates, nil
+}
+
+// queryExternalCandidates treats ES/Qdrant results as opaque candidates and
+// rehydrates them through the same owner/scope/object-ready SQL checks used by
+// PostgreSQL search. An index can therefore never authorize a result.
+func (s *Service) queryExternalCandidates(ctx context.Context, ownerID uuid.UUID, input SearchInput, mode, vector string) ([]searchCandidate, error) {
+	request := searchindex.RetrievalRequest{OwnerID: ownerID, TargetVersion: s.searchConfig.IndexEpoch, IndexEpoch: expectedSearchEpoch(s.searchConfig.IndexEpoch), Query: input.Query, FolderID: input.FolderID, FileIDs: input.FileIDs, Limit: max(input.Limit, hybridRecallLimit), Oversample: s.searchConfig.VectorOversample, Timeout: s.searchConfig.ExternalTimeout}
+	var external []searchindex.RetrievalCandidate
+	var err error
+	if mode == "fulltext" {
+		external, err = s.retrieval.SearchText(ctx, request)
+	} else {
+		raw := strings.Trim(vector, "[]")
+		fields := strings.Split(raw, ",")
+		parsed := make([]float32, 0, len(fields))
+		for _, field := range fields {
+			if strings.TrimSpace(field) == "" {
+				continue
+			}
+			value, parseErr := strconv.ParseFloat(strings.TrimSpace(field), 32)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			parsed = append(parsed, float32(value))
+		}
+		external, err = s.retrieval.SearchVector(ctx, request, parsed)
+	}
+	if err != nil {
+		return nil, err
+	}
+	chunkIDs := make([]string, 0, len(external))
+	scoreByChunk := make(map[uuid.UUID]float64, len(external))
+	versionByChunk := make(map[uuid.UUID]uuid.UUID, len(external))
+	for _, candidate := range external {
+		if candidate.ChunkID == uuid.Nil {
+			continue
+		}
+		expectedEpoch := expectedSearchEpoch(s.searchConfig.IndexEpoch)
+		if expectedEpoch > 0 && candidate.IndexEpoch > 0 && expectedEpoch != candidate.IndexEpoch {
+			// A candidate from another epoch is not safe to merge: it may be
+			// missing a tombstone or carry an incompatible embedding model.
+			continue
+		}
+		if candidate.DocumentVersionID == uuid.Nil {
+			// External payloads must identify the indexed document generation;
+			// SQL rehydration below then proves it is still active.
+			continue
+		}
+		chunkIDs = append(chunkIDs, candidate.ChunkID.String())
+		scoreByChunk[candidate.ChunkID] = candidate.Score
+		versionByChunk[candidate.ChunkID] = candidate.DocumentVersionID
+	}
+	if len(chunkIDs) == 0 {
+		return nil, nil
+	}
+	prefix, folderFilter := "", "TRUE"
+	if input.FolderID != nil && input.IncludeSubfolders {
+		prefix = `WITH RECURSIVE folder_scope AS (SELECT id FROM folders WHERE id = @folder AND owner_id = @owner AND deleted_at IS NULL UNION ALL SELECT f.id FROM folders f JOIN folder_scope p ON f.parent_id = p.id WHERE f.owner_id = @owner AND f.deleted_at IS NULL) `
+		folderFilter = "e.folder_id IN (SELECT id FROM folder_scope)"
+	} else if input.FolderID != nil {
+		folderFilter = "e.folder_id = @folder"
+	}
+	fileFilter := "TRUE"
+	fileIDs := make([]string, 0, len(input.FileIDs))
+	for _, id := range input.FileIDs {
+		fileIDs = append(fileIDs, id.String())
+	}
+	if len(fileIDs) > 0 {
+		fileFilter = "e.id = ANY(CAST(@file_ids AS uuid[]))"
+	}
+	query := prefix + `SELECT e.id AS file_id, e.owner_id, e.folder_id, e.object_id, e.name, o.size_bytes, o.mime_type, e.version, e.created_at, e.updated_at, d.id AS document_id, v.id AS document_version_id, c.id AS chunk_id, c.page_number, c.section, c.content FROM file_entries e JOIN file_objects o ON o.id = e.object_id AND o.status = 'ready' JOIN ai_documents d ON d.object_id = e.object_id JOIN ai_document_versions v ON v.id = d.active_version_id AND v.status = 'indexed' JOIN ai_chunks c ON c.document_id = d.id AND c.document_version_id = v.id WHERE e.owner_id = @owner AND e.deleted_at IS NULL AND ` + fileFilter + ` AND ` + folderFilter + ` AND c.id = ANY(CAST(@chunk_ids AS uuid[]))`
+	args := []any{sql.Named("owner", ownerID), sql.Named("chunk_ids", pq.Array(chunkIDs)), sql.Named("file_ids", pq.Array(fileIDs))}
+	if input.FolderID != nil {
+		args = append(args, sql.Named("folder", *input.FolderID))
+	}
+	var rows []searchCandidate
+	if err := s.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	result := make([]searchCandidate, 0, len(rows))
+	for _, row := range rows {
+		if row.ChunkID == nil {
+			continue
+		}
+		if expected := versionByChunk[*row.ChunkID]; expected != uuid.Nil && row.DocumentVersionID != expected {
+			continue
+		}
+		row.Score = scoreByChunk[*row.ChunkID]
+		result = append(result, row)
+	}
+	return result, nil
+}
+
+func expectedSearchEpoch(value string) int64 {
+	value = strings.TrimSpace(value)
+	if len(value) > 1 && (value[0] == 'v' || value[0] == 'V') {
+		value = value[1:]
+	}
+	epoch, _ := strconv.ParseInt(value, 10, 64)
+	return epoch
 }
 
 func groupCandidates(candidates []searchCandidate, matchType string, limit int) []SearchHit {

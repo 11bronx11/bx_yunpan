@@ -3,9 +3,12 @@ package ai
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"math"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
@@ -13,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/tracing"
+	searchindex "github.com/11bronx11/bx_yunpan/backend/internal/search"
 )
 
 // startSpan 开一个业务 span。未初始化 TracerProvider 时拿到的是 no-op span，
@@ -204,12 +208,66 @@ func (s *Service) recall(ctx context.Context, ownerID uuid.UUID, input SearchInp
 		attribute.Bool("ai.include_subfolders", input.IncludeSubfolders),
 		attribute.Bool("ai.folder_scoped", input.FolderID != nil),
 	)
-	candidates, err := s.queryCandidates(ctx, ownerID, input, mode, vector)
+	var candidates []searchCandidate
+	var err error
+	if s.retrieval != nil && (mode == "fulltext" || mode == "semantic") && s.searchConfig.ReadBackend == "shadow" {
+		candidates, err = s.queryCandidates(ctx, ownerID, input, mode, vector)
+		rate := s.searchConfig.ShadowSampleRate
+		if rate <= 0 {
+			rate = 1
+		}
+		if err == nil && shadowSampled(ownerID, input.Query, mode, rate) {
+			shadowCtx := context.WithoutCancel(ctx)
+			if s.searchConfig.ExternalTimeout > 0 {
+				var cancel context.CancelFunc
+				shadowCtx, cancel = context.WithTimeout(shadowCtx, s.searchConfig.ExternalTimeout)
+				defer cancel()
+			}
+			started := time.Now()
+			external, externalErr := s.queryExternalCandidates(shadowCtx, ownerID, input, mode, vector)
+			if s.shadowRecorder != nil {
+				s.shadowRecorder.Record(shadowObservation(mode, candidates, external, externalErr, time.Since(started)))
+			}
+		}
+	} else if s.retrieval != nil && s.searchConfig.ReadBackend == "es_qdrant" && (mode == "fulltext" || mode == "semantic") {
+		candidates, err = s.queryExternalCandidates(ctx, ownerID, input, mode, vector)
+		if err != nil && s.searchConfig.ExternalFallback {
+			// External indexes are derived and may lag or be unavailable. A
+			// request-level PostgreSQL retry preserves the existing contract.
+			candidates, err = s.queryCandidates(ctx, ownerID, input, mode, vector)
+		} else if err != nil {
+			// Keep the public AI error contract stable when the derived read plane
+			// is explicitly fail-closed. Adapter details must not leak as
+			// internal.error for a retryable backend outage.
+			err = normalizeExternalSearchError(err)
+		}
+	} else {
+		candidates, err = s.queryCandidates(ctx, ownerID, input, mode, vector)
+	}
 	if err == nil {
 		span.SetAttributes(attribute.Int("ai.candidate_count", len(candidates)))
 	}
 	endSpan(span, err)
 	return candidates, err
+}
+
+func normalizeExternalSearchError(err error) error {
+	if errors.Is(err, searchindex.ErrUnavailable) {
+		return ErrUnavailable
+	}
+	return err
+}
+
+func shadowSampled(ownerID uuid.UUID, query, mode string, rate float64) bool {
+	if mode == "" || rate <= 0 {
+		return false
+	}
+	if rate >= 1 {
+		return true
+	}
+	digest := sha256.Sum256([]byte(ownerID.String() + "\x00" + mode + "\x00" + query))
+	value := binary.BigEndian.Uint64(digest[:8])
+	return float64(value)/float64(math.MaxUint64) < rate
 }
 
 // fuse 记录 RRF 融合：两路召回各自的候选数与融合后的命中数，

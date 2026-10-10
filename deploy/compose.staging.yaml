@@ -1,0 +1,83 @@
+name: bx-yunpan-staging
+
+# Initial connection allocation, not a measured capacity guarantee.
+x-staging-connection-budget:
+  operations: 16
+  migration: 2
+
+services:
+  postgres:
+    command: ["postgres", "-c", "max_connections=100", "-c", "superuser_reserved_connections=3"]
+    mem_limit: 384m
+
+  api:
+    deploy:
+      replicas: 2
+    environment:
+      POSTGRES_MAX_OPEN_CONNS: "12"
+      POSTGRES_MAX_IDLE_CONNS: "4"
+
+  outbox-relay:
+    deploy:
+      replicas: 2
+    environment:
+      POSTGRES_MAX_OPEN_CONNS: "4"
+      POSTGRES_MAX_IDLE_CONNS: "1"
+      OUTBOX_BATCH_SIZE: "20"
+      OUTBOX_POLL_INTERVAL: 1s
+      OUTBOX_LEADER_LOCK_ENABLED: "true"
+
+  object-worker:
+    deploy:
+      replicas: 1
+    environment:
+      POSTGRES_MAX_OPEN_CONNS: "8"
+      POSTGRES_MAX_IDLE_CONNS: "2"
+      WORKER_CONCURRENCY: "4"
+
+  media-worker:
+    deploy:
+      replicas: 1
+    environment:
+      POSTGRES_MAX_OPEN_CONNS: "4"
+      POSTGRES_MAX_IDLE_CONNS: "1"
+      WORKER_CONCURRENCY: "2"
+
+  maintenance-worker:
+    deploy:
+      replicas: 1
+    environment:
+      POSTGRES_MAX_OPEN_CONNS: "4"
+      POSTGRES_MAX_IDLE_CONNS: "1"
+      WORKER_CONCURRENCY: "2"
+
+  ai-query:
+    deploy:
+      replicas: 1
+    environment:
+      POSTGRES_MAX_OPEN_CONNS: "8"
+      POSTGRES_MAX_IDLE_CONNS: "2"
+
+  ai-indexer:
+    deploy:
+      replicas: 1
+    environment:
+      POSTGRES_MAX_OPEN_CONNS: "6"
+      POSTGRES_MAX_IDLE_CONNS: "2"
+      WORKER_CONCURRENCY: "2"
+
+  search-indexer:
+    deploy:
+      replicas: 1
+    environment:
+      POSTGRES_MAX_OPEN_CONNS: "4"
+      POSTGRES_MAX_IDLE_CONNS: "1"
+      WORKER_CONCURRENCY: "2"
+
+  # Split roles own all queues in staging; combined roles must stay disabled.
+  worker:
+    deploy:
+      replicas: 0
+  aisvc:
+    deploy:
+      replicas: 0

@@ -16,16 +16,18 @@ import (
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
+	platformcache "github.com/11bronx11/bx_yunpan/backend/internal/platform/cache"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/health"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/storageurl"
+	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 )
 
 type Set struct {
 	// Redis is retained as the compatibility alias. New code should select the
 	// client matching its responsibility explicitly.
 	Redis             *redis.Client
-	RedisBroker       *redis.Client
+	Tasks             *taskqueue.Broker
 	RedisCoordination *redis.Client
 	RedisCache        *redis.Client
 	Storage           *minio.Client
@@ -36,19 +38,10 @@ type Set struct {
 }
 
 func Open(ctx context.Context, cfg config.Config) (*Set, error) {
-	redisBroker := newRedisClient(cfg.Redis.BrokerAddr, cfg.Redis.BrokerPassword, cfg.Redis.BrokerDB)
 	redisCoordination := newRedisClient(cfg.Redis.CoordinationAddr, cfg.Redis.CoordinationPassword, cfg.Redis.CoordinationDB)
-	redisCache := newRedisClient(cfg.Redis.CacheAddr, cfg.Redis.CachePassword, cfg.Redis.CacheDB)
-	redisClient := redisBroker
-	closeRedis := func() {
-		_ = redisBroker.Close()
-		if redisCoordination != redisBroker {
-			_ = redisCoordination.Close()
-		}
-		if redisCache != redisBroker && redisCache != redisCoordination {
-			_ = redisCache.Close()
-		}
-	}
+	redisCache := platformcache.NewRedisClient(cfg.Redis.CacheAddr, cfg.Redis.CachePassword, cfg.Redis.CacheDB)
+	tasks := taskqueue.New(taskqueue.Config{URL: cfg.TaskQueue.URL, Exchange: cfg.TaskQueue.Exchange, PublishTimeout: cfg.TaskQueue.PublishTimeout})
+	closeRedis := func() { _ = redisCoordination.Close(); _ = redisCache.Close(); _ = tasks.Close() }
 	storageClient, err := minio.New(cfg.Storage.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.Storage.AccessKey, cfg.Storage.SecretKey, ""),
 		Secure: cfg.Storage.Secure,
@@ -97,8 +90,8 @@ func Open(ctx context.Context, cfg config.Config) (*Set, error) {
 	}
 
 	return &Set{
-		Redis:             redisClient,
-		RedisBroker:       redisBroker,
+		Redis:             redisCoordination,
+		Tasks:             tasks,
 		RedisCoordination: redisCoordination,
 		RedisCache:        redisCache,
 		Storage:           storageClient,
@@ -110,16 +103,14 @@ func Open(ctx context.Context, cfg config.Config) (*Set, error) {
 }
 
 func (s *Set) Close() {
-	if s.RedisBroker != nil {
-		_ = s.RedisBroker.Close()
-		if s.RedisCoordination != nil && s.RedisCoordination != s.RedisBroker {
-			_ = s.RedisCoordination.Close()
-		}
-		if s.RedisCache != nil && s.RedisCache != s.RedisBroker && s.RedisCache != s.RedisCoordination {
-			_ = s.RedisCache.Close()
-		}
-	} else if s.Redis != nil {
-		_ = s.Redis.Close()
+	if s.Tasks != nil {
+		_ = s.Tasks.Close()
+	}
+	if s.RedisCoordination != nil {
+		_ = s.RedisCoordination.Close()
+	}
+	if s.RedisCache != nil {
+		_ = s.RedisCache.Close()
 	}
 	_ = s.SQL.Close()
 }
@@ -142,10 +133,10 @@ func (s *Set) Probes() []health.Probe {
 
 // AdvisoryProbes expose degraded derived/async planes without removing the
 // core API from service. PostgreSQL remains able to commit business state and
-// Outbox rows while Redis Broker, Coordination, or Cache is recovering.
+// Outbox rows while RabbitMQ, Redis Coordination, or Cache is recovering.
 func (s *Set) AdvisoryProbes() []health.Probe {
 	return []health.Probe{
-		health.ProbeFunc{ProbeName: "redis_broker", Func: func(ctx context.Context) error { return s.RedisBroker.Ping(ctx).Err() }},
+		health.ProbeFunc{ProbeName: "rabbitmq", Func: s.Tasks.Health},
 		health.ProbeFunc{ProbeName: "redis_coordination", Func: func(ctx context.Context) error { return s.RedisCoordination.Ping(ctx).Err() }},
 		health.ProbeFunc{ProbeName: "redis_cache", Func: func(ctx context.Context) error { return s.RedisCache.Ping(ctx).Err() }},
 	}

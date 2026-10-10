@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 	"github.com/google/uuid"
-	"github.com/hibiken/asynq"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/drive"
@@ -27,38 +27,47 @@ import (
 
 func RunWorker(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	ctx = outbox.WithV2EventsEnabled(ctx, cfg.Outbox.V2EventsEnabled)
+	ctx = outbox.WithSearchEnabled(ctx, cfg.Search.Enabled)
 	deps, err := dependencies.Open(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	defer deps.Close()
+	ctx, background := newBackgroundGroup(ctx)
+	defer background.Close()
 
 	driveService := drive.NewService(deps.GORM)
 	objects := objectstore.NewService(deps.GORM)
 	quota := identity.NewService(deps.GORM, identity.NewTokenManager(cfg.Auth), driveService, cfg.Identity.DefaultQuotaBytes)
 	uploads := upload.NewService(deps.GORM, deps.Storage, deps.Presigner, deps.Bucket, driveService, objects, quota, cfg.Upload)
 	mediaService := media.NewService(deps.GORM, objects, deps.Storage, deps.Presigner, deps.Bucket, cfg.Storage.ReadURLTTL)
-	redisOptions := asynq.RedisClientOpt{Addr: cfg.Redis.BrokerAddr, Password: cfg.Redis.BrokerPassword, DB: cfg.Redis.BrokerDB}
-	queueClient := asynq.NewClient(redisOptions)
-	defer func() { _ = queueClient.Close() }()
+	queueClient := taskqueue.New(platformworker.BrokerConfig(cfg))
+	defer func() { background.Close(); _ = queueClient.Close() }()
 	metricsRegistry := prometheus.NewRegistry()
 	metrics := outbox.NewMetrics(metricsRegistry)
-	workerMetrics := platformworker.NewMetrics(metricsRegistry, platformworker.RoleCombined, platformworker.QueuesForRole(platformworker.RoleCombined, cfg.Worker.Queues), deps.RedisBroker)
+	workerMetrics := platformworker.NewMetrics(metricsRegistry, platformworker.RoleCombined, platformworker.QueuesForRole(platformworker.RoleCombined, cfg.Worker.Queues))
 	dispatcher := outbox.NewDispatcher(deps.GORM, queueClient, logger, cfg.Outbox).
+		WithPublishTimeout(cfg.TaskQueue.PublishTimeout).
 		WithLeaderLock(deps.RedisCoordination, cfg.Locking).
 		WithMetrics(metrics).
 		WithAIEnabled(cfg.AI.Enabled).WithSearchEnabled(cfg.Search.Enabled)
-	go dispatcher.Run(ctx)
-	go serveWorkerMetrics(ctx, cfg.Worker.MetricsAddr, metricsRegistry, logger)
-	go runUploadCleanup(ctx, uploads, cfg.Upload.CleanupInterval, cfg.Upload.CleanupBatch, logger)
-	go runStorageReconciler(ctx, uploads, cfg.Upload.CleanupInterval, cfg.Upload.CleanupBatch, logger)
-	go runObjectDeleteReconciler(ctx, objects, deps.Storage, cfg.Upload.CleanupInterval, cfg.Upload.CleanupBatch, logger)
-	go runRecoveryReconciler(ctx, recovery.New(deps.GORM, cfg.AI.Enabled), cfg.Upload.CleanupInterval, cfg.Upload.CleanupBatch, logger)
+	background.Go(func() { dispatcher.Run(ctx) })
+	background.Go(func() { serveWorkerMetrics(ctx, cfg.Worker.MetricsAddr, metricsRegistry, logger) })
+	background.Go(func() { runUploadCleanup(ctx, uploads, cfg.Upload.CleanupInterval, cfg.Upload.CleanupBatch, logger) })
+	background.Go(func() {
+		runStorageReconciler(ctx, uploads, cfg.Upload.CleanupInterval, cfg.Upload.CleanupBatch, logger)
+	})
+	background.Go(func() {
+		runObjectDeleteReconciler(ctx, objects, deps.Storage, cfg.Upload.CleanupInterval, cfg.Upload.CleanupBatch, logger)
+	})
+	background.Go(func() {
+		runRecoveryReconciler(ctx, recovery.New(deps.GORM, cfg.AI.Enabled), cfg.Upload.CleanupInterval, cfg.Upload.CleanupBatch, logger)
+	})
 
-	recoverOperation := func(ctx context.Context, task *asynq.Task) error {
+	recoverOperation := func(ctx context.Context, task *taskqueue.Task) error {
 		var payload eventcontract.StorageOperationRecoverV1
 		if err := json.Unmarshal(task.Payload(), &payload); err != nil || payload.OperationID == uuid.Nil {
-			return asynq.SkipRetry
+			return taskqueue.SkipRetry
 		}
 		if payload.OperationType == storageops.ObjectDelete {
 			return objects.ReconcileObjectDeleteOperation(ctx, deps.Storage, payload.OperationID)
@@ -73,7 +82,7 @@ func RunWorker(ctx context.Context, cfg config.Config, logger *slog.Logger) erro
 		recoverOperation,
 		logger,
 	)
-	return platformworker.RunWithMetrics(ctx, cfg, logger, handlers, workerMetrics)
+	return platformworker.RunWithMetrics(ctx, cfg, logger, handlers, workerMetrics, deps.GORM)
 }
 
 func runRecoveryReconciler(ctx context.Context, reconciler *recovery.Reconciler, interval time.Duration, batch int, logger *slog.Logger) {
@@ -148,16 +157,16 @@ func runUploadCleanup(ctx context.Context, uploads *upload.Service, interval tim
 	}
 }
 
-func workerHandlers(verify, ready, gc asynq.HandlerFunc, logger *slog.Logger) map[string]asynq.HandlerFunc {
+func workerHandlers(verify, ready, gc taskqueue.HandlerFunc, logger *slog.Logger) map[string]taskqueue.HandlerFunc {
 	return workerHandlersWithRecovery(verify, ready, gc, nil, logger)
 }
 
-func workerHandlersWithRecovery(verify, ready, gc, recoverOperation asynq.HandlerFunc, logger *slog.Logger) map[string]asynq.HandlerFunc {
-	acknowledge := func(ctx context.Context, task *asynq.Task) error {
+func workerHandlersWithRecovery(verify, ready, gc, recoverOperation taskqueue.HandlerFunc, logger *slog.Logger) map[string]taskqueue.HandlerFunc {
+	acknowledge := func(ctx context.Context, task *taskqueue.Task) error {
 		logger.DebugContext(ctx, "domain event acknowledged", "event_type", task.Type())
 		return nil
 	}
-	handlers := map[string]asynq.HandlerFunc{
+	handlers := map[string]taskqueue.HandlerFunc{
 		outbox.EventFileCreated:             acknowledge,
 		outbox.EventShareImported:           acknowledge,
 		outbox.EventObjectVerifyRequested:   verify,

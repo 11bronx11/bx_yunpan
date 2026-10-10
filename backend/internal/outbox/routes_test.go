@@ -1,7 +1,6 @@
 package outbox
 
 import (
-	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"testing"
 )
 
@@ -35,32 +34,20 @@ func TestRoutesOmitDisabledAIConsumers(t *testing.T) {
 
 func TestTargetFromDeliveryRejectsMalformedDestinations(t *testing.T) {
 	if _, ok := targetFromDelivery(Delivery{Transport: "kafka", Destination: "topic"}); ok {
-		t.Fatal("kafka destination unexpectedly parsed as asynq")
+		t.Fatal("retired transport unexpectedly accepted")
 	}
-	if _, ok := targetFromDelivery(Delivery{Transport: "asynq", Destination: "missing-queue-separator"}); ok {
+	if _, ok := targetFromDelivery(Delivery{Transport: "rabbitmq", Destination: "missing-queue-separator"}); ok {
 		t.Fatal("malformed destination unexpectedly parsed")
 	}
 }
 
 func TestTargetAllowedForEventRejectsDestinationDrift(t *testing.T) {
-	delivery := Delivery{Transport: "asynq", Destination: EventObjectReady + "@maintenance"}
+	delivery := Delivery{Transport: "rabbitmq", Destination: EventObjectReady + "@maintenance"}
 	if _, ok := targetAllowedForEvent(EventObjectReady, true, delivery); ok {
 		t.Fatal("destination drift unexpectedly accepted")
 	}
-	valid := Delivery{Transport: "asynq", Destination: EventObjectReady + "@media"}
+	valid := Delivery{Transport: "rabbitmq", Destination: EventObjectReady + "@media"}
 	if _, ok := targetAllowedForEvent(EventObjectReady, true, valid); !ok {
 		t.Fatal("registered destination rejected")
-	}
-}
-
-func TestKafkaRoutesOnlyDomainEvents(t *testing.T) {
-	if got := KafkaRoutes(eventcontract.EventFileUpdatedV1, true); len(got) != 1 || got[0].Transport != "kafka" || got[0].Destination != "yunpan.file-events" {
-		t.Fatalf("file event Kafka route = %#v", got)
-	}
-	if got := KafkaRoutes(EventObjectVerifyRequested, true); got != nil {
-		t.Fatalf("command Kafka route = %#v, want nil", got)
-	}
-	if got := KafkaRoutes(eventcontract.EventFileUpdatedV1, false); got != nil {
-		t.Fatalf("disabled Kafka route = %#v, want nil", got)
 	}
 }

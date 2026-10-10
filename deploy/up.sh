@@ -13,17 +13,19 @@ distributed_workers=false
 ai_split=false
 redis_split=false
 search_indexer=false
+search_backends=false
 
 usage() {
   cat <<'EOF'
-Usage: ./deploy/up.sh [--no-build] [--observability] [--distributed-workers] [--ai-split] [--redis-split] [--search-indexer] [--api-replicas N] [--aisvc-replicas N]
+Usage: ./deploy/up.sh [--no-build] [--observability] [--distributed-workers] [--ai-split] [--redis-split] [--search-indexer] [--search-backends] [--api-replicas N] [--aisvc-replicas N]
 
   --no-build           Start existing images without building them.
   --observability      Also start Prometheus, Grafana, and OpenTelemetry Collector.
   --distributed-workers Start independent relay/object/media/maintenance roles.
   --ai-split           Start separate ai-query and ai-indexer roles.
-  --redis-split        Use separate Broker, Coordination, and Cache Redis services.
+  --redis-split        Use separate Coordination and Cache Redis services.
   --search-indexer     Start the opt-in PostgreSQL search projection consumer.
+  --search-backends    Start the opt-in single-node Elasticsearch/Qdrant profile.
   --api-replicas N      Scale core API only when explicitly requested.
   --aisvc-replicas N   Override AISVC_REPLICAS for this run.
 EOF
@@ -37,6 +39,7 @@ while (($#)); do
     --ai-split) ai_split=true ;;
     --redis-split) redis_split=true ;;
     --search-indexer) search_indexer=true ;;
+    --search-backends) search_backends=true ;;
     --api-replicas)
       (($# >= 2)) || { echo "--api-replicas requires a value" >&2; exit 2; }
       api_replicas=$2
@@ -249,7 +252,6 @@ if [[ "$distributed_workers" == true ]]; then
 fi
 if [[ "$redis_split" == true ]]; then
   profiles+=(--profile redis-split)
-  export REDIS_BROKER_ADDR=redis-broker:6379
   export REDIS_COORDINATION_ADDR=redis-coordination:6379
   export REDIS_CACHE_ADDR=redis-cache:6379
 fi
@@ -259,8 +261,19 @@ if [[ "$search_indexer" == true ]]; then
   # lifetime; the value is not persisted into the user's env file.
   export SEARCH_INDEX_ENABLED=true
 fi
+if [[ "$search_backends" == true ]]; then
+  profiles+=(--profile search-external)
+  export SEARCH_ES_ENDPOINT=${SEARCH_ES_ENDPOINT:-http://elasticsearch:9200}
+  export SEARCH_QDRANT_ENDPOINT=${SEARCH_QDRANT_ENDPOINT:-http://qdrant:6333}
+  export SEARCH_WRITE_BACKENDS=es_qdrant
+fi
 
 args=(--env-file "$env_file" -f "$compose_file" "${profiles[@]}" up -d --remove-orphans --wait --wait-timeout 240)
+if [[ "$build" == false ]]; then
+  # Keep --no-build meaningful even when a service image is missing: the
+  # operator explicitly asked to start existing images only.
+  args+=(--no-build)
+fi
 scale_args=()
 if [[ "$ai_enabled" == true ]]; then
   if [[ "$ai_split" == true ]]; then
@@ -283,10 +296,13 @@ if [[ "$distributed_workers" == true ]]; then
     fi
   fi
   if [[ "$redis_split" == true ]]; then
-    distributed_services+=(redis-broker redis-coordination redis-cache)
+    distributed_services+=(redis-coordination redis-cache)
   fi
   if [[ "$search_indexer" == true ]]; then
     distributed_services+=(search-indexer)
+  fi
+  if [[ "$search_backends" == true ]]; then
+    distributed_services+=(elasticsearch qdrant)
   fi
   args+=("${distributed_services[@]}")
 fi
@@ -345,13 +361,18 @@ if [[ "$ai_enabled" == false ]]; then
 fi
 
 if [[ "$redis_split" == false ]]; then
-  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile redis-split stop redis-broker redis-coordination redis-cache >/dev/null
-  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile redis-split rm -f redis-broker redis-coordination redis-cache >/dev/null
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile redis-split stop redis-coordination redis-cache >/dev/null
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile redis-split rm -f redis-coordination redis-cache >/dev/null
 fi
 
 if [[ "$search_indexer" == false ]]; then
   docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile search stop search-indexer >/dev/null
   docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile search rm -f search-indexer >/dev/null
+fi
+
+if [[ "$search_backends" == false ]]; then
+  docker compose --env-file "$env_file" -f "$compose_file" --profile search-external stop elasticsearch qdrant >/dev/null
+  docker compose --env-file "$env_file" -f "$compose_file" --profile search-external rm -f elasticsearch qdrant >/dev/null
 fi
 
 web_port=$(awk -F= '$1 == "WEB_PORT" {print $2}' "$env_file" | tail -1)

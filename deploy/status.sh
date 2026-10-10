@@ -20,7 +20,7 @@ if [[ "$ai_enabled" != "true" && "$ai_enabled" != "false" ]]; then
   exit 1
 fi
 
-docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app --profile ai --profile ai-split --profile distributed --profile redis-split --profile observability ps
+docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app --profile ai --profile ai-split --profile distributed --profile redis-split --profile observability --profile search --profile search-external ps
 
 web_port=$(awk -F= '$1 == "WEB_PORT" {print $2}' "$env_file" | tail -1)
 bind_ip=$(awk -F= '$1 == "APP_BIND_IP" {print $2}' "$env_file" | tail -1)
@@ -33,7 +33,7 @@ probe_ip=$bind_ip
 
 # API has no fixed host port in the scalable profile. Probe every container so
 # one healthy replica cannot hide an unready peer.
-compose=(docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app --profile ai --profile ai-split --profile distributed --profile redis-split --profile search)
+compose=(docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app --profile ai --profile ai-split --profile distributed --profile redis-split --profile search --profile search-external)
 mapfile -t api_ids < <("${compose[@]}" ps -q api)
 api_failures=0
 if ((${#api_ids[@]} == 0)); then

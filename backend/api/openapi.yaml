@@ -86,6 +86,7 @@ paths:
       tags: [Auth]
       summary: Rotate a refresh session
       operationId: refreshSession
+      description: Cross-origin browser requests are rejected before the refresh session is changed. Non-browser requests without Origin or Fetch Metadata remain supported.
       security: []
       parameters:
         - $ref: '#/components/parameters/Origin'
@@ -102,11 +103,14 @@ paths:
                 $ref: '#/components/schemas/AuthResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/auth/logout:
     post:
       tags: [Auth]
       summary: Revoke the current refresh session
       operationId: logout
+      description: Cross-origin browser requests are rejected before the refresh session is revoked.
       parameters:
         - $ref: '#/components/parameters/Origin'
       responses:
@@ -114,6 +118,8 @@ paths:
           description: Logged out
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/users/me:
     get:
       tags: [Users]
@@ -160,10 +166,19 @@ paths:
     get:
       tags: [Drive]
       summary: List folder children
+      description: >-
+        Directories precede files. Within each kind, items are ordered by
+        normalized name and ID in the requested direction. Cursors are bound
+        to the owner, folder, sort, and committed content/ACL epochs. A stale
+        cursor returns 409 (drive.cursor_stale); restart from the first page.
       operationId: listFolderChildren
       parameters:
         - $ref: '#/components/parameters/FolderId'
-        - $ref: '#/components/parameters/Cursor'
+        - name: cursor
+          in: query
+          schema:
+            type: string
+            maxLength: 4096
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Sort'
       responses:
@@ -173,6 +188,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DriveItemPage'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
         '404':
           $ref: '#/components/responses/NotFound'
   /api/v1/folders:
@@ -644,6 +663,8 @@ paths:
                 $ref: '#/components/schemas/ImportShareResponse'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
   /api/v1/search:
     post:
       tags: [Search]
@@ -894,7 +915,7 @@ components:
       in: query
       schema:
         type: string
-        enum: [name_asc, name_desc, updated_desc, size_desc]
+        enum: [name_asc, name_desc]
         default: name_asc
     IdempotencyKey:
       name: Idempotency-Key

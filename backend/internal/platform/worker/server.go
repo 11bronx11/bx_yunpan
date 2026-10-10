@@ -2,94 +2,54 @@ package worker
 
 import (
 	"context"
+	"gorm.io/gorm"
 	"log/slog"
 
-	"github.com/hibiken/asynq"
-
+	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
+	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 )
 
 const TaskSystemPing = "system:ping"
-
-// QueueAI 由 aisvc 独占消费，其余队列留给 cmd/worker。
 const QueueAI = "ai"
 
-// Run 消费 cfg.Worker.Queues 里除 ai 之外的队列。
-func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, handlers map[string]asynq.HandlerFunc) error {
-	queues := make(map[string]int, len(cfg.Worker.Queues))
-	for name, weight := range cfg.Worker.Queues {
-		if name == QueueAI {
-			continue
+func BrokerConfig(cfg config.Config) taskqueue.Config {
+	return taskqueue.Config{URL: cfg.TaskQueue.URL, Exchange: cfg.TaskQueue.Exchange, Prefetch: cfg.TaskQueue.Prefetch, Concurrency: cfg.Worker.Concurrency, PublishTimeout: cfg.TaskQueue.PublishTimeout, MaxRetry: cfg.Outbox.MaxRetry, TaskTimeout: cfg.Outbox.TaskTimeout, StopTimeout: cfg.TaskQueue.StopTimeout}
+}
+func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, handlers map[string]taskqueue.HandlerFunc) error {
+	return RunWithMetrics(ctx, cfg, logger, handlers, nil)
+}
+func RunWithMetrics(ctx context.Context, cfg config.Config, logger *slog.Logger, handlers map[string]taskqueue.HandlerFunc, metrics *Metrics, databases ...*gorm.DB) error {
+	return RunQueuesWithMetrics(ctx, cfg, QueuesForRole(RoleCombined, cfg.Worker.Queues), logger, handlers, metrics, databases...)
+}
+func RunQueues(ctx context.Context, cfg config.Config, queues map[string]int, logger *slog.Logger, handlers map[string]taskqueue.HandlerFunc) error {
+	return RunQueuesWithMetrics(ctx, cfg, queues, logger, handlers, nil)
+}
+func RunQueuesWithMetrics(ctx context.Context, cfg config.Config, queues map[string]int, logger *slog.Logger, handlers map[string]taskqueue.HandlerFunc, metrics *Metrics, databases ...*gorm.DB) error {
+	ctx = outbox.WithV2EventsEnabled(ctx, cfg.Outbox.V2EventsEnabled)
+	ctx = outbox.WithSearchEnabled(ctx, cfg.Search.Enabled)
+	broker := taskqueue.New(BrokerConfig(cfg))
+	defer broker.Close()
+	var store *taskqueue.Store
+	if len(databases) > 0 && databases[0] != nil {
+		store = taskqueue.NewStore(databases[0]).WithStopTimeout(cfg.TaskQueue.StopTimeout)
+		broker.FailureRecorder = store.RecordFailure
+		broker.ExecutionStore = store
+	}
+	wrapped := make(map[string]taskqueue.HandlerFunc, len(handlers)+1)
+	handlersCopy := make(map[string]taskqueue.HandlerFunc, len(handlers)+1)
+	for kind, h := range handlers {
+		handlersCopy[kind] = h
+	}
+	handlersCopy[TaskSystemPing] = func(context.Context, *taskqueue.Task) error { return nil }
+	for kind, h := range handlersCopy {
+		var next taskqueue.Handler = h
+		if metrics != nil {
+			next = metrics.Middleware()(next)
 		}
-		queues[name] = weight
+		next = TracingMiddleware()(next)
+		wrapped[kind] = next.ProcessTask
 	}
-	return run(ctx, cfg, queues, logger, handlers, nil)
+	logger.Info("rabbitmq worker started", "concurrency", cfg.Worker.Concurrency, "queues", queues)
+	return broker.Consume(ctx, queues, wrapped, logger)
 }
-
-// RunWithMetrics is the combined worker entry point with role metrics.
-func RunWithMetrics(ctx context.Context, cfg config.Config, logger *slog.Logger, handlers map[string]asynq.HandlerFunc, metrics *Metrics) error {
-	queues := QueuesForRole(RoleCombined, cfg.Worker.Queues)
-	return run(ctx, cfg, queues, logger, handlers, metrics)
-}
-
-// RunQueues 只消费指定队列，供 aisvc 独占 ai 队列使用。
-// 进程只能消费自己注册了 handler 的队列，否则 Asynq 取到任务却找不到
-// handler，任务会一路重试到进死信队列。
-func RunQueues(ctx context.Context, cfg config.Config, queues map[string]int, logger *slog.Logger, handlers map[string]asynq.HandlerFunc) error {
-	return run(ctx, cfg, queues, logger, handlers, nil)
-}
-
-// RunQueuesWithMetrics is used by independently deployable queue roles.
-func RunQueuesWithMetrics(ctx context.Context, cfg config.Config, queues map[string]int, logger *slog.Logger, handlers map[string]asynq.HandlerFunc, metrics *Metrics) error {
-	return run(ctx, cfg, queues, logger, handlers, metrics)
-}
-
-func run(ctx context.Context, cfg config.Config, queues map[string]int, logger *slog.Logger, handlers map[string]asynq.HandlerFunc, metrics *Metrics) error {
-	server := asynq.NewServer(
-		asynq.RedisClientOpt{
-			Addr:     cfg.Redis.BrokerAddr,
-			Password: cfg.Redis.BrokerPassword,
-			DB:       cfg.Redis.BrokerDB,
-		},
-		asynq.Config{
-			Concurrency: cfg.Worker.Concurrency,
-			Queues:      queues,
-			Logger:      asynqLogger{logger: logger},
-			ErrorHandler: asynq.ErrorHandlerFunc(func(ctx context.Context, task *asynq.Task, err error) {
-				logger.ErrorContext(ctx, "asynq task failed", "task_type", task.Type(), "error", err)
-			}),
-		},
-	)
-	mux := asynq.NewServeMux()
-	mux.Use(TracingMiddleware())
-	if metrics != nil {
-		metrics.StartQueueObserver(ctx)
-		mux.Use(metrics.Middleware())
-	}
-	mux.HandleFunc(TaskSystemPing, func(ctx context.Context, _ *asynq.Task) error {
-		logger.DebugContext(ctx, "worker ping handled")
-		return nil
-	})
-	for taskType, handler := range handlers {
-		mux.HandleFunc(taskType, handler)
-	}
-
-	if err := server.Start(mux); err != nil {
-		return err
-	}
-	logger.Info("worker started", "concurrency", cfg.Worker.Concurrency, "queues", queues)
-	<-ctx.Done()
-	logger.Info("worker shutdown requested")
-	server.Shutdown()
-	return nil
-}
-
-type asynqLogger struct {
-	logger *slog.Logger
-}
-
-func (l asynqLogger) Debug(args ...any) { l.logger.Debug("asynq", "message", args) }
-func (l asynqLogger) Info(args ...any)  { l.logger.Info("asynq", "message", args) }
-func (l asynqLogger) Warn(args ...any)  { l.logger.Warn("asynq", "message", args) }
-func (l asynqLogger) Error(args ...any) { l.logger.Error("asynq", "message", args) }
-func (l asynqLogger) Fatal(args ...any) { l.logger.Error("asynq fatal", "message", args) }

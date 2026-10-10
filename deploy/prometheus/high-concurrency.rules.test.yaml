@@ -1,0 +1,33 @@
+rule_files:
+  - high-concurrency.rules.yaml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'yunpan_storage_oldest_age_seconds{operation="multipart.create",state="failed"}'
+        values: '700+0x6 stale _ _'
+      - series: 'yunpan_outbox_backlog_scrape_success'
+        values: '0 0 0 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: YunpanBacklogObservationFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: PostgreSQL backlog observation is failing
+      - eval_time: 4m
+        alertname: YunpanBacklogObservationFailed
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: YunpanDurableBacklogStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              operation: multipart.create
+              state: failed
+            exp_annotations:
+              summary: Durable work is not draining within the initial recovery budget
+      - eval_time: 8m
+        alertname: YunpanDurableBacklogStalled
+        exp_alerts: []

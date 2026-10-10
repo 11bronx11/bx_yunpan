@@ -4,26 +4,7 @@ import (
 	"strings"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
-	"github.com/11bronx11/bx_yunpan/backend/internal/eventstream"
 )
-
-// KafkaRoutes describes long-lived domain-event deliveries. Commands stay on
-// Asynq; Kafka receives only replayable facts with a stable aggregate key.
-func KafkaRoutes(eventType string, enabled bool) []DeliveryTarget {
-	if !enabled || strings.TrimSpace(eventType) == "" {
-		return nil
-	}
-	// Commands are intentionally excluded from the durable event stream.
-	definition, ok := eventcontract.Lookup(eventType)
-	if !ok || definition.MessageKind != eventcontract.MessageKindDomainEvent {
-		return nil
-	}
-	topic := eventstream.TopicForEvent(eventType)
-	if topic == "" {
-		return nil
-	}
-	return []DeliveryTarget{{Transport: "kafka", Destination: topic}}
-}
 
 const (
 	TaskObjectVerifyV1   = "object.verify.v1"
@@ -62,51 +43,51 @@ func SearchRoutes(eventType string, enabled bool) []DeliveryTarget {
 		eventcontract.EventShareCreatedV1, eventcontract.EventShareRevokedV1,
 		EventShareImported, EventObjectReady, EventObjectGCRequested,
 		eventcontract.EventAIIndexRequestedV1:
-		return []DeliveryTarget{target("asynq", TaskSearchProjectV1, "search")}
+		return []DeliveryTarget{target("rabbitmq", TaskSearchProjectV1, "search")}
 	default:
 		return nil
 	}
 }
 
-// Routes is the explicit registry for enabled Asynq destinations. Unknown
+// Routes is the explicit registry for enabled RabbitMQ destinations. Unknown
 // event types return nil and are kept as observable unrouted outbox rows.
 func Routes(eventType string, aiEnabled bool) []DeliveryTarget {
 	switch eventType {
 	case EventFileCreated:
-		return []DeliveryTarget{target("asynq", EventFileCreated, "maintenance")}
+		return []DeliveryTarget{target("rabbitmq", EventFileCreated, "maintenance")}
 	case EventShareImported:
-		return []DeliveryTarget{target("asynq", EventShareImported, "maintenance")}
+		return []DeliveryTarget{target("rabbitmq", EventShareImported, "maintenance")}
 	case EventObjectVerifyRequested:
-		return []DeliveryTarget{target("asynq", TaskObjectVerifyV1, "object")}
+		return []DeliveryTarget{target("rabbitmq", TaskObjectVerifyV1, "object")}
 	case EventObjectReady:
-		targets := []DeliveryTarget{target("asynq", TaskMediaThumbnailV1, "media")}
+		targets := []DeliveryTarget{target("rabbitmq", TaskMediaThumbnailV1, "media")}
 		if aiEnabled {
-			targets = append(targets, target("asynq", TaskAIIndexV1, "ai"))
+			targets = append(targets, target("rabbitmq", TaskAIIndexV1, "ai"))
 		}
 		return targets
 	case EventObjectGCRequested:
-		return []DeliveryTarget{target("asynq", TaskObjectGCV1, "maintenance")}
+		return []DeliveryTarget{target("rabbitmq", TaskObjectGCV1, "maintenance")}
 	case EventAIReprocessRequested:
 		if aiEnabled {
-			return []DeliveryTarget{target("asynq", TaskAIReprocessV1, "ai")}
+			return []DeliveryTarget{target("rabbitmq", TaskAIReprocessV1, "ai")}
 		}
 		return nil
 	case EventAIIndexRequested:
 		if aiEnabled {
-			return []DeliveryTarget{target("asynq", TaskAIIndexV1, "ai")}
+			return []DeliveryTarget{target("rabbitmq", TaskAIIndexV1, "ai")}
 		}
 		return nil
 	case EventStorageOperationRecover:
-		return []DeliveryTarget{target("asynq", EventStorageOperationRecover, "maintenance")}
+		return []DeliveryTarget{target("rabbitmq", EventStorageOperationRecover, "maintenance")}
 	case EventMediaThumbnailRequested:
-		return []DeliveryTarget{target("asynq", EventMediaThumbnailRequested, "media")}
+		return []DeliveryTarget{target("rabbitmq", EventMediaThumbnailRequested, "media")}
 	default:
 		return nil
 	}
 }
 
 func targetFromDelivery(delivery Delivery) (DeliveryTarget, bool) {
-	if delivery.Transport != "asynq" {
+	if delivery.Transport != "rabbitmq" {
 		return DeliveryTarget{}, false
 	}
 	separator := strings.LastIndexByte(delivery.Destination, '@')

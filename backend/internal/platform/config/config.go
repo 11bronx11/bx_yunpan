@@ -10,25 +10,25 @@ import (
 )
 
 type Config struct {
-	App         App
-	HTTP        HTTP
-	Postgres    Postgres
-	Redis       Redis
-	Cache       Cache
-	Storage     Storage
-	Worker      Worker
-	Auth        Auth
-	Identity    Identity
-	Upload      Upload
-	Outbox      Outbox
-	Search      Search
-	EventStream EventStream
-	Sharing     Sharing
-	AI          AI
-	AIService   AIService
-	Tracing     Tracing
-	Registry    Registry
-	Locking     Locking
+	App       App
+	HTTP      HTTP
+	Postgres  Postgres
+	Redis     Redis
+	Cache     Cache
+	Storage   Storage
+	Worker    Worker
+	Auth      Auth
+	Identity  Identity
+	Upload    Upload
+	Outbox    Outbox
+	TaskQueue TaskQueue
+	Search    Search
+	Sharing   Sharing
+	AI        AI
+	AIService AIService
+	Tracing   Tracing
+	Registry  Registry
+	Locking   Locking
 }
 
 type App struct {
@@ -66,9 +66,6 @@ type Redis struct {
 	Addr                 string
 	Password             string
 	DB                   int
-	BrokerAddr           string
-	BrokerPassword       string
-	BrokerDB             int
 	CoordinationAddr     string
 	CoordinationPassword string
 	CoordinationDB       int
@@ -131,6 +128,17 @@ type Outbox struct {
 	V2EventsEnabled bool
 }
 
+// TaskQueue controls the RabbitMQ task execution plane. Redis remains
+// available for cache/coordination during the migration, but is no longer a
+// task broker for new workers.
+type TaskQueue struct {
+	URL            string
+	Exchange       string
+	Prefetch       int
+	PublishTimeout time.Duration
+	StopTimeout    time.Duration
+}
+
 // Search controls the rebuildable derived index plane. PostgreSQL remains the
 // default read path until an external index has passed snapshot/shadow gates.
 type Search struct {
@@ -139,11 +147,16 @@ type Search struct {
 	ReadBackend      string
 	ShadowSampleRate float64
 	IndexEpoch       string
-}
-
-type EventStream struct {
-	KafkaEnabled bool
-	KafkaBrokers []string
+	ESEndpoint       string
+	ESUsername       string
+	ESPassword       string
+	QdrantEndpoint   string
+	QdrantAPIKey     string
+	ExternalTimeout  time.Duration
+	WriteTimeout     time.Duration
+	BatchSize        int
+	VectorOversample int
+	ExternalFallback bool
 }
 
 type Sharing struct {
@@ -268,9 +281,6 @@ func Load() (Config, error) {
 		},
 		Redis: Redis{
 			Addr: legacyRedisAddr, Password: legacyRedisPassword, DB: legacyRedisDB,
-			BrokerAddr:           env("REDIS_BROKER_ADDR", legacyRedisAddr),
-			BrokerPassword:       env("REDIS_BROKER_PASSWORD", legacyRedisPassword),
-			BrokerDB:             envInt("REDIS_BROKER_DB", legacyRedisDB),
 			CoordinationAddr:     env("REDIS_COORDINATION_ADDR", legacyRedisAddr),
 			CoordinationPassword: env("REDIS_COORDINATION_PASSWORD", legacyRedisPassword),
 			CoordinationDB:       envInt("REDIS_COORDINATION_DB", legacyRedisDB),
@@ -330,14 +340,30 @@ func Load() (Config, error) {
 			GCDelay:         envDuration("OBJECT_GC_DELAY", 24*time.Hour),
 			V2EventsEnabled: envBool("OUTBOX_V2_EVENTS_ENABLED", false),
 		},
+		TaskQueue: TaskQueue{
+			URL:            env("RABBITMQ_URL", "amqp://guest:guest@127.0.0.1:5672/"),
+			Exchange:       env("RABBITMQ_EXCHANGE", "yunpan.tasks"),
+			Prefetch:       envInt("RABBITMQ_PREFETCH", 16),
+			PublishTimeout: envDuration("RABBITMQ_PUBLISH_TIMEOUT", 5*time.Second),
+			StopTimeout:    envDuration("TASK_CANCEL_GRACE", 10*time.Second),
+		},
 		Search: Search{
 			Enabled:          envBool("SEARCH_INDEX_ENABLED", false),
 			WriteBackends:    envList("SEARCH_WRITE_BACKENDS", []string{"postgres"}),
 			ReadBackend:      env("SEARCH_READ_BACKEND", "postgres"),
 			ShadowSampleRate: envFloat("SEARCH_SHADOW_SAMPLE_RATE", 0),
 			IndexEpoch:       env("SEARCH_INDEX_EPOCH", "v1"),
+			ESEndpoint:       env("SEARCH_ES_ENDPOINT", ""),
+			ESUsername:       env("SEARCH_ES_USERNAME", ""),
+			ESPassword:       os.Getenv("SEARCH_ES_PASSWORD"),
+			QdrantEndpoint:   env("SEARCH_QDRANT_ENDPOINT", ""),
+			QdrantAPIKey:     os.Getenv("SEARCH_QDRANT_API_KEY"),
+			ExternalTimeout:  envDuration("SEARCH_EXTERNAL_TIMEOUT", 2*time.Second),
+			WriteTimeout:     envDuration("SEARCH_EXTERNAL_WRITE_TIMEOUT", 10*time.Second),
+			BatchSize:        envInt("SEARCH_INDEX_BATCH_SIZE", 100),
+			VectorOversample: envInt("SEARCH_VECTOR_OVERSAMPLE", 4),
+			ExternalFallback: envBool("SEARCH_EXTERNAL_FALLBACK", true),
 		},
-		EventStream: EventStream{KafkaEnabled: envBool("KAFKA_ENABLED", false), KafkaBrokers: envList("KAFKA_BROKERS", []string{"kafka:9092"})},
 		Sharing: Sharing{
 			Secret:    env("SHARE_SECRET", "bx-yunpan-development-share-secret"),
 			AccessTTL: envDuration("SHARE_ACCESS_TTL", 15*time.Minute),
@@ -431,7 +457,7 @@ func (c Config) Validate() error {
 		errs = append(errs, errors.New("Postgres pool settings are invalid"))
 	}
 	for name, addr := range map[string]string{
-		"REDIS_ADDR": c.Redis.Addr, "REDIS_BROKER_ADDR": c.Redis.BrokerAddr,
+		"REDIS_ADDR":              c.Redis.Addr,
 		"REDIS_COORDINATION_ADDR": c.Redis.CoordinationAddr, "REDIS_CACHE_ADDR": c.Redis.CacheAddr,
 	} {
 		if strings.TrimSpace(addr) == "" {
@@ -439,7 +465,7 @@ func (c Config) Validate() error {
 		}
 	}
 	for name, db := range map[string]int{
-		"REDIS_DB": c.Redis.DB, "REDIS_BROKER_DB": c.Redis.BrokerDB,
+		"REDIS_DB":              c.Redis.DB,
 		"REDIS_COORDINATION_DB": c.Redis.CoordinationDB, "REDIS_CACHE_DB": c.Redis.CacheDB,
 	} {
 		if db < 0 {
@@ -487,8 +513,14 @@ func (c Config) Validate() error {
 	if c.Outbox.PollInterval <= 0 || c.Outbox.BatchSize <= 0 || c.Outbox.MaxRetry < 0 || c.Outbox.TaskTimeout <= 0 || c.Outbox.GCDelay < 0 {
 		errs = append(errs, errors.New("outbox settings are invalid"))
 	}
+	if strings.TrimSpace(c.TaskQueue.URL) == "" || strings.TrimSpace(c.TaskQueue.Exchange) == "" || c.TaskQueue.Prefetch <= 0 || c.TaskQueue.PublishTimeout <= 0 || c.TaskQueue.StopTimeout <= 0 || c.TaskQueue.StopTimeout > time.Minute {
+		errs = append(errs, errors.New("RabbitMQ task queue settings are invalid"))
+	}
 	if c.Search.ShadowSampleRate < 0 || c.Search.ShadowSampleRate > 1 {
 		errs = append(errs, errors.New("SEARCH_SHADOW_SAMPLE_RATE must be in [0, 1]"))
+	}
+	if c.Search.ExternalTimeout <= 0 || c.Search.WriteTimeout <= 0 || c.Search.BatchSize <= 0 || c.Search.BatchSize > 10000 || c.Search.VectorOversample <= 0 || c.Search.VectorOversample > 100 {
+		errs = append(errs, errors.New("search external timeout, batch size, and oversample settings are invalid"))
 	}
 	if strings.TrimSpace(c.Search.IndexEpoch) == "" {
 		errs = append(errs, errors.New("SEARCH_INDEX_EPOCH is required"))
@@ -507,11 +539,16 @@ func (c Config) Validate() error {
 			errs = append(errs, fmt.Errorf("unsupported search write backend %q", backend))
 		}
 	}
+	if contains(c.Search.WriteBackends, "es_qdrant") && (strings.TrimSpace(c.Search.ESEndpoint) == "" || strings.TrimSpace(c.Search.QdrantEndpoint) == "") {
+		errs = append(errs, errors.New("SEARCH_WRITE_BACKENDS=es_qdrant requires SEARCH_ES_ENDPOINT and SEARCH_QDRANT_ENDPOINT"))
+	}
 	if c.Search.Enabled && c.Search.ReadBackend == "es_qdrant" && !contains(c.Search.WriteBackends, "es_qdrant") {
 		errs = append(errs, errors.New("SEARCH_READ_BACKEND=es_qdrant requires es_qdrant in SEARCH_WRITE_BACKENDS"))
 	}
-	if c.EventStream.KafkaEnabled && len(c.EventStream.KafkaBrokers) == 0 {
-		errs = append(errs, errors.New("KAFKA_BROKERS is required when KAFKA_ENABLED=true"))
+	if c.Search.ReadBackend == "es_qdrant" {
+		if strings.TrimSpace(c.Search.ESEndpoint) == "" || strings.TrimSpace(c.Search.QdrantEndpoint) == "" {
+			errs = append(errs, errors.New("SEARCH_ES_ENDPOINT and SEARCH_QDRANT_ENDPOINT are required for es_qdrant reads"))
+		}
 	}
 	if c.Sharing.Secret == "" || c.Sharing.AccessTTL <= 0 {
 		errs = append(errs, errors.New("share secret and positive access TTL are required"))

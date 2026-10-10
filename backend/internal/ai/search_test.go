@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	searchindex "github.com/11bronx11/bx_yunpan/backend/internal/search"
 	"github.com/google/uuid"
 )
 
@@ -53,5 +54,18 @@ func TestAskRejectsTooManyFileIDs(t *testing.T) {
 	_, _, err := service.Ask(context.Background(), uuid.New(), "question", nil, fileIDs)
 	if !errors.Is(err, ErrInvalid) {
 		t.Fatalf("expected invalid file scope, got %v", err)
+	}
+}
+
+func TestNormalizeExternalSearchError(t *testing.T) {
+	if err := normalizeExternalSearchError(searchindex.ErrUnavailable); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("retryable search outage = %v, want AI unavailable", err)
+	}
+	if err := normalizeExternalSearchError(&searchindex.HTTPError{Backend: "elasticsearch", StatusCode: 503, Retryable: true}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("retryable HTTP search outage = %v, want AI unavailable", err)
+	}
+	permanent := &searchindex.HTTPError{Backend: "elasticsearch", StatusCode: 400, Retryable: false}
+	if err := normalizeExternalSearchError(permanent); !errors.Is(err, searchindex.ErrPermanent) {
+		t.Fatalf("permanent search error = %v, want original permanent error", err)
 	}
 }

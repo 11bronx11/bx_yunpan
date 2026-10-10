@@ -230,8 +230,15 @@ func TestCreateSerializesConcurrentIdempotentRequests(t *testing.T) {
 		}
 	}
 	newCalls, _ := fixture.storage.calls()
+	if newCalls != 0 {
+		t.Fatalf("multipart creations during request = %d, want 0", newCalls)
+	}
+	if _, err := fixture.service.ReconcileStorageOperations(context.Background(), 10); err != nil {
+		t.Fatalf("reconcile multipart creation: %v", err)
+	}
+	newCalls, _ = fixture.storage.calls()
 	if newCalls != 1 {
-		t.Fatalf("multipart creations = %d, want 1", newCalls)
+		t.Fatalf("multipart creations after reconcile = %d, want 1", newCalls)
 	}
 	var count int64
 	if err := fixture.db.Model(&Session{}).Where("user_id = ?", fixture.userID).Count(&count).Error; err != nil || count != 1 {
@@ -285,7 +292,7 @@ func TestCompleteSerializesConcurrentRetries(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			result, err := fixture.service.Complete(context.Background(), fixture.userID, session.ID)
-			if err == nil && result.Status != StatusVerifying {
+			if err == nil && result.Status != StatusCompleting {
 				err = ErrConflict
 			}
 			errs <- err
@@ -299,8 +306,15 @@ func TestCompleteSerializesConcurrentRetries(t *testing.T) {
 		}
 	}
 	_, completeCalls := fixture.storage.calls()
+	if completeCalls != 0 {
+		t.Fatalf("multipart completions during request = %d, want 0", completeCalls)
+	}
+	if _, err := fixture.service.ReconcileStorageOperations(context.Background(), 10); err != nil {
+		t.Fatalf("reconcile multipart completion: %v", err)
+	}
+	_, completeCalls = fixture.storage.calls()
 	if completeCalls != 1 {
-		t.Fatalf("multipart completions = %d, want 1", completeCalls)
+		t.Fatalf("multipart completions after reconcile = %d, want 1", completeCalls)
 	}
 	var eventCount int64
 	if err := fixture.db.Model(&struct{ ID uuid.UUID }{}).Table("outbox_events").Where("aggregate_id = ? AND event_type = ?", session.ID, outbox.EventObjectVerifyRequested).Count(&eventCount).Error; err != nil || eventCount != 1 {
@@ -340,8 +354,14 @@ func TestAbortReleasesQuotaOnceUnderConcurrency(t *testing.T) {
 	if err := fixture.db.First(&user, "id = ?", fixture.userID).Error; err != nil || user.ReservedBytes != 128 {
 		t.Fatalf("reserved bytes = %d, err = %v", user.ReservedBytes, err)
 	}
+	if fixture.storage.abortCount() != 0 {
+		t.Fatalf("multipart aborts during request = %d, want 0", fixture.storage.abortCount())
+	}
+	if _, err := fixture.service.ReconcileStorageOperations(context.Background(), 10); err != nil {
+		t.Fatalf("reconcile multipart abort: %v", err)
+	}
 	if fixture.storage.abortCount() != 1 {
-		t.Fatalf("multipart aborts = %d, want 1", fixture.storage.abortCount())
+		t.Fatalf("multipart aborts after reconcile = %d, want 1", fixture.storage.abortCount())
 	}
 }
 
@@ -360,8 +380,15 @@ func TestExpireReleasesQuotaAndMarksSession(t *testing.T) {
 		t.Fatalf("expire count = %d, err = %v", count, err)
 	}
 	stored, err := fixture.service.Get(fixture.userID, session.ID)
-	if err != nil || stored.Status != StatusExpired || stored.ReservedBytes != 0 || stored.StorageUploadID != "" {
+	if err != nil || stored.Status != StatusExpired || stored.ReservedBytes != 0 || stored.StorageUploadID == "" {
 		t.Fatalf("expired session = %#v, err = %v", stored, err)
+	}
+	if _, err := fixture.service.ReconcileStorageOperations(context.Background(), 10); err != nil {
+		t.Fatalf("reconcile expired multipart: %v", err)
+	}
+	stored, err = fixture.service.Get(fixture.userID, session.ID)
+	if err != nil || stored.StorageUploadID != "" {
+		t.Fatalf("expired storage upload id = %q, err = %v", stored.StorageUploadID, err)
 	}
 	var user identity.User
 	if err := fixture.db.First(&user, "id = ?", fixture.userID).Error; err != nil || user.ReservedBytes != 0 {
@@ -420,7 +447,11 @@ func TestReconcileSucceededMultipartCreateConvergesInitializingSessionWithoutRec
 		t.Fatalf("create succeeded operation: %v", err)
 	}
 	count, err := fixture.service.ReconcileStorageOperations(context.Background(), 10)
-	if err != nil || count != 1 {
+	// The focused test may share a migrated PostgreSQL instance with other
+	// succeeded recovery rows; the contract is that this durable operation is
+	// converged without recreating the provider upload, not that it is the only
+	// row eligible for the bounded reconciliation pass.
+	if err != nil || count < 1 {
 		t.Fatalf("reconcile count = %d, err = %v", count, err)
 	}
 	stored, err := fixture.service.Get(fixture.userID, session.ID)

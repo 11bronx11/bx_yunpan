@@ -44,7 +44,7 @@ return 0
 //
 // 没有采用 Redlock：它假设多节点时钟漂移可控、进程不会长时间 GC pause，
 // 这两条在实践中都不牢靠。这里锁失效的后果只是重复投递，而下游任务有
-// 幂等保护（Asynq TaskID 去重 + 业务侧 dedupe），因此选了单实例简单方案。
+// 幂等保护（任务完成记录 + 业务侧幂等），因此选了单实例简单方案。
 // 若将来需要真正安全的互斥，应换成带 fencing token 的方案或 etcd lease。
 type RedisLock struct {
 	client redis.UniversalClient

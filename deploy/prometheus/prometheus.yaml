@@ -1,6 +1,9 @@
 global:
   scrape_interval: 15s
 
+rule_files:
+  - /etc/prometheus/high-concurrency.rules.yaml
+
 scrape_configs:
   - job_name: bx-yunpan-api
     metrics_path: /metrics
@@ -22,3 +25,8 @@ scrape_configs:
     relabel_configs:
       - source_labels: [__meta_dns_name]
         target_label: service
+
+  - job_name: bx-yunpan-rabbitmq
+    metrics_path: /metrics/per-object
+    static_configs:
+      - targets: ["rabbitmq:15692"]

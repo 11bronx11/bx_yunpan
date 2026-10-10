@@ -9,6 +9,10 @@ deploy/.env
 backend/bin/
 backend/coverage.out
 backend/tmp/
+artifacts/distributed-fixes/**/image/service
+
+# Local database backups from deployment rehearsals
+artifacts/global-audit/**/*.dump
 
 # React outputs and dependencies
 web/node_modules/
@@ -28,3 +32,6 @@ logs/
 Thumbs.db
 docs/*
 !docs/ARCHITECTURE_UPGRADE_FINAL_EXECUTION_PLAN.md
+!docs/HIGH_CONCURRENCY_UPGRADE_PLAN.md
+!docs/HIGH_CONCURRENCY_TEST_CHECKLIST.md
+artifacts/

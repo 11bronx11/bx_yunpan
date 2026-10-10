@@ -21,6 +21,7 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
+	searchindex "github.com/11bronx11/bx_yunpan/backend/internal/search"
 )
 
 const (
@@ -42,9 +43,13 @@ type Service struct {
 	objects        *objectstore.Service
 	storage        *minio.Client
 	provider       Provider
+	parser         ParserGateway
 	reranker       Reranker
 	config         config.AI
 	embeddingCache QueryEmbeddingCache
+	retrieval      searchindex.RetrievalBackend
+	searchConfig   config.Search
+	shadowRecorder ShadowRecorder
 }
 
 // QueryEmbeddingCache is deliberately narrower than a general cache API. It
@@ -56,7 +61,8 @@ type QueryEmbeddingCache interface {
 }
 
 func NewService(db *gorm.DB, driveService *drive.Service, objects *objectstore.Service, storage *minio.Client, cfg config.AI) *Service {
-	return &Service{db: db, drive: driveService, objects: objects, storage: storage, provider: NewProvider(cfg), reranker: NewReranker(cfg), config: cfg}
+	provider := NewProvider(cfg)
+	return &Service{db: db, drive: driveService, objects: objects, storage: storage, provider: provider, parser: NewBuiltinParser(provider), reranker: NewReranker(cfg), config: cfg}
 }
 
 func NewServiceWithCache(db *gorm.DB, driveService *drive.Service, objects *objectstore.Service, storage *minio.Client, cfg config.AI, embeddingCache QueryEmbeddingCache) *Service {
@@ -65,23 +71,43 @@ func NewServiceWithCache(db *gorm.DB, driveService *drive.Service, objects *obje
 	return service
 }
 
+// WithRetrieval attaches the optional derived-index read plane. The service
+// keeps PostgreSQL as the default and can fall back per request when an
+// external backend is unavailable or returns stale candidates.
+func (s *Service) WithRetrieval(backend searchindex.RetrievalBackend, cfg config.Search) *Service {
+	s.retrieval, s.searchConfig = backend, cfg
+	return s
+}
+
+func (s *Service) WithShadowRecorder(recorder ShadowRecorder) *Service {
+	s.shadowRecorder = recorder
+	return s
+}
+
 func (s *Service) ProcessObject(ctx context.Context, objectID uuid.UUID) error {
-	return s.processObject(ctx, objectID, false)
+	return s.processObjectWithMetadata(ctx, objectID, false, IndexMetadata{})
 }
 
 func (s *Service) processObject(ctx context.Context, objectID uuid.UUID, force bool) error {
-	// ai.index 是索引链路的业务根 span：它的父节点是 Asynq 消费 span，
+	return s.processObjectWithMetadata(ctx, objectID, force, IndexMetadata{})
+}
+
+func (s *Service) processObjectWithMetadata(ctx context.Context, objectID uuid.UUID, force bool, metadata IndexMetadata) error {
+	// ai.index 是索引链路的业务根 span：它的父节点是 RabbitMQ 消费 span，
 	// 后者又续接上传请求的 trace，因此一次上传能一路看到索引完成。
 	ctx, span := startSpan(ctx, "ai.index",
 		attribute.String("ai.object_id", objectID.String()),
 		attribute.Bool("ai.force", force),
 	)
-	err := s.runIndex(ctx, objectID, force)
+	if metadata.RunID != nil {
+		span.SetAttributes(attribute.String("ai.run_id", metadata.RunID.String()))
+	}
+	err := s.runIndex(ctx, objectID, force, metadata)
 	endSpan(span, err)
 	return err
 }
 
-func (s *Service) runIndex(ctx context.Context, objectID uuid.UUID, force bool) error {
+func (s *Service) runIndex(ctx context.Context, objectID uuid.UUID, force bool, metadata IndexMetadata) error {
 	object, err := s.objects.Get(objectID)
 	if err != nil {
 		return ErrNotFound
@@ -109,16 +135,29 @@ func (s *Service) runIndex(ctx context.Context, objectID uuid.UUID, force bool) 
 	if err != nil {
 		return s.finishFailedVersion(document, version, "ai.storage_read_failed", err)
 	}
-	sections, err := s.extractSections(ctx, extractionMimeType, object.SizeBytes, data)
-	if errors.Is(err, errUnsupported) {
-		return s.finishUnsupportedVersion(version, "ai.unsupported_type")
+	parser := s.parser
+	if parser == nil {
+		parser = NewBuiltinParser(s.provider)
 	}
+	runID := version.ID
+	if metadata.RunID != nil && *metadata.RunID != uuid.Nil {
+		runID = *metadata.RunID
+	}
+	parseResult, err := parser.Parse(ctx, ParseRequest{
+		RunID: runID, ObjectID: objectID, DocumentVersionID: version.ID, ContentHash: object.SHA256,
+		MediaType: extractionMimeType, ObjectAddress: ObjectReadAddress{MediaType: extractionMimeType, Data: data},
+		ParserProfileVersion: metadata.ParserProfileVersion, SizeLimitBytes: s.config.MaxObjectBytes,
+	})
 	if errors.Is(err, errInvalidInput) {
 		return s.finishUnsupportedVersion(version, "ai.invalid_content")
+	}
+	if IsParseUnsupported(err) || errors.Is(err, errUnsupported) {
+		return s.finishUnsupportedVersion(version, "ai.unsupported_type")
 	}
 	if err != nil {
 		return s.finishFailedVersion(document, version, "ai.extraction_failed", err)
 	}
+	sections := parseResult.Sections
 	if err := s.touchDocumentVersion(ctx, version.ID, version.LeaseToken); err != nil {
 		return s.finishFailedVersion(document, version, "ai.persistence_failed", err)
 	}
@@ -173,7 +212,7 @@ func (s *Service) runIndex(ctx context.Context, objectID uuid.UUID, force bool) 
 			Updates(map[string]any{"retired_at": now, "updated_at": now}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&Document{}).Where("id = ?").Updates(map[string]any{
+		return tx.Model(&Document{}).Where("id = ?", document.ID).Updates(map[string]any{
 			"status": "indexed", "summary": insight.Summary, "tags": pq.StringArray(insight.Tags),
 			"language": nullableString(insight.Language), "error_code": nil, "model_version": s.provider.ModelVersion(),
 			"active_version_id": version.ID, "updated_at": now,
@@ -227,13 +266,17 @@ func (s *Service) RequestReprocess(ctx context.Context, ownerID, fileID uuid.UUI
 		}
 		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
 			EventType: eventcontract.EventAIReprocessRequestedV1, AggregateID: task.ID, AggregateVersion: task.Version,
-			Producer: "core-api", Payload: eventcontract.AIReprocessRequestedV1{TaskID: task.ID, ObjectID: file.ObjectID},
+			Producer: "core-api", Payload: eventcontract.AIReprocessRequestedV1{TaskID: task.ID, ObjectID: file.ObjectID, ContentHash: file.SHA256},
 		})
 	})
 	return task, err
 }
 
 func (s *Service) ProcessTask(ctx context.Context, taskID, objectID uuid.UUID) error {
+	return s.processTaskWithMetadata(ctx, taskID, objectID, IndexMetadata{})
+}
+
+func (s *Service) processTaskWithMetadata(ctx context.Context, taskID, objectID uuid.UUID, metadata IndexMetadata) error {
 	now := time.Now().UTC()
 	result := s.db.Model(&Task{}).Where("id = ? AND status IN ?", taskID, []string{"pending", "running", "failed"}).Updates(map[string]any{
 		"status": "running", "progress": 10, "attempt": gorm.Expr("attempt + 1"), "version": gorm.Expr("version + 1"), "updated_at": now,
@@ -244,7 +287,7 @@ func (s *Service) ProcessTask(ctx context.Context, taskID, objectID uuid.UUID) e
 	if result.RowsAffected == 0 {
 		return nil
 	}
-	if err := s.processObject(ctx, objectID, true); err != nil {
+	if err := s.processObjectWithMetadata(ctx, objectID, true, metadata); err != nil {
 		message := limitRunes(err.Error(), 500)
 		s.db.Model(&Task{}).Where("id = ?", taskID).Updates(map[string]any{
 			"status": "failed", "progress": 100, "version": gorm.Expr("version + 1"), "error_code": "ai.reprocess_failed", "error_message": message, "updated_at": time.Now().UTC(),

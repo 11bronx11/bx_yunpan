@@ -5,37 +5,26 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"os"
 	"testing"
 	"time"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 	"github.com/google/uuid"
-	"github.com/hibiken/asynq"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 )
 
-type conflictAfterFirstEnqueue struct {
+type recordingPublisher struct {
 	calls   int
 	taskIDs []string
 }
 
-func (f *conflictAfterFirstEnqueue) EnqueueContext(_ context.Context, _ *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
+func (f *recordingPublisher) Publish(_ context.Context, task taskqueue.Task) error {
 	f.calls++
-	info := &asynq.TaskInfo{}
-	for _, option := range opts {
-		if option.Type() == asynq.TaskIDOpt {
-			info.ID, _ = option.Value().(string)
-		}
-	}
-	f.taskIDs = append(f.taskIDs, info.ID)
-	if f.calls > 1 {
-		return nil, asynq.ErrTaskIDConflict
-	}
-	return info, nil
+	f.taskIDs = append(f.taskIDs, task.ID)
+	return nil
 }
 
 func TestFanoutRespectsAIEnabled(t *testing.T) {
@@ -71,14 +60,7 @@ func TestPayloadWithTraceCarriesStableTaskMetadata(t *testing.T) {
 }
 
 func TestDispatcherRecoversWhenEnqueueCommitsBeforeDeliveryStatus(t *testing.T) {
-	dsn := os.Getenv("TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("TEST_POSTGRES_DSN is not set")
-	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := isolatedOutboxDB(t)
 	eventID, aggregateID := uuid.New(), uuid.New()
 	envelope, err := eventcontract.New(eventcontract.EnvelopeInput{
 		EventID: eventID, EventType: eventcontract.EventObjectVerifyRequestedV1,
@@ -93,7 +75,7 @@ func TestDispatcherRecoversWhenEnqueueCommitsBeforeDeliveryStatus(t *testing.T) 
 	}
 	t.Cleanup(func() { _ = db.Delete(&Event{}, "id = ?", eventID).Error })
 
-	fake := &conflictAfterFirstEnqueue{}
+	fake := &recordingPublisher{}
 	dispatcher := newDispatcher(db, fake, slog.Default(), config.Outbox{BatchSize: 1, MaxRetry: 2, TaskTimeout: time.Minute})
 	injected := errors.New("injected delivery status failure")
 	dispatcher.markPublished = func(*gorm.DB, Delivery, time.Time) error { return injected }

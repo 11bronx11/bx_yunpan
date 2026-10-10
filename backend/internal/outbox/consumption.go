@@ -14,7 +14,7 @@ var ErrInvalidConsumer = errors.New("invalid event consumer")
 
 // Consumption records the completion of one consumer's handling of an event.
 // event_consumptions intentionally has no foreign key to outbox_events: long
-// lived/replayed Kafka events may outlive local outbox retention.
+// lived/replayed events may outlive local outbox retention.
 type Consumption struct {
 	EventID      uuid.UUID `gorm:"type:uuid;primaryKey"`
 	ConsumerName string    `gorm:"primaryKey"`

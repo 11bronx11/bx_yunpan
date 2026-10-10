@@ -20,7 +20,9 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/breaker"
+	platformcache "github.com/11bronx11/bx_yunpan/backend/internal/platform/cache"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dbmetrics"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dependencies"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/httpapi"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/registry"
@@ -30,13 +32,19 @@ import (
 
 func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	ctx = outbox.WithSearchEnabled(ctx, cfg.Search.Enabled)
-	ctx = outbox.WithKafkaEnabled(ctx, cfg.EventStream.KafkaEnabled)
 	deps, err := dependencies.Open(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	defer deps.Close()
-	driveService := drive.NewService(deps.GORM)
+	metrics := httpapi.NewMetrics(cfg.App.InstanceID)
+	dbmetrics.RegisterPool(metrics.Registry, deps.SQL, "core-api")
+	var driveService *drive.Service
+	if cfg.Cache.Enabled {
+		driveService = drive.NewServiceWithCache(deps.GORM, platformcache.NewJSONStore(deps.RedisCache, cfg.Cache.TTL, cfg.Cache.L1MaxItems, platformcache.NewMetrics(metrics.Registry)))
+	} else {
+		driveService = drive.NewService(deps.GORM)
+	}
 	tokens := identity.NewTokenManager(cfg.Auth)
 	identityService := identity.NewService(deps.GORM, tokens, driveService, cfg.Identity.DefaultQuotaBytes)
 	identityHTTP := identity.NewHTTP(identityService, tokens, cfg.Auth)
@@ -49,7 +57,6 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	fileHTTP := drive.NewFileHTTP(fileManager, identityHTTP.Authenticate())
 	sharingService := sharing.NewService(deps.GORM, driveService, objects, identityService, cfg.Sharing)
 	sharingHTTP := sharing.NewHTTP(sharingService, fileManager, identityHTTP.Authenticate())
-	metrics := httpapi.NewMetrics(cfg.App.InstanceID)
 	readiness := httpapi.NewReadiness(true)
 	var aiBackend ai.Backend = ai.DisabledBackend{}
 	closeAI := func() {}
@@ -76,7 +83,6 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		MaxBodyBytes:    cfg.HTTP.MaxBodyBytes,
 		V2EventsEnabled: cfg.Outbox.V2EventsEnabled,
 		SearchEnabled:   cfg.Search.Enabled,
-		KafkaEnabled:    cfg.EventStream.KafkaEnabled,
 		Readiness:       readiness,
 		Logger:          logger,
 		Probes:          deps.Probes(),

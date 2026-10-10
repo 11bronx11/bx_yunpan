@@ -13,7 +13,7 @@ command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "Docker Compose v2 is required" >&2; exit 1; }
 [[ -f "$env_file" ]] || { echo "Missing $env_file" >&2; exit 1; }
 
-compose=(docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile distributed --profile ai --profile ai-split --profile redis-split --profile search)
+compose=(docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile distributed --profile ai --profile ai-split --profile redis-split --profile search --profile search-external)
 web_port=$(awk -F= '$1 == "WEB_PORT" {print $2}' "$env_file" | tail -1)
 web_port=${web_port:-3000}
 bind_ip=$(awk -F= '$1 == "APP_BIND_IP" {print $2}' "$env_file" | tail -1)
@@ -97,8 +97,8 @@ stopped_services=()
 wait_http "$base_url/readyz" 200 30
 
 echo "local staging rehearsal: broker unavailable and outbox recovery"
-"${compose[@]}" stop outbox-relay redis-broker >/dev/null
-stopped_services+=(outbox-relay redis-broker)
+"${compose[@]}" stop outbox-relay rabbitmq >/dev/null
+stopped_services+=(outbox-relay rabbitmq)
 assert_http_200 "$base_url/readyz"
 event_id=$(psql -Atc 'select gen_random_uuid()' | tr -d '[:space:]')
 probe_event_id="$event_id"
@@ -108,7 +108,7 @@ psql -Atc "INSERT INTO outbox_events (id, aggregate_type, aggregate_id, event_ty
 sleep 3
 pending_before=$(psql -Atc "select count(*) from outbox_events where id = '$event_id' and status <> 'published';" | tr -d '[:space:]')
 [[ "$pending_before" == "1" ]] || { echo "broker outage did not leave retryable outbox" >&2; exit 1; }
-"${compose[@]}" start redis-broker outbox-relay >/dev/null
+"${compose[@]}" start rabbitmq outbox-relay >/dev/null
 stopped_services=()
 status=pending
 for ((i=1; i<=30; i++)); do

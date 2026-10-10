@@ -104,12 +104,26 @@ type ObjectGCRequestedV1 struct {
 }
 
 type AIIndexRequestedV1 struct {
-	ObjectID uuid.UUID `json:"object_id"`
+	ObjectID             uuid.UUID  `json:"object_id"`
+	RunID                *uuid.UUID `json:"run_id,omitempty"`
+	ContentHash          string     `json:"content_hash,omitempty"`
+	DocumentVersionID    *uuid.UUID `json:"document_version_id,omitempty"`
+	PipelineVersion      string     `json:"pipeline_version,omitempty"`
+	ModelVersion         string     `json:"model_version,omitempty"`
+	ParserProfileVersion string     `json:"parser_profile_version,omitempty"`
+	TraceID              string     `json:"trace_id,omitempty"`
 }
 
 type AIReprocessRequestedV1 struct {
-	TaskID   uuid.UUID `json:"task_id"`
-	ObjectID uuid.UUID `json:"object_id"`
+	TaskID               uuid.UUID  `json:"task_id"`
+	ObjectID             uuid.UUID  `json:"object_id"`
+	RunID                *uuid.UUID `json:"run_id,omitempty"`
+	ContentHash          string     `json:"content_hash,omitempty"`
+	DocumentVersionID    *uuid.UUID `json:"document_version_id,omitempty"`
+	PipelineVersion      string     `json:"pipeline_version,omitempty"`
+	ModelVersion         string     `json:"model_version,omitempty"`
+	ParserProfileVersion string     `json:"parser_profile_version,omitempty"`
+	TraceID              string     `json:"trace_id,omitempty"`
 }
 
 // StorageOperationRecoverV1 is a durable maintenance nudge for an operation

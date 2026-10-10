@@ -62,7 +62,8 @@ func (m *FileManager) MoveWithContext(ctx context.Context, ownerID, fileID, targ
 // Delete 需要 ctx：事务里写 Outbox 时要把当前 span context 一起注入，
 // 让异步 GC 能续接同一条 trace。
 func (m *FileManager) Delete(ctx context.Context, ownerID, fileID uuid.UUID, version int64) error {
-	return m.drive.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	var folderID uuid.UUID
+	err := m.drive.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var entry FileEntry
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ? AND deleted_at IS NULL", fileID, ownerID).First(&entry).Error; err != nil {
 			return ErrNotFound
@@ -70,6 +71,7 @@ func (m *FileManager) Delete(ctx context.Context, ownerID, fileID uuid.UUID, ver
 		if entry.Version != version {
 			return ErrConflict
 		}
+		folderID = entry.FolderID
 		object, err := m.objects.Get(entry.ObjectID)
 		if err != nil {
 			return err
@@ -108,6 +110,11 @@ func (m *FileManager) Delete(ctx context.Context, ownerID, fileID uuid.UUID, ver
 		}
 		return nil
 	})
+	if err == nil {
+		m.drive.clearFile(ownerID, fileID)
+		m.drive.clearFolder(ownerID, folderID)
+	}
+	return err
 }
 
 func (m *FileManager) DownloadURL(ctx context.Context, ownerID, fileID uuid.UUID) (string, time.Time, error) {

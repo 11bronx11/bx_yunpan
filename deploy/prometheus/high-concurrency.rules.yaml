@@ -1,0 +1,24 @@
+groups:
+  - name: high-concurrency
+    rules:
+      - alert: YunpanDurableBacklogStalled
+        expr: yunpan_outbox_oldest_age_seconds > 300 or yunpan_storage_oldest_age_seconds > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Durable work is not draining within the initial recovery budget
+      - alert: YunpanBacklogObservationFailed
+        expr: yunpan_outbox_backlog_scrape_success == 0 or yunpan_storage_backlog_scrape_success == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: PostgreSQL backlog observation is failing
+      - alert: YunpanBusinessCacheRedisErrors
+        expr: sum by (job, instance) (increase(yunpan_cache_redis_errors_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Business cache Redis errors are increasing

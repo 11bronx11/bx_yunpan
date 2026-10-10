@@ -51,6 +51,13 @@ type multipartStorage interface {
 	AbortMultipartUpload(context.Context, string, string, string) error
 }
 
+// multipartUploadLister is optional so test doubles and providers without a
+// listing API remain usable. MinIO's Core implements it; recovery uses the
+// listing to avoid creating a second provider upload after a crash.
+type multipartUploadLister interface {
+	ListMultipartUploads(context.Context, string, string, string, string, string, int) (minio.ListMultipartUploadsResult, error)
+}
+
 type uploadStorage interface {
 	GetObject(context.Context, string, string, minio.GetObjectOptions) (io.ReadCloser, error)
 	StatObject(context.Context, string, string, minio.StatObjectOptions) (minio.ObjectInfo, error)
@@ -131,7 +138,6 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, input CreateInpu
 	var mode string
 	var resultID uuid.UUID
 	var started *Session
-	var createOperation storageops.Operation
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		idempotencyLock := "upload:idempotency:" + userID.String() + ":" + input.IdempotencyKey
 		if err := dblock.Transaction(tx, idempotencyLock); err != nil {
@@ -140,12 +146,17 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, input CreateInpu
 		var existing Session
 		err := tx.Where("user_id = ? AND idempotency_key = ?", userID, input.IdempotencyKey).Take(&existing).Error
 		if err == nil {
+			if existing.FolderID != input.FolderID || existing.Filename != filename ||
+				existing.DeclaredSHA256 != input.SHA256 || existing.SizeBytes != input.SizeBytes || existing.MimeType != input.MimeType {
+				return ErrConflict
+			}
 			if existing.StorageUploadID == "" && existing.Status == StatusCompleted && existing.CompletedEntryID != nil {
 				mode = "instant"
 				resultID = *existing.CompletedEntryID
 			} else {
 				mode = "multipart"
 				resultID = existing.ID
+				started = &existing
 			}
 			return nil
 		}
@@ -232,7 +243,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, input CreateInpu
 		if err := tx.Create(&session).Error; err != nil {
 			return err
 		}
-		createOperation, err = storageops.Enqueue(tx, storageops.Input{
+		_, err = enqueueUploadOperation(tx, storageops.Input{
 			OperationType: storageops.MultipartCreate, IdempotencyKey: "multipart.create:" + session.ID.String(),
 			UploadSessionID: &session.ID, SourceBucket: s.bucket, SourceKey: objectKey,
 		})
@@ -250,48 +261,11 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, input CreateInpu
 		}
 		return CreateResult{}, err
 	}
-	if mode == "multipart" && started != nil {
-		claimed, leaseToken, claimErr := storageops.TryStartWithToken(s.db, createOperation.ID, 5*time.Minute)
-		if claimErr != nil {
-			return CreateResult{}, claimErr
-		}
-		if !claimed {
-			return CreateResult{}, errors.New("multipart initialization operation is already running")
-		}
-		storageUploadID, createErr := s.core.NewMultipartUpload(ctx, started.Bucket, started.ObjectKey, minio.PutObjectOptions{ContentType: input.MimeType})
-		if createErr != nil {
-			_ = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-				_ = storageops.MarkFailedOwned(tx, createOperation.ID, leaseToken, createErr, time.Second)
-				_ = s.quota.ReleaseQuota(tx, userID, started.ReservedBytes)
-				return tx.Model(&Session{}).Where("id = ? AND status = ?", started.ID, StatusInitializing).
-					Updates(map[string]any{"status": StatusFailed, "reserved_bytes": 0, "error_code": "upload.storage_init_failed", "updated_at": time.Now().UTC()}).Error
-			})
-			return CreateResult{}, createErr
-		}
-		// Persist the provider upload ID in its own transaction before changing
-		// the session. If the session-finalize transaction later fails, the
-		// reconciler can reuse this ID instead of creating a second multipart.
-		if err := s.persistMultipartUploadID(ctx, createOperation.ID, leaseToken, storageUploadID); err != nil {
-			return CreateResult{}, err
-		}
-		finalizeErr := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			result := tx.Model(&Session{}).Where("id = ? AND status = ?", started.ID, StatusInitializing).
-				Updates(map[string]any{"status": StatusCreated, "storage_upload_id": storageUploadID, "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()})
-			if result.Error != nil || result.RowsAffected != 1 {
-				return ErrConflict
-			}
-			return storageops.MarkSucceededOwned(tx, createOperation.ID, leaseToken)
-		})
-		if finalizeErr != nil {
-			return CreateResult{}, finalizeErr
-		}
-	}
 	if mode == "instant" {
 		file, err := s.drive.File(userID, resultID)
 		return CreateResult{Mode: mode, File: &file}, err
 	}
-	session, err := s.waitForCreatedSession(ctx, userID, resultID)
-	return CreateResult{Mode: mode, Upload: &session}, err
+	return CreateResult{Mode: mode, Upload: started}, nil
 }
 
 func (s *Service) persistMultipartUploadID(ctx context.Context, operationID, leaseToken uuid.UUID, uploadID string) error {
@@ -319,29 +293,6 @@ func (s *Service) persistMultipartUploadID(ctx context.Context, operationID, lea
 	})
 }
 
-func (s *Service) waitForCreatedSession(ctx context.Context, userID, sessionID uuid.UUID) (Session, error) {
-	deadline := time.NewTimer(30 * time.Second)
-	defer deadline.Stop()
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		session, err := s.Get(userID, sessionID)
-		if err != nil {
-			return Session{}, err
-		}
-		if session.Status != StatusInitializing {
-			return session, nil
-		}
-		select {
-		case <-ctx.Done():
-			return Session{}, ctx.Err()
-		case <-deadline.C:
-			return Session{}, errors.New("multipart initialization is still running")
-		case <-ticker.C:
-		}
-	}
-}
-
 func (s *Service) Get(userID, sessionID uuid.UUID) (Session, error) {
 	var session Session
 	if err := s.db.Preload("ConfirmedParts", func(db *gorm.DB) *gorm.DB { return db.Order("part_number ASC") }).
@@ -354,7 +305,7 @@ func (s *Service) Get(userID, sessionID uuid.UUID) (Session, error) {
 func (s *Service) ListActive(userID uuid.UUID) ([]Session, error) {
 	var sessions []Session
 	err := s.db.Preload("ConfirmedParts", func(db *gorm.DB) *gorm.DB { return db.Order("part_number ASC") }).
-		Where("user_id = ? AND status IN ? AND expires_at > ?", userID, []string{StatusCreated, StatusUploading, StatusVerifying}, time.Now().UTC()).
+		Where("user_id = ? AND status IN ? AND expires_at > ?", userID, []string{StatusInitializing, StatusCreated, StatusUploading, StatusCompleting, StatusVerifying}, time.Now().UTC()).
 		Order("created_at DESC").Find(&sessions).Error
 	return sessions, err
 }
@@ -406,8 +357,6 @@ func (s *Service) ConfirmParts(userID, sessionID uuid.UUID, parts []ConfirmedPar
 
 func (s *Service) Complete(ctx context.Context, userID, sessionID uuid.UUID) (Session, error) {
 	var session Session
-	var operation storageops.Operation
-	var completeParts []minio.CompletePart
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND user_id = ?", sessionID, userID).Take(&session).Error; err != nil {
 			return ErrNotFound
@@ -415,26 +364,27 @@ func (s *Service) Complete(ctx context.Context, userID, sessionID uuid.UUID) (Se
 		if session.Status == StatusVerifying || session.Status == StatusCompleted {
 			return nil
 		}
-		if session.Status != StatusUploading && session.Status != StatusCreated && session.Status != StatusCompleting {
+		if session.Status == StatusCompleting {
+			return nil
+		}
+		if session.Status != StatusUploading && session.Status != StatusCreated {
 			return ErrConflict
 		}
-		var parts []Part
-		if err := tx.Where("session_id = ?", session.ID).Order("part_number ASC").Find(&parts).Error; err != nil || len(parts) != session.PartCount {
+		var partCount int64
+		if err := tx.Model(&Part{}).Where("session_id = ?", session.ID).Count(&partCount).Error; err != nil || int(partCount) != session.PartCount {
 			return ErrConflict
 		}
-		completeParts = make([]minio.CompletePart, 0, len(parts))
-		for _, part := range parts {
-			completeParts = append(completeParts, minio.CompletePart{PartNumber: part.PartNumber, ETag: part.ETag})
+		if strings.TrimSpace(session.StorageUploadID) == "" {
+			return ErrConflict
 		}
-		if session.Status != StatusCompleting {
-			result := tx.Model(&Session{}).Where("id = ? AND user_id = ? AND status IN ?", session.ID, userID, []string{StatusCreated, StatusUploading}).
-				Updates(map[string]any{"status": StatusCompleting, "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()})
-			if result.Error != nil || result.RowsAffected != 1 {
-				return ErrConflict
-			}
+		result := tx.Model(&Session{}).Where("id = ? AND user_id = ? AND status IN ?", session.ID, userID, []string{StatusCreated, StatusUploading}).
+			Updates(map[string]any{"status": StatusCompleting, "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()})
+		if result.Error != nil || result.RowsAffected != 1 {
+			return ErrConflict
 		}
-		var err error
-		operation, err = storageops.Enqueue(tx, storageops.Input{
+		session.Status = StatusCompleting
+		session.Version++
+		_, err := enqueueUploadOperation(tx, storageops.Input{
 			OperationType: storageops.MultipartComplete, IdempotencyKey: "multipart.complete:" + session.ID.String(),
 			UploadSessionID: &session.ID, SourceBucket: session.Bucket, SourceKey: session.ObjectKey,
 			StorageUploadID: session.StorageUploadID,
@@ -444,93 +394,12 @@ func (s *Service) Complete(ctx context.Context, userID, sessionID uuid.UUID) (Se
 	if err != nil {
 		return Session{}, err
 	}
-	if session.Status != StatusVerifying && session.Status != StatusCompleted && operation.State != storageops.StateSucceeded {
-		completeErr := s.executeMultipartComplete(ctx, session, operation, completeParts)
-		if completeErr != nil {
-			return Session{}, completeErr
-		}
-	}
-	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var current Session
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND user_id = ?", sessionID, userID).Take(&current).Error; err != nil {
-			return ErrNotFound
-		}
-		if current.Status == StatusVerifying || current.Status == StatusCompleted {
-			return nil
-		}
-		if current.Status != StatusCompleting {
-			return ErrConflict
-		}
-		result := tx.Model(&current).Updates(map[string]any{"status": StatusVerifying, "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()})
-		if result.Error != nil || result.RowsAffected != 1 {
-			return ErrConflict
-		}
-		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
-			EventType: eventcontract.EventObjectVerifyRequestedV1, AggregateID: current.ID, AggregateVersion: current.Version + 1,
-			Producer: "core-api", Payload: eventcontract.ObjectVerifyRequestedV1{UploadID: current.ID},
-		})
-	})
-	if err != nil {
-		return Session{}, err
-	}
-	return s.Get(userID, sessionID)
-}
-
-func (s *Service) executeMultipartComplete(ctx context.Context, session Session, operation storageops.Operation, parts []minio.CompletePart) error {
-	started, leaseToken, err := storageops.TryStartWithToken(s.db, operation.ID, 5*time.Minute)
-	if err != nil {
-		return err
-	}
-	if !started {
-		deadline := time.NewTimer(30 * time.Second)
-		defer deadline.Stop()
-		ticker := time.NewTicker(20 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			current, getErr := storageops.Get(s.db, operation.ID)
-			if getErr != nil {
-				return getErr
-			}
-			switch current.State {
-			case storageops.StateSucceeded:
-				return nil
-			case storageops.StateFailed:
-				if current.AvailableAt.After(time.Now().UTC()) {
-					return current.LastErrorValue()
-				}
-				if claimed, token, claimErr := storageops.TryStartWithToken(s.db, operation.ID, 5*time.Minute); claimErr != nil {
-					return claimErr
-				} else if claimed {
-					started = true
-					leaseToken = token
-				}
-			}
-			if started {
-				break
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-deadline.C:
-				return errors.New("multipart completion operation still running")
-			case <-ticker.C:
-			}
-		}
-	}
-	if _, completeErr := s.core.CompleteMultipartUpload(ctx, session.Bucket, session.ObjectKey, session.StorageUploadID, parts, minio.PutObjectOptions{}); completeErr != nil {
-		info, statErr := s.storage.StatObject(ctx, session.Bucket, session.ObjectKey, minio.StatObjectOptions{})
-		if statErr != nil || info.Size != session.SizeBytes {
-			_ = storageops.MarkFailedOwned(s.db, operation.ID, leaseToken, completeErr, time.Second)
-			return completeErr
-		}
-	}
-	return storageops.MarkSucceededOwned(s.db, operation.ID, leaseToken)
+	return session, nil
 }
 
 func (s *Service) Abort(ctx context.Context, userID, sessionID uuid.UUID) error {
-	var session Session
-	var operation storageops.Operation
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var session Session
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND user_id = ?", sessionID, userID).Take(&session).Error; err != nil {
 			return ErrNotFound
 		}
@@ -549,8 +418,7 @@ func (s *Service) Abort(ctx context.Context, userID, sessionID uuid.UUID) error 
 			return err
 		}
 		if session.StorageUploadID != "" {
-			var err error
-			operation, err = storageops.Enqueue(tx, storageops.Input{
+			_, err := enqueueUploadOperation(tx, storageops.Input{
 				OperationType: storageops.MultipartAbort, IdempotencyKey: "multipart.abort:" + session.ID.String(),
 				UploadSessionID: &session.ID, SourceBucket: session.Bucket, SourceKey: session.ObjectKey,
 				StorageUploadID: session.StorageUploadID,
@@ -559,27 +427,7 @@ func (s *Service) Abort(ctx context.Context, userID, sessionID uuid.UUID) error 
 		}
 		return nil
 	})
-	if err != nil {
-		return err
-	}
-	if operation.ID != uuid.Nil {
-		claimed, leaseToken, claimErr := storageops.TryStartWithToken(s.db, operation.ID, 5*time.Minute)
-		if claimErr != nil {
-			return claimErr
-		}
-		if !claimed {
-			return nil
-		}
-		if abortErr := s.core.AbortMultipartUpload(ctx, session.Bucket, session.ObjectKey, session.StorageUploadID); abortErr != nil {
-			_ = storageops.MarkFailedOwned(s.db, operation.ID, leaseToken, abortErr, time.Second)
-			return abortErr
-		}
-		if err := storageops.MarkSucceededOwned(s.db, operation.ID, leaseToken); err != nil {
-			return err
-		}
-		return s.db.Model(&Session{}).Where("id = ?", session.ID).Update("storage_upload_id", "").Error
-	}
-	return nil
+	return err
 }
 
 func (s *Service) Expire(ctx context.Context, limit int) (int, error) {
@@ -604,9 +452,8 @@ func (s *Service) Expire(ctx context.Context, limit int) (int, error) {
 
 func (s *Service) expireOne(ctx context.Context, sessionID uuid.UUID) (bool, error) {
 	changed := false
-	var session Session
-	var operation storageops.Operation
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var session Session
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&session, "id = ?", sessionID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return nil
@@ -625,8 +472,7 @@ func (s *Service) expireOne(ctx context.Context, sessionID uuid.UUID) (bool, err
 			return err
 		}
 		if session.StorageUploadID != "" {
-			var err error
-			operation, err = storageops.Enqueue(tx, storageops.Input{
+			_, err := enqueueUploadOperation(tx, storageops.Input{
 				OperationType: storageops.MultipartAbort, IdempotencyKey: "multipart.abort:" + session.ID.String(),
 				UploadSessionID: &session.ID, SourceBucket: session.Bucket, SourceKey: session.ObjectKey,
 				StorageUploadID: session.StorageUploadID,
@@ -638,23 +484,6 @@ func (s *Service) expireOne(ctx context.Context, sessionID uuid.UUID) (bool, err
 		changed = true
 		return nil
 	})
-	if err == nil && operation.ID != uuid.Nil {
-		claimed, leaseToken, claimErr := storageops.TryStartWithToken(s.db, operation.ID, 5*time.Minute)
-		if claimErr != nil {
-			return changed, claimErr
-		}
-		if !claimed {
-			return changed, nil
-		}
-		if abortErr := s.core.AbortMultipartUpload(ctx, session.Bucket, session.ObjectKey, session.StorageUploadID); abortErr != nil {
-			_ = storageops.MarkFailedOwned(s.db, operation.ID, leaseToken, abortErr, time.Second)
-			return changed, abortErr
-		}
-		err = storageops.MarkSucceededOwned(s.db, operation.ID, leaseToken)
-		if err == nil {
-			err = s.db.Model(&Session{}).Where("id = ?", session.ID).Update("storage_upload_id", "").Error
-		}
-	}
 	return changed, err
 }
 
@@ -684,8 +513,8 @@ func (s *Service) Verify(ctx context.Context, sessionID uuid.UUID) error {
 		return s.fail(ctx, session.ID, "upload.hash_mismatch")
 	}
 
-	canonicalKey := fmt.Sprintf("objects/sha256/%s/%s", actualHash[:2], actualHash)
-	if err := s.ensureCanonical(ctx, session, actualHash, size, canonicalKey); err != nil {
+	canonicalKey, err := s.ensureCanonical(ctx, session, actualHash, size)
+	if err != nil {
 		return err
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -758,6 +587,9 @@ func (s *Service) Verify(ctx context.Context, sessionID uuid.UUID) error {
 		}); err != nil {
 			return err
 		}
+		if _, err := enqueueStagingDelete(tx, locked); err != nil {
+			return err
+		}
 		return nil
 	})
 	if errors.Is(err, ErrNameConflict) {
@@ -783,13 +615,23 @@ func (s *Service) fail(ctx context.Context, sessionID uuid.UUID, errorCode strin
 			return err
 		}
 		if session.Status != StatusVerifying {
-			return nil
+			if session.Status == StatusFailed || session.Status == StatusCompleted {
+				return nil
+			}
+			return ErrConflict
+		}
+		if err := s.registerCanonicalCleanup(ctx, tx, session); err != nil {
+			return err
 		}
 		if err := s.quota.ReleaseQuota(tx, session.UserID, session.ReservedBytes); err != nil {
 			return err
 		}
-		return tx.Model(&session).
-			Updates(map[string]any{"status": StatusFailed, "error_code": errorCode, "reserved_bytes": 0, "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()}).Error
+		if err := tx.Model(&session).
+			Updates(map[string]any{"status": StatusFailed, "error_code": errorCode, "reserved_bytes": 0, "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()}).Error; err != nil {
+			return err
+		}
+		_, err := enqueueStagingDelete(tx, session)
+		return err
 	})
 	if err != nil {
 		return err
@@ -797,29 +639,46 @@ func (s *Service) fail(ctx context.Context, sessionID uuid.UUID, errorCode strin
 	return s.scheduleStagingDelete(ctx, session)
 }
 
-func (s *Service) ensureCanonical(ctx context.Context, session Session, sha256Value string, size int64, canonicalKey string) error {
+func (s *Service) ensureCanonical(ctx context.Context, session Session, sha256Value string, size int64) (string, error) {
+	canonicalKey := fmt.Sprintf("objects/sha256/%s/%s", sha256Value[:2], sha256Value)
 	var operation storageops.Operation
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var current Session
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, "id = ?", session.ID).Error; err != nil {
+			return err
+		}
+		if current.Status != StatusVerifying {
+			return ErrConflict
+		}
 		if err := dblock.Transaction(tx, "upload:object:"+sha256Value+":"+strconv.FormatInt(size, 10)); err != nil {
 			return err
 		}
-		if _, err := s.objects.FindByHashWith(tx, sha256Value, size); err == nil {
-			return nil
+		var existing objectstore.Object
+		if err := tx.Where("sha256 = ? AND size_bytes = ?", sha256Value, size).First(&existing).Error; err == nil {
+			switch existing.Status {
+			case "ready":
+				canonicalKey = existing.ObjectKey
+				return nil
+			case "deleted":
+				canonicalKey = objectstore.RevivalKey(existing)
+			default:
+				return errors.New("canonical object is being deleted")
+			}
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
 		var err error
 		operation, err = storageops.Enqueue(tx, storageops.Input{
-			OperationType: storageops.CanonicalEnsure, IdempotencyKey: "canonical.ensure:" + sha256Value + ":" + strconv.FormatInt(size, 10),
+			OperationType: storageops.CanonicalEnsure, IdempotencyKey: "canonical.ensure:" + canonicalKey,
 			UploadSessionID: &session.ID, SourceBucket: session.Bucket, SourceKey: session.ObjectKey,
 			TargetBucket: session.Bucket, TargetKey: canonicalKey,
 		})
 		return err
 	})
 	if err != nil || operation.ID == uuid.Nil || operation.State == storageops.StateSucceeded {
-		return err
+		return canonicalKey, err
 	}
-	return s.executeCanonicalEnsure(ctx, operation)
+	return canonicalKey, s.executeCanonicalEnsure(ctx, operation)
 }
 
 func (s *Service) executeCanonicalEnsure(ctx context.Context, operation storageops.Operation) error {
@@ -833,13 +692,12 @@ func (s *Service) executeCanonicalEnsure(ctx context.Context, operation storageo
 			return err
 		}
 		if claimed {
-			if _, err := s.storage.CopyObject(ctx,
-				minio.CopyDestOptions{Bucket: operation.TargetBucket, Object: operation.TargetKey},
-				minio.CopySrcOptions{Bucket: operation.SourceBucket, Object: operation.SourceKey}); err != nil {
+			operation.LeaseToken = &leaseToken
+			if err := s.reconcileOperation(ctx, operation); err != nil {
 				_ = storageops.MarkFailedOwned(s.db, operation.ID, leaseToken, err, time.Second)
 				return err
 			}
-			return storageops.MarkSucceededOwned(s.db, operation.ID, leaseToken)
+			return nil
 		}
 		current, err := storageops.Get(s.db, operation.ID)
 		if err != nil {
@@ -872,12 +730,17 @@ func (s *Service) scheduleStagingDelete(ctx context.Context, session Session) er
 	if !strings.HasPrefix(session.ObjectKey, "staging/") {
 		return nil
 	}
-	operation, err := storageops.Enqueue(s.db, storageops.Input{
-		OperationType: storageops.StagingDelete, IdempotencyKey: "staging.delete:" + session.ID.String(),
-		UploadSessionID: &session.ID, SourceBucket: session.Bucket, SourceKey: session.ObjectKey,
+	var operation storageops.Operation
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		operation, err = enqueueStagingDelete(tx, session)
+		return err
 	})
 	if err != nil {
 		return err
+	}
+	if operation.ID == uuid.Nil {
+		return nil
 	}
 	if operation.State == storageops.StateSucceeded {
 		return nil
@@ -901,6 +764,16 @@ func (s *Service) scheduleStagingDelete(ctx context.Context, session Session) er
 		return err
 	}
 	return storageops.MarkSucceededOwned(s.db, operation.ID, leaseToken)
+}
+
+func enqueueStagingDelete(tx *gorm.DB, session Session) (storageops.Operation, error) {
+	if tx == nil || !strings.HasPrefix(session.ObjectKey, "staging/") {
+		return storageops.Operation{}, nil
+	}
+	return storageops.Enqueue(tx, storageops.Input{
+		OperationType: storageops.StagingDelete, IdempotencyKey: "staging.delete:" + session.ID.String(),
+		UploadSessionID: &session.ID, SourceBucket: session.Bucket, SourceKey: session.ObjectKey,
+	})
 }
 
 // ReconcileStorageOperations claims durable operations left by a crashed
@@ -928,7 +801,8 @@ func (s *Service) ReconcileStorageOperations(ctx context.Context, limit int) (in
 	if err != nil {
 		return completed, err
 	}
-	return completed + converged, nil
+	orphans, err := s.reconcileCanonicalOrphans(ctx, limit-completed-converged)
+	return completed + converged + orphans, err
 }
 
 // ReconcileStorageOperation handles a single recovery nudge. The operation
@@ -943,6 +817,9 @@ func (s *Service) ReconcileStorageOperation(ctx context.Context, operationID uui
 		return err
 	}
 	if operation.State == storageops.StateSucceeded {
+		if operation.OperationType == storageops.MultipartCreate || operation.OperationType == storageops.MultipartComplete {
+			return s.convergeSucceededOperation(ctx, operation)
+		}
 		return nil
 	}
 	claimed, token, err := storageops.TryStartWithToken(s.db, operation.ID, 5*time.Minute)
@@ -968,6 +845,9 @@ func (s *Service) reconcileSucceededStorageOperations(ctx context.Context, limit
 	var operations []storageops.Operation
 	if err := s.db.WithContext(ctx).
 		Where("state = ? AND operation_type IN ? AND upload_session_id IS NOT NULL", storageops.StateSucceeded, []string{storageops.MultipartCreate, storageops.MultipartComplete}).
+		Where(`(operation_type = ? AND EXISTS (SELECT 1 FROM upload_sessions s WHERE s.id = storage_operations.upload_session_id AND s.status = ?)) OR
+			(operation_type = ? AND EXISTS (SELECT 1 FROM upload_sessions s WHERE s.id = storage_operations.upload_session_id AND s.status = ?))`,
+			storageops.MultipartCreate, StatusInitializing, storageops.MultipartComplete, StatusCompleting).
 		Order("updated_at ASC").Limit(limit).Find(&operations).Error; err != nil {
 		return 0, err
 	}
@@ -1047,6 +927,15 @@ func (s *Service) reconcileOperation(ctx context.Context, operation storageops.O
 		}
 		return nil
 	case storageops.CanonicalEnsure:
+		if operation.UploadSessionID != nil {
+			var session Session
+			if err := s.db.WithContext(ctx).First(&session, "id = ?", *operation.UploadSessionID).Error; err != nil {
+				return err
+			}
+			if session.Status == StatusFailed || session.Status == StatusAborted || session.Status == StatusExpired {
+				return storageops.MarkSucceededOwned(s.db, operation.ID, operationLeaseToken(operation))
+			}
+		}
 		if _, err := s.storage.CopyObject(ctx,
 			minio.CopyDestOptions{Bucket: operation.TargetBucket, Object: operation.TargetKey},
 			minio.CopySrcOptions{Bucket: operation.SourceBucket, Object: operation.SourceKey}); err != nil {
@@ -1078,28 +967,105 @@ func (s *Service) reconcileMultipartCreate(ctx context.Context, operation storag
 	if err := s.db.First(&session, "id = ?", *operation.UploadSessionID).Error; err != nil {
 		return err
 	}
-	if session.Status != StatusInitializing {
+	terminal := session.Status == StatusAborted || session.Status == StatusExpired || session.Status == StatusFailed
+	if session.Status != StatusInitializing && !terminal {
 		return storageops.MarkSucceededOwned(s.db, operation.ID, operationLeaseToken(operation))
 	}
 	leaseToken := operationLeaseToken(operation)
 	uploadID := operation.StorageUploadID
 	if uploadID == "" {
 		var err error
-		uploadID, err = s.core.NewMultipartUpload(ctx, operation.SourceBucket, operation.SourceKey, minio.PutObjectOptions{ContentType: session.MimeType})
+		if lister, ok := s.core.(multipartUploadLister); ok {
+			uploadID, err = s.recoverExistingMultipartUpload(ctx, lister, operation.SourceBucket, operation.SourceKey)
+		}
+		if err == nil && uploadID == "" && !terminal {
+			uploadID, err = s.core.NewMultipartUpload(ctx, operation.SourceBucket, operation.SourceKey, minio.PutObjectOptions{ContentType: session.MimeType})
+		}
 		if err != nil {
 			return err
 		}
+	}
+	if uploadID == "" && terminal {
+		return storageops.MarkSucceededOwned(s.db, operation.ID, leaseToken)
 	}
 	if err := s.persistMultipartUploadID(ctx, operation.ID, leaseToken, uploadID); err != nil {
 		return err
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&Session{}).Where("id = ? AND status = ?", session.ID, StatusInitializing).
-			Updates(map[string]any{"status": StatusCreated, "storage_upload_id": uploadID, "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()}).Error; err != nil {
+		var current Session
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, "id = ?", session.ID).Error; err != nil {
 			return err
+		}
+		if current.Status == StatusInitializing {
+			if err := tx.Model(&current).Updates(map[string]any{"status": StatusCreated, "storage_upload_id": uploadID, "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()}).Error; err != nil {
+				return err
+			}
+		} else if current.Status == StatusAborted || current.Status == StatusExpired || current.Status == StatusFailed {
+			if _, err := enqueueUploadOperation(tx, storageops.Input{
+				OperationType: storageops.MultipartAbort, IdempotencyKey: "multipart.abort:" + session.ID.String(),
+				UploadSessionID: &session.ID, SourceBucket: session.Bucket, SourceKey: session.ObjectKey, StorageUploadID: uploadID,
+			}); err != nil {
+				return err
+			}
 		}
 		return storageops.MarkSucceededOwned(tx, operation.ID, leaseToken)
 	})
+}
+
+func (s *Service) recoverExistingMultipartUpload(ctx context.Context, lister multipartUploadLister, bucket, objectKey string) (string, error) {
+	var uploads []minio.ObjectMultipartInfo
+	keyMarker, uploadIDMarker := "", ""
+	for {
+		result, err := lister.ListMultipartUploads(ctx, bucket, objectKey, keyMarker, uploadIDMarker, "", 1000)
+		if err != nil {
+			return "", err
+		}
+		for _, upload := range result.Uploads {
+			if upload.Err != nil {
+				return "", upload.Err
+			}
+			if upload.Key == objectKey && upload.UploadID != "" {
+				uploads = append(uploads, upload)
+			}
+		}
+		if !result.IsTruncated {
+			break
+		}
+		if result.NextKeyMarker == keyMarker && result.NextUploadIDMarker == uploadIDMarker {
+			return "", errors.New("multipart upload listing did not advance")
+		}
+		keyMarker, uploadIDMarker = result.NextKeyMarker, result.NextUploadIDMarker
+	}
+	if len(uploads) == 0 {
+		return "", nil
+	}
+	selected := uploads[0]
+	for _, upload := range uploads[1:] {
+		if upload.Initiated.After(selected.Initiated) {
+			selected = upload
+		}
+	}
+	for _, upload := range uploads {
+		if upload.UploadID == selected.UploadID {
+			continue
+		}
+		if err := s.core.AbortMultipartUpload(ctx, bucket, objectKey, upload.UploadID); err != nil {
+			return "", err
+		}
+	}
+	return selected.UploadID, nil
+}
+
+func enqueueUploadOperation(tx *gorm.DB, input storageops.Input) (storageops.Operation, error) {
+	op, err := storageops.Enqueue(tx, input)
+	if err != nil {
+		return op, err
+	}
+	key := "upload.operation:" + op.ID.String()
+	_, err = outbox.EnsureRecovery(tx, key, "upload_operation_created", "storage_operation", op.ID, 1,
+		eventcontract.EnvelopeInput{EventType: eventcontract.EventStorageOperationRecoverV1, AggregateID: op.ID, AggregateVersion: 1, Producer: "core-api",
+			Payload: eventcontract.StorageOperationRecoverV1{OperationID: op.ID, OperationType: op.OperationType, RecoveryKey: key}})
+	return op, err
 }
 
 func (s *Service) reconcileMultipartComplete(ctx context.Context, operation storageops.Operation) error {

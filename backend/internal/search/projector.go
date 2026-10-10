@@ -2,14 +2,18 @@ package search
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 	"github.com/google/uuid"
-	"github.com/hibiken/asynq"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
@@ -21,12 +25,35 @@ const ConsumerName = "search-indexer"
 type Projector struct {
 	db         *gorm.DB
 	index      *PostgresIndex
+	external   Index
 	target     string
 	indexEpoch int64
 }
 
+type ProjectionCheckpoint struct {
+	EventID      uuid.UUID `gorm:"type:uuid;primaryKey"`
+	ConsumerName string    `gorm:"primaryKey"`
+	State        string
+	Attempt      int
+	LastError    *string
+	Watermark    *int64
+	Checksum     *string
+	UpdatedAt    time.Time
+}
+
+func (ProjectionCheckpoint) TableName() string { return "search_projection_checkpoints" }
+
+// WithExternalIndex enables the two-phase projection path. PostgreSQL rows
+// are committed first, external upserts happen without a SQL transaction, and
+// the event-consumption marker is written only after all external effects
+// succeed. A nil index preserves the legacy atomic local-only path.
+func (p *Projector) WithExternalIndex(index Index) *Projector {
+	p.external = index
+	return p
+}
+
 func NewProjector(db *gorm.DB, targetVersion string) *Projector {
-	return NewProjectorWithEpoch(db, targetVersion, 1)
+	return NewProjectorWithEpoch(db, targetVersion, 0)
 }
 
 func NewProjectorWithEpoch(db *gorm.DB, targetVersion string, indexEpoch int64) *Projector {
@@ -34,7 +61,7 @@ func NewProjectorWithEpoch(db *gorm.DB, targetVersion string, indexEpoch int64) 
 		targetVersion = "v1"
 	}
 	if indexEpoch <= 0 {
-		if parsed, err := strconv.ParseInt(targetVersion, 10, 64); err == nil && parsed > 0 {
+		if parsed, err := strconv.ParseInt(strings.TrimPrefix(strings.ToLower(targetVersion), "v"), 10, 64); err == nil && parsed > 0 {
 			indexEpoch = parsed
 		} else {
 			indexEpoch = 1
@@ -45,9 +72,9 @@ func NewProjectorWithEpoch(db *gorm.DB, targetVersion string, indexEpoch int64) 
 
 // Handler consumes the versioned search task. The task metadata is injected by
 // the Outbox relay, so an older producer can still be projected during rollout.
-func (p *Projector) Handler(ctx context.Context, task *asynq.Task) error {
+func (p *Projector) Handler(ctx context.Context, task *taskqueue.Task) error {
 	if p == nil || p.db == nil || task == nil {
-		return asynq.SkipRetry
+		return taskqueue.SkipRetry
 	}
 	var envelope struct {
 		EventID          uuid.UUID       `json:"event_id"`
@@ -57,13 +84,13 @@ func (p *Projector) Handler(ctx context.Context, task *asynq.Task) error {
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(task.Payload(), &fields); err != nil {
-		return asynq.SkipRetry
+		return taskqueue.SkipRetry
 	}
 	if err := json.Unmarshal(fields["event_id"], &envelope.EventID); err != nil || envelope.EventID == uuid.Nil {
-		return asynq.SkipRetry
+		return taskqueue.SkipRetry
 	}
 	if err := json.Unmarshal(fields["event_type"], &envelope.EventType); err != nil || envelope.EventType == "" {
-		return asynq.SkipRetry
+		return taskqueue.SkipRetry
 	}
 	if raw, ok := fields["aggregate_version"]; ok {
 		_ = json.Unmarshal(raw, &envelope.AggregateVersion)
@@ -76,14 +103,199 @@ func (p *Projector) Handler(ctx context.Context, task *asynq.Task) error {
 	delete(fields, "aggregate_version")
 	envelope.Payload, _ = json.Marshal(fields)
 
-	err := p.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		_, err := outbox.ConsumeOnce(tx, envelope.EventID, ConsumerName, func(tx *gorm.DB) error {
-			return p.project(tx, envelope.EventID, envelope.EventType, envelope.AggregateVersion, envelope.Payload)
+	if p.external == nil {
+		return p.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			_, err := outbox.ConsumeOnce(tx, envelope.EventID, ConsumerName, func(tx *gorm.DB) error {
+				return p.project(tx, envelope.EventID, envelope.EventType, envelope.AggregateVersion, envelope.Payload)
+			})
+			return err
 		})
+	}
+	// A completed marker is an ACK. Do not redo network work for a duplicate
+	// delivery, but tolerate the crash window before the marker transaction.
+	var marker outbox.Consumption
+	if err := p.db.WithContext(ctx).Where("event_id = ? AND consumer_name = ?", envelope.EventID, ConsumerName).First(&marker).Error; err == nil {
+		return nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	// If the external publish and checkpoint commit completed but the final
+	// marker transaction was interrupted, only the marker needs replaying.
+	if checkpoint, checkpointErr := p.Checkpoint(ctx, envelope.EventID); checkpointErr == nil && (checkpoint.State == "indexed" || checkpoint.State == "tombstoned") {
+		return p.ack(ctx, envelope.EventID)
+	} else if checkpointErr != nil && !errors.Is(checkpointErr, gorm.ErrRecordNotFound) {
+		return checkpointErr
+	}
+	checksum := sha256.Sum256(envelope.Payload)
+	checksumText := fmt.Sprintf("sha256:%x", checksum[:])
+	var watermark *int64
+	if envelope.AggregateVersion != nil && *envelope.AggregateVersion > 0 {
+		value := *envelope.AggregateVersion
+		watermark = &value
+	}
+	if err := p.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := p.project(tx, envelope.EventID, envelope.EventType, envelope.AggregateVersion, envelope.Payload); err != nil {
+			return err
+		}
+		return p.beginCheckpoint(tx, envelope.EventID, watermark, &checksumText)
+	}); err != nil {
+		return err
+	}
+	if err := p.setCheckpoint(ctx, envelope.EventID, "publishing", nil); err != nil {
+		return err
+	}
+	if err := p.publishExternal(ctx, envelope.EventType, envelope.AggregateVersion, envelope.Payload); err != nil {
+		_ = p.setCheckpoint(ctx, envelope.EventID, "failed", stringPtr(limitError(err)))
+		if errors.Is(err, ErrPermanent) {
+			return taskqueue.SkipRetry
+		}
+		return err
+	}
+	state := "indexed"
+	if eventTypeIsTombstone(envelope.EventType) {
+		state = "tombstoned"
+	}
+	if err := p.setCheckpoint(ctx, envelope.EventID, state, nil); err != nil {
+		return err
+	}
+	return p.ack(ctx, envelope.EventID)
+}
+
+func (p *Projector) ack(ctx context.Context, eventID uuid.UUID) error {
+	return p.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		_, err := outbox.ConsumeOnce(tx, eventID, ConsumerName, nil)
 		return err
 	})
-	if err != nil {
+}
+
+func (p *Projector) beginCheckpoint(tx *gorm.DB, eventID uuid.UUID, watermark *int64, checksum *string) error {
+	if tx == nil || eventID == uuid.Nil {
+		return errors.New("search: invalid projection checkpoint")
+	}
+	now := time.Now().UTC()
+	row := ProjectionCheckpoint{EventID: eventID, ConsumerName: ConsumerName, State: "pending", Attempt: 1, Watermark: watermark, Checksum: checksum, UpdatedAt: now}
+	return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "event_id"}, {Name: "consumer_name"}}, DoUpdates: clause.Assignments(map[string]any{"state": "pending", "attempt": gorm.Expr("search_projection_checkpoints.attempt + 1"), "last_error": nil, "watermark": watermark, "checksum": checksum, "updated_at": now})}).Create(&row).Error
+}
+
+func (p *Projector) setCheckpoint(ctx context.Context, eventID uuid.UUID, state string, lastError *string) error {
+	if p == nil || p.db == nil || eventID == uuid.Nil {
+		return errors.New("search: invalid projection checkpoint")
+	}
+	result := p.db.WithContext(ctx).Model(&ProjectionCheckpoint{}).Where("event_id = ? AND consumer_name = ?", eventID, ConsumerName).Updates(map[string]any{"state": state, "last_error": lastError, "updated_at": time.Now().UTC()})
+	return result.Error
+}
+
+func (p *Projector) Checkpoint(ctx context.Context, eventID uuid.UUID) (ProjectionCheckpoint, error) {
+	if p == nil || p.db == nil || eventID == uuid.Nil {
+		return ProjectionCheckpoint{}, errors.New("search: invalid projection checkpoint")
+	}
+	var row ProjectionCheckpoint
+	err := p.db.WithContext(ctx).Where("event_id = ? AND consumer_name = ?", eventID, ConsumerName).First(&row).Error
+	return row, err
+}
+
+func limitError(err error) string {
+	if err == nil {
+		return ""
+	}
+	value := err.Error()
+	if len(value) > 500 {
+		return value[:500]
+	}
+	return value
+}
+
+func stringPtr(value string) *string { return &value }
+
+func eventTypeIsTombstone(eventType string) bool {
+	return eventType == eventcontract.EventFileDeletedV1 || eventType == eventcontract.EventObjectGCRequestedV1
+}
+
+func (p *Projector) publishExternal(ctx context.Context, eventType string, aggregateVersion *int64, payload []byte) error {
+	if p.external == nil {
+		return nil
+	}
+	fileIDs := make([]uuid.UUID, 0, 1)
+	objectIDs := make([]uuid.UUID, 0, 1)
+	ownerIDs := make([]uuid.UUID, 0, 1)
+	var value struct {
+		OwnerID     uuid.UUID `json:"owner_id"`
+		FileEntryID uuid.UUID `json:"file_entry_id"`
+		ObjectID    uuid.UUID `json:"object_id"`
+		ShareID     uuid.UUID `json:"share_id"`
+	}
+	if err := json.Unmarshal(payload, &value); err != nil {
 		return err
+	}
+	switch eventType {
+	case eventcontract.EventFileCreatedV1, eventcontract.EventFileUpdatedV1, eventcontract.EventShareImportedV1, eventcontract.EventShareCreatedV1:
+		fileIDs = append(fileIDs, value.FileEntryID)
+	case eventcontract.EventFileDeletedV1:
+		fileIDs = append(fileIDs, value.FileEntryID)
+	case eventcontract.EventShareRevokedV1:
+		var share struct{ FileEntryID uuid.UUID }
+		if err := p.db.WithContext(ctx).Table("shares").Select("file_entry_id").Where("id = ?", value.ShareID).Scan(&share).Error; err != nil {
+			return err
+		}
+		fileIDs = append(fileIDs, share.FileEntryID)
+	case eventcontract.EventFolderCreatedV1, eventcontract.EventFolderRenamedV1, eventcontract.EventFolderMovedV1, eventcontract.EventFolderDeletedV1:
+		ownerIDs = append(ownerIDs, value.OwnerID)
+	case eventcontract.EventObjectReadyV1, eventcontract.EventAIIndexRequestedV1:
+		objectIDs = append(objectIDs, value.ObjectID)
+	case eventcontract.EventObjectGCRequestedV1:
+		objectIDs = append(objectIDs, value.ObjectID)
+	default:
+		return nil
+	}
+	for _, fileID := range fileIDs {
+		var row fileRow
+		err := p.db.WithContext(ctx).Where("backend = ? AND target_version = ? AND file_entry_id = ?", BackendPostgres, p.target, fileID).First(&row).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if eventType == eventcontract.EventFileDeletedV1 {
+				version := int64(1 << 62)
+				if aggregateVersion != nil && *aggregateVersion > 0 {
+					version = *aggregateVersion
+				}
+				if err := p.external.TombstoneFile(ctx, p.target, fileID, version); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		value := FileProjection{Backend: row.Backend, TargetVersion: row.TargetVersion, FileEntryID: row.FileEntryID, OwnerID: row.OwnerID, FolderID: row.FolderID, ObjectID: row.ObjectID, FileVersion: row.FileVersion, ACLVersion: row.ACLVersion, Name: row.Name, MIMEType: row.MIMEType, IndexEpoch: row.IndexEpoch, Tombstone: row.Tombstone || row.State == "tombstoned"}
+		// Tombstone/state and file_version come from the canonical PG row. This
+		// prevents a late delete event from masking a newer file update.
+		if err := p.external.UpsertFile(ctx, value); err != nil {
+			return err
+		}
+	}
+	for _, ownerID := range ownerIDs {
+		var rows []fileRow
+		if err := p.db.WithContext(ctx).Where("backend = ? AND target_version = ? AND owner_id = ?", BackendPostgres, p.target, ownerID).Find(&rows).Error; err != nil {
+			return err
+		}
+		for _, row := range rows {
+			if err := p.external.UpsertFile(ctx, FileProjection{Backend: row.Backend, TargetVersion: row.TargetVersion, FileEntryID: row.FileEntryID, OwnerID: row.OwnerID, FolderID: row.FolderID, ObjectID: row.ObjectID, FileVersion: row.FileVersion, ACLVersion: row.ACLVersion, Name: row.Name, MIMEType: row.MIMEType, IndexEpoch: row.IndexEpoch, Tombstone: row.Tombstone || row.State == "tombstoned"}); err != nil {
+				return err
+			}
+		}
+	}
+	for _, objectID := range objectIDs {
+		var rows []contentRow
+		if err := p.db.WithContext(ctx).Where("backend = ? AND target_version = ? AND object_id = ?", BackendPostgres, p.target, objectID).Find(&rows).Error; err != nil {
+			return err
+		}
+		for _, row := range rows {
+			// GC can be cancelled or followed by same-hash revival. Retire the
+			// recorded chunks, never every future generation of the object ID.
+			value := ContentProjection{Backend: row.Backend, TargetVersion: row.TargetVersion, ObjectID: row.ObjectID, DocumentVersionID: row.DocumentVersionID, ChunkID: row.ChunkID, Ordinal: row.Ordinal, PipelineVersion: row.PipelineVersion, ModelVersion: row.ModelVersion, IndexEpoch: row.IndexEpoch, Content: row.Content, VectorRef: row.VectorRef, Tombstone: row.State == "tombstoned"}
+			if err := p.external.UpsertContent(ctx, value); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -149,7 +361,7 @@ func (p *Projector) project(tx *gorm.DB, _ uuid.UUID, eventType string, aggregat
 		if err := json.Unmarshal(payload, &value); err != nil || value.ObjectID == uuid.Nil {
 			return errors.New("search: invalid object gc event")
 		}
-		return p.index.tombstoneObjectContent(tx, BackendPostgres, value.ObjectID, 1<<62)
+		return p.projectObject(tx, value.ObjectID)
 	default:
 		return nil
 	}
@@ -214,16 +426,29 @@ type chunkSource struct {
 	PipelineVersion   string
 	ModelVersion      string
 	Content           string
+	VectorRef         string
 }
 
 func (p *Projector) projectObject(tx *gorm.DB, objectID uuid.UUID) error {
+	var object struct {
+		ID     uuid.UUID
+		Status string
+	}
+	err := tx.Table("file_objects").Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ?", objectID).Take(&object).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) || (err == nil && object.Status != "ready") {
+		return p.index.tombstoneObjectContent(tx, BackendPostgres, objectID, p.indexEpoch)
+	}
+	if err != nil {
+		return err
+	}
 	var chunks []chunkSource
-	err := tx.Table("ai_chunks c").Select("c.id, c.document_version_id, d.object_id, c.ordinal, v.pipeline_version, v.model_version, c.content").Joins("JOIN ai_documents d ON d.id = c.document_id").Joins("JOIN ai_document_versions v ON v.id = c.document_version_id AND v.status = 'indexed'").Where("d.object_id = ? AND d.active_version_id = v.id", objectID).Order("c.ordinal ASC").Find(&chunks).Error
+	err = tx.Table("ai_chunks c").Select("c.id, c.document_version_id, d.object_id, c.ordinal, v.pipeline_version, v.model_version, c.content, c.embedding::text AS vector_ref").Joins("JOIN ai_documents d ON d.id = c.document_id").Joins("JOIN ai_document_versions v ON v.id = c.document_version_id AND v.status = 'indexed'").Where("d.object_id = ? AND d.active_version_id = v.id", objectID).Order("c.ordinal ASC").Find(&chunks).Error
 	if err != nil {
 		return err
 	}
 	for _, chunk := range chunks {
-		if err := p.index.upsertContent(tx, ContentProjection{Backend: BackendPostgres, TargetVersion: p.target, ObjectID: chunk.ObjectID, DocumentVersionID: chunk.DocumentVersionID, ChunkID: chunk.ID, Ordinal: chunk.Ordinal, PipelineVersion: chunk.PipelineVersion, ModelVersion: chunk.ModelVersion, IndexEpoch: p.indexEpoch, Content: chunk.Content}); err != nil {
+		vector := chunk.VectorRef
+		if err := p.index.upsertContent(tx, ContentProjection{Backend: BackendPostgres, TargetVersion: p.target, ObjectID: chunk.ObjectID, DocumentVersionID: chunk.DocumentVersionID, ChunkID: chunk.ID, Ordinal: chunk.Ordinal, PipelineVersion: chunk.PipelineVersion, ModelVersion: chunk.ModelVersion, IndexEpoch: p.indexEpoch, Content: chunk.Content, VectorRef: &vector}); err != nil {
 			return err
 		}
 	}
@@ -249,8 +474,14 @@ func (p *Projector) Snapshot(ctx context.Context, after uuid.UUID, batchSize int
 		if err != nil {
 			return after, 0, err
 		}
-		if err := p.index.UpsertFile(ctx, FileProjection{Backend: BackendPostgres, TargetVersion: p.target, FileEntryID: file.FileEntryID, OwnerID: file.OwnerID, FolderID: file.FolderID, ObjectID: file.ObjectID, FileVersion: file.FileVersion, ACLVersion: epoch.ACLEpoch, Name: file.Name, MIMEType: file.MIMEType, IndexEpoch: p.indexEpoch, Tombstone: file.DeletedAt != nil}); err != nil {
+		projection := FileProjection{Backend: BackendPostgres, TargetVersion: p.target, FileEntryID: file.FileEntryID, OwnerID: file.OwnerID, FolderID: file.FolderID, ObjectID: file.ObjectID, FileVersion: file.FileVersion, ACLVersion: epoch.ACLEpoch, Name: file.Name, MIMEType: file.MIMEType, IndexEpoch: p.indexEpoch, Tombstone: file.DeletedAt != nil}
+		if err := p.index.UpsertFile(ctx, projection); err != nil {
 			return after, 0, err
+		}
+		if p.external != nil {
+			if err := p.external.UpsertFile(ctx, projection); err != nil {
+				return after, 0, err
+			}
 		}
 	}
 	if len(files) == 0 {
@@ -270,7 +501,7 @@ func (p *Projector) SnapshotContent(ctx context.Context, after uuid.UUID, batchS
 		batchSize = 100
 	}
 	var chunks []chunkSource
-	query := p.db.WithContext(ctx).Table("ai_chunks c").Select("c.id, c.document_version_id, d.object_id, c.ordinal, v.pipeline_version, v.model_version, c.content").Joins("JOIN ai_documents d ON d.id = c.document_id").Joins("JOIN ai_document_versions v ON v.id = c.document_version_id AND v.status = 'indexed'").Where("d.active_version_id = v.id")
+	query := p.db.WithContext(ctx).Table("ai_chunks c").Select("c.id, c.document_version_id, d.object_id, c.ordinal, v.pipeline_version, v.model_version, c.content, c.embedding::text AS vector_ref").Joins("JOIN ai_documents d ON d.id = c.document_id").Joins("JOIN ai_document_versions v ON v.id = c.document_version_id AND v.status = 'indexed'").Where("d.active_version_id = v.id")
 	if after != uuid.Nil {
 		query = query.Where("c.id > ?", after)
 	}
@@ -278,8 +509,15 @@ func (p *Projector) SnapshotContent(ctx context.Context, after uuid.UUID, batchS
 		return after, 0, err
 	}
 	for _, chunk := range chunks {
-		if err := p.index.UpsertContent(ctx, ContentProjection{Backend: BackendPostgres, TargetVersion: p.target, ObjectID: chunk.ObjectID, DocumentVersionID: chunk.DocumentVersionID, ChunkID: chunk.ID, Ordinal: chunk.Ordinal, PipelineVersion: chunk.PipelineVersion, ModelVersion: chunk.ModelVersion, IndexEpoch: p.indexEpoch, Content: chunk.Content}); err != nil {
+		vector := chunk.VectorRef
+		projection := ContentProjection{Backend: BackendPostgres, TargetVersion: p.target, ObjectID: chunk.ObjectID, DocumentVersionID: chunk.DocumentVersionID, ChunkID: chunk.ID, Ordinal: chunk.Ordinal, PipelineVersion: chunk.PipelineVersion, ModelVersion: chunk.ModelVersion, IndexEpoch: p.indexEpoch, Content: chunk.Content, VectorRef: &vector}
+		if err := p.index.UpsertContent(ctx, projection); err != nil {
 			return after, 0, err
+		}
+		if p.external != nil {
+			if err := p.external.UpsertContent(ctx, projection); err != nil {
+				return after, 0, err
+			}
 		}
 	}
 	if len(chunks) == 0 {

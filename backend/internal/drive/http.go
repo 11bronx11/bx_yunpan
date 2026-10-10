@@ -44,7 +44,16 @@ func (h *HTTP) children(c *gin.Context) {
 		h.writeError(c, ErrNotFound)
 		return
 	}
-	folders, files, err := h.service.Children(ownerID, folderID)
+	limit := 50
+	if rawLimit := c.Query("limit"); rawLimit != "" {
+		parsed, parseErr := strconv.Atoi(rawLimit)
+		if parseErr != nil || parsed < 1 || parsed > 100 {
+			h.writeError(c, ErrInvalidInput)
+			return
+		}
+		limit = parsed
+	}
+	folders, files, hasMore, nextCursor, err := h.service.ChildrenPage(c.Request.Context(), ownerID, folderID, c.Query("cursor"), limit, c.Query("sort"))
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -56,7 +65,7 @@ func (h *HTTP) children(c *gin.Context) {
 	for _, file := range files {
 		items = append(items, FileResponse(file))
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items, "page": gin.H{"has_more": false}})
+	c.JSON(http.StatusOK, gin.H{"items": items, "page": gin.H{"has_more": hasMore, "next_cursor": nextCursor}})
 }
 
 func (h *HTTP) breadcrumb(c *gin.Context) {
@@ -157,6 +166,10 @@ func (h *HTTP) writeError(c *gin.Context, err error) {
 		c.JSON(http.StatusConflict, httpapi.ErrorEnvelope(c, "drive.conflict", "resource changed or name already exists"))
 	case errors.Is(err, ErrInvalidInput):
 		c.JSON(http.StatusUnprocessableEntity, httpapi.ErrorEnvelope(c, "drive.invalid_input", "invalid folder operation"))
+	case errors.Is(err, ErrInvalidCursor):
+		c.JSON(http.StatusUnprocessableEntity, httpapi.ErrorEnvelope(c, "drive.invalid_cursor", "invalid directory cursor"))
+	case errors.Is(err, ErrCursorStale):
+		c.JSON(http.StatusConflict, httpapi.ErrorEnvelope(c, "drive.cursor_stale", "directory changed; restart pagination"))
 	default:
 		c.JSON(http.StatusInternalServerError, httpapi.ErrorEnvelope(c, "internal.error", "internal server error"))
 	}

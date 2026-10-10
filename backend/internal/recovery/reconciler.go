@@ -1,10 +1,11 @@
 // Package recovery rebuilds short-lived execution work from PostgreSQL
-// authority after an Asynq/Redis loss. It never writes Redis directly: every
+// authority after missing task state. It never writes the broker directly: every
 // repair is a deterministic Outbox event and therefore remains auditable.
 package recovery
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dblock"
 	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
 )
 
@@ -301,12 +303,34 @@ func maxVersion(value int64) int64 {
 func (r *Reconciler) ensure(ctx context.Context, key, reason, resourceType string, resourceID uuid.UUID, version int64, input eventcontract.EnvelopeInput) (bool, error) {
 	var created bool
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		active, err := outbox.HasActiveDelivery(tx, input.EventType, input.AggregateID)
+		if err := dblock.Transaction(tx, "recovery:"+key); err != nil {
+			return err
+		}
+		active, replayed, err := outbox.RecoverDelivery(tx, input.EventType, input.AggregateID, r.now(), r.staleAfter)
 		if err != nil {
 			return err
 		}
 		if active {
+			created = replayed
 			return nil
+		}
+		// A published command can be lost from the broker more than once.
+		// Chain a fresh event ID after the last publication, with a grace period
+		// so scans cannot continually duplicate normally running work.
+		var previous outbox.Event
+		err = tx.Where("event_type = ? AND aggregate_id = ? AND status = 'published'", input.EventType, input.AggregateID).
+			Order("published_at DESC NULLS LAST, created_at DESC, id DESC").Take(&previous).Error
+		if err == nil {
+			publishedAt := previous.CreatedAt
+			if previous.PublishedAt != nil {
+				publishedAt = *previous.PublishedAt
+			}
+			if publishedAt.After(r.now().Add(-r.staleAfter)) {
+				return nil
+			}
+			key += ":after:" + previous.ID.String()
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
 		}
 		created, err = outbox.EnsureRecovery(tx, key, reason, resourceType, resourceID, maxVersion(version), input)
 		return err

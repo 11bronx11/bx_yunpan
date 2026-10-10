@@ -114,6 +114,9 @@ func TestLegacyRelayBridgePreservesPublishedStateAndAddsExplicitRoutes(t *testin
 				return err
 			}
 		}
+		if err := ensureLegacyDeliveries(tx, false); err != nil {
+			return err
+		}
 		if err := ensureLegacyDeliveries(tx, true); err != nil {
 			return err
 		}
