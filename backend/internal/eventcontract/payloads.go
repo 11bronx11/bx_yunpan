@@ -114,6 +114,13 @@ type AIIndexRequestedV1 struct {
 	TraceID              string     `json:"trace_id,omitempty"`
 }
 
+// AIIndexedV1 is published with the active-version switch, after chunks exist.
+// It triggers search projection without requesting another AI indexing run.
+type AIIndexedV1 struct {
+	ObjectID          uuid.UUID `json:"object_id"`
+	DocumentVersionID uuid.UUID `json:"document_version_id"`
+}
+
 type AIReprocessRequestedV1 struct {
 	TaskID               uuid.UUID  `json:"task_id"`
 	ObjectID             uuid.UUID  `json:"object_id"`
@@ -279,6 +286,13 @@ func (p ObjectReadyV1) Validate() error { return requireUUID("object_id", p.Obje
 func (p ObjectGCRequestedV1) Validate() error { return requireUUID("object_id", p.ObjectID) }
 
 func (p AIIndexRequestedV1) Validate() error { return requireUUID("object_id", p.ObjectID) }
+
+func (p AIIndexedV1) Validate() error {
+	if err := requireUUID("object_id", p.ObjectID); err != nil {
+		return err
+	}
+	return requireUUID("document_version_id", p.DocumentVersionID)
+}
 
 func (p AIReprocessRequestedV1) Validate() error {
 	if err := requireUUID("task_id", p.TaskID); err != nil {

@@ -17,6 +17,7 @@ const (
 	EventObjectReadyV1             = "object.ready.v1"
 	EventObjectGCRequestedV1       = "object.gc_requested.v1"
 	EventAIIndexRequestedV1        = "ai.index_requested.v1"
+	EventAIIndexedV1               = "ai.indexed.v1"
 	EventAIReprocessRequestedV1    = "ai.reprocess_requested.v1"
 	EventStorageOperationRecoverV1 = "storage.operation_recover.v1"
 	EventMediaThumbnailRequestedV1 = "media.thumbnail_requested.v1"
@@ -46,6 +47,7 @@ var definitions = map[string]Definition{
 	EventObjectReadyV1:             {EventObjectReadyV1, MessageKindDomainEvent, 1, "file_object", func() any { return &ObjectReadyV1{} }},
 	EventObjectGCRequestedV1:       {EventObjectGCRequestedV1, MessageKindCommand, 1, "file_object", func() any { return &ObjectGCRequestedV1{} }},
 	EventAIIndexRequestedV1:        {EventAIIndexRequestedV1, MessageKindCommand, 1, "file_object", func() any { return &AIIndexRequestedV1{} }},
+	EventAIIndexedV1:               {EventAIIndexedV1, MessageKindDomainEvent, 1, "file_object", func() any { return &AIIndexedV1{} }},
 	EventAIReprocessRequestedV1:    {EventAIReprocessRequestedV1, MessageKindCommand, 1, "ai_task", func() any { return &AIReprocessRequestedV1{} }},
 	EventStorageOperationRecoverV1: {EventStorageOperationRecoverV1, MessageKindCommand, 1, "storage_operation", func() any { return &StorageOperationRecoverV1{} }},
 	EventMediaThumbnailRequestedV1: {EventMediaThumbnailRequestedV1, MessageKindCommand, 1, "file_object", func() any { return &MediaThumbnailRequestedV1{} }},

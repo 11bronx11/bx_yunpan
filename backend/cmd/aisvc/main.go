@@ -53,7 +53,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	// 用独立 context flush：此时 ctx 已被信号取消，复用它会让导出立刻失败。
+	// 用独立 context flush：此时 ctx 已被s信号取消，复用它会让导出立刻失败。
 	defer func() {
 		if err := shutdownTracing(context.Background()); err != nil {
 			logger.Warn("flush traces", "error", err)

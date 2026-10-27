@@ -240,7 +240,7 @@ func (p *Projector) publishExternal(ctx context.Context, eventType string, aggre
 		fileIDs = append(fileIDs, share.FileEntryID)
 	case eventcontract.EventFolderCreatedV1, eventcontract.EventFolderRenamedV1, eventcontract.EventFolderMovedV1, eventcontract.EventFolderDeletedV1:
 		ownerIDs = append(ownerIDs, value.OwnerID)
-	case eventcontract.EventObjectReadyV1, eventcontract.EventAIIndexRequestedV1:
+	case eventcontract.EventObjectReadyV1, eventcontract.EventAIIndexRequestedV1, eventcontract.EventAIIndexedV1:
 		objectIDs = append(objectIDs, value.ObjectID)
 	case eventcontract.EventObjectGCRequestedV1:
 		objectIDs = append(objectIDs, value.ObjectID)
@@ -348,7 +348,7 @@ func (p *Projector) project(tx *gorm.DB, _ uuid.UUID, eventType string, aggregat
 			return errors.New("search: invalid folder event")
 		}
 		return p.projectOwner(tx, owner.OwnerID)
-	case eventcontract.EventObjectReadyV1, eventcontract.EventAIIndexRequestedV1:
+	case eventcontract.EventObjectReadyV1, eventcontract.EventAIIndexRequestedV1, eventcontract.EventAIIndexedV1:
 		var value struct {
 			ObjectID uuid.UUID `json:"object_id"`
 		}

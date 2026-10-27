@@ -212,11 +212,20 @@ func (s *Service) runIndex(ctx context.Context, objectID uuid.UUID, force bool, 
 			Updates(map[string]any{"retired_at": now, "updated_at": now}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&Document{}).Where("id = ?", document.ID).Updates(map[string]any{
+		if err := tx.Model(&Document{}).Where("id = ?", document.ID).Updates(map[string]any{
 			"status": "indexed", "summary": insight.Summary, "tags": pq.StringArray(insight.Tags),
 			"language": nullableString(insight.Language), "error_code": nil, "model_version": s.provider.ModelVersion(),
 			"active_version_id": version.ID, "updated_at": now,
-		}).Error
+		}).Error; err != nil {
+			return err
+		}
+		if !outbox.SearchEnabled(ctx) {
+			return nil
+		}
+		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
+			EventType: eventcontract.EventAIIndexedV1, AggregateID: objectID, AggregateVersion: version.Generation,
+			Producer: "ai-indexer", Payload: eventcontract.AIIndexedV1{ObjectID: objectID, DocumentVersionID: version.ID},
+		})
 	})
 	if err != nil {
 		return s.finishFailedVersion(document, version, "ai.persistence_failed", err)

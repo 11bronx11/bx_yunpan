@@ -38,6 +38,7 @@ import (
 // AI 模块是唯一有真实独立扩容理由的模块：抽取、OCR、Embedding 都是 CPU/IO
 // 重活，与 API 的请求特征不同，混在一个进程里会互相挤资源。
 func RunAISvc(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	ctx = outbox.WithSearchEnabled(ctx, cfg.Search.Enabled)
 	switch cfg.AIService.Role {
 	case "query":
 		return RunAIQuery(ctx, cfg, logger)

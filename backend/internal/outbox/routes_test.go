@@ -2,7 +2,22 @@ package outbox
 
 import (
 	"testing"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 )
+
+func TestAIIndexedRoutesOnlyToEnabledSearch(t *testing.T) {
+	if got := Routes(eventcontract.EventAIIndexedV1, true); len(got) != 0 {
+		t.Fatalf("index completion must not schedule AI again: %#v", got)
+	}
+	if got := SearchRoutes(eventcontract.EventAIIndexedV1, false); len(got) != 0 {
+		t.Fatalf("disabled search got routes: %#v", got)
+	}
+	got := SearchRoutes(eventcontract.EventAIIndexedV1, true)
+	if len(got) != 1 || got[0].TaskType != TaskSearchProjectV1 || got[0].Queue != "search" {
+		t.Fatalf("index completion search routes = %#v", got)
+	}
+}
 
 func TestRoutesAreExplicitAndFanoutDestinationsAreIndependent(t *testing.T) {
 	ready := Routes(EventObjectReady, true)
