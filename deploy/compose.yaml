@@ -54,6 +54,9 @@ x-app-environment: &app-environment
   UPLOAD_CLEANUP_INTERVAL: ${UPLOAD_CLEANUP_INTERVAL:-5m}
   UPLOAD_CLEANUP_BATCH: ${UPLOAD_CLEANUP_BATCH:-100}
   OUTBOX_POLL_INTERVAL: ${OUTBOX_POLL_INTERVAL:-1s}
+  OUTBOX_POLL_MAX_INTERVAL: ${OUTBOX_POLL_MAX_INTERVAL:-30s}
+  OUTBOX_SCAN_TIMEOUT: ${OUTBOX_SCAN_TIMEOUT:-10s}
+  OUTBOX_NOTIFY_ENABLED: ${OUTBOX_NOTIFY_ENABLED:-true}
   OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-20}
   OUTBOX_TASK_MAX_RETRY: ${OUTBOX_TASK_MAX_RETRY:-8}
   OUTBOX_TASK_TIMEOUT: ${OUTBOX_TASK_TIMEOUT:-30m}
@@ -106,6 +109,21 @@ x-app-environment: &app-environment
   AISVC_BREAKER_FAILURE_RATE: ${AISVC_BREAKER_FAILURE_RATE:-0.5}
   AISVC_BREAKER_OPEN_TIMEOUT: ${AISVC_BREAKER_OPEN_TIMEOUT:-5s}
   AISVC_BREAKER_HALF_OPEN_PROBES: ${AISVC_BREAKER_HALF_OPEN_PROBES:-3}
+  PARSER_REMOTE_ENABLED: ${PARSER_REMOTE_ENABLED:-true}
+  PARSER_GRPC_ADDR: ${PARSER_GRPC_ADDR:-:8084}
+  PARSER_GRPC_TARGET: ${PARSER_GRPC_TARGET:-parser-svc:8084}
+  PARSER_ETCD_SERVICE_PREFIX: ${PARSER_ETCD_SERVICE_PREFIX:-/services/document-parser}
+  PARSER_ADVERTISE_ADDR: ${PARSER_ADVERTISE_ADDR:-}
+  PARSER_CALL_TIMEOUT: ${PARSER_CALL_TIMEOUT:-90s}
+  PARSER_MAX_CONCURRENT: ${PARSER_MAX_CONCURRENT:-2}
+  PARSER_ENGINE_ADDR: ${PARSER_ENGINE_ADDR:-127.0.0.1:8090}
+  PARSER_WORKER_DIR: ${PARSER_WORKER_DIR:-/app/parser_worker}
+  PARSER_PROFILE_VERSION: ${PARSER_PROFILE_VERSION:-light-parser-v1}
+  PARSER_CHUNK_TOKEN_BUDGET: ${PARSER_CHUNK_TOKEN_BUDGET:-600}
+  PARSER_CHUNK_OVERLAP_TOKENS: ${PARSER_CHUNK_OVERLAP_TOKENS:-60}
+  PARSER_MAX_CHUNKS: ${PARSER_MAX_CHUNKS:-256}
+  PARSER_CHUNKER_VERSION: ${PARSER_CHUNKER_VERSION:-document-chunker-v2}
+  PARSER_TOKENIZER_ID: ${PARSER_TOKENIZER_ID:-mixed-script-estimate-v1}
   # 链路追踪：默认关闭，开启前先起 observability profile（含 otel-collector 与 jaeger）。
   OTEL_TRACES_ENABLED: ${OTEL_TRACES_ENABLED:-false}
   OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-otel-collector:4317}
@@ -139,6 +157,37 @@ x-app-environment: &app-environment
   SEARCH_INDEX_BATCH_SIZE: ${SEARCH_INDEX_BATCH_SIZE:-100}
   SEARCH_VECTOR_OVERSAMPLE: ${SEARCH_VECTOR_OVERSAMPLE:-4}
   SEARCH_EXTERNAL_FALLBACK: ${SEARCH_EXTERNAL_FALLBACK:-true}
+
+x-parser-environment: &parser-environment
+  APP_ENV: ${APP_ENV:-development}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  AI_ENABLED: "false"
+  AUTH_SIGNING_SEED: parser-unused-config-only
+  SHARE_SECRET: parser-unused-config-only
+  WORKER_METRICS_ADDR: ${WORKER_METRICS_ADDR:-:8083}
+  PARSER_REMOTE_ENABLED: ${PARSER_REMOTE_ENABLED:-true}
+  PARSER_GRPC_ADDR: ${PARSER_GRPC_ADDR:-:8084}
+  PARSER_ETCD_SERVICE_PREFIX: ${PARSER_ETCD_SERVICE_PREFIX:-/services/document-parser}
+  PARSER_ADVERTISE_ADDR: ${PARSER_ADVERTISE_ADDR:-}
+  PARSER_CALL_TIMEOUT: ${PARSER_CALL_TIMEOUT:-90s}
+  PARSER_MAX_CONCURRENT: ${PARSER_MAX_CONCURRENT:-2}
+  PARSER_ENGINE_ADDR: ${PARSER_ENGINE_ADDR:-127.0.0.1:8090}
+  PARSER_WORKER_DIR: ${PARSER_WORKER_DIR:-/app/parser_worker}
+  PARSER_PROFILE_VERSION: ${PARSER_PROFILE_VERSION:-light-parser-v1}
+  PARSER_CHUNK_TOKEN_BUDGET: ${PARSER_CHUNK_TOKEN_BUDGET:-600}
+  PARSER_CHUNK_OVERLAP_TOKENS: ${PARSER_CHUNK_OVERLAP_TOKENS:-60}
+  PARSER_MAX_CHUNKS: ${PARSER_MAX_CHUNKS:-256}
+  PARSER_CHUNKER_VERSION: ${PARSER_CHUNKER_VERSION:-document-chunker-v2}
+  PARSER_TOKENIZER_ID: ${PARSER_TOKENIZER_ID:-mixed-script-estimate-v1}
+  OTEL_TRACES_ENABLED: ${OTEL_TRACES_ENABLED:-false}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-otel-collector:4317}
+  OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
+  ETCD_ENABLED: ${ETCD_ENABLED:-true}
+  ETCD_ENDPOINTS: ${ETCD_ENDPOINTS:-etcd:2379}
+  ETCD_USERNAME: ${ETCD_USERNAME:-}
+  ETCD_PASSWORD: ${ETCD_PASSWORD:-}
+  ETCD_DIAL_TIMEOUT: ${ETCD_DIAL_TIMEOUT:-5s}
+  ETCD_LEASE_TTL: ${ETCD_LEASE_TTL:-10s}
 
 services:
   rabbitmq:
@@ -251,7 +300,7 @@ services:
 
   # 上游官方镜像只发布在 quay.io，不走 DOCKER_REGISTRY 前缀。
   etcd:
-    profiles: ["ai", "ai-split"]
+    profiles: ["ai", "ai-split", "parser"]
     image: ${ETCD_IMAGE:-quay.io/coreos/etcd:v3.6.6}
     command: ["/usr/local/bin/etcd"]
     environment:
@@ -565,6 +614,39 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
+
+  # 独立文档解析服务：由 --profile parser 显式启用，可单独扩缩。
+  parser-svc:
+    profiles: ["parser"]
+    image: bx-yunpan-parser-svc:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.parser
+      args:
+        DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
+        GO_VERSION: ${GO_VERSION:-1.25.13}
+        UBUNTU_VERSION: ${UBUNTU_VERSION:-24.04}
+        UBUNTU_MIRROR: ${UBUNTU_MIRROR:-http://mirrors.aliyun.com/ubuntu-ports/}
+        GO_PROXY: ${PARSER_GO_PROXY:-https://goproxy.cn,direct}
+        PYTHON_PACKAGE_INDEX: ${PARSER_PYTHON_INDEX:-https://mirrors.aliyun.com/pypi/simple}
+        GO_BUILD_PARALLELISM: ${GO_BUILD_PARALLELISM:-1}
+        GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
+        TARGET: parser-svc
+    environment: *parser-environment
+    expose: ["8083", "8084"]
+    depends_on:
+      etcd: {condition: service_healthy}
+    cpus: ${PARSER_CPUS:-2}
+    mem_limit: ${PARSER_MEMORY_LIMIT:-1g}
+    healthcheck:
+      test: ["CMD", "/app/service", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 100s
 
   # AI 服务：gRPC server + 独占 ai 队列的 RabbitMQ worker。
   # 抽取、OCR、Embedding 是 CPU/IO 重活，独立进程才能独立扩容：

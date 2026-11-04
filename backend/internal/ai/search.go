@@ -362,7 +362,7 @@ func (s *Service) queryCandidates(ctx context.Context, ownerID uuid.UUID, input 
 		sql.Named("owner", ownerID), sql.Named("query", input.Query), sql.Named("embedding", vector), sql.Named("file_ids", pq.Array(fileIDs)),
 		sql.Named("mime_types", pq.Array(input.MimeTypes)), sql.Named("candidate_limit", candidateLimit),
 		sql.Named("model_version", s.provider.ModelVersion()),
-		sql.Named("pipeline_version", pipelineVersion),
+		sql.Named("pipeline_version", s.pipelineVersion),
 	}
 	if input.FolderID != nil {
 		arguments = append(arguments, sql.Named("folder", *input.FolderID))

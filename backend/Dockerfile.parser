@@ -1,0 +1,48 @@
+ARG DOCKER_REGISTRY=docker.io
+ARG GO_VERSION=1.25.13
+ARG UBUNTU_VERSION=24.04
+ARG UBUNTU_MIRROR=http://mirrors.aliyun.com/ubuntu-ports/
+ARG PYTHON_PACKAGE_INDEX=https://mirrors.aliyun.com/pypi/simple
+
+FROM ${DOCKER_REGISTRY}/library/golang:${GO_VERSION}-alpine AS go-build
+ARG GO_PROXY=https://goproxy.cn,direct
+ARG GO_BUILD_PARALLELISM=1
+ARG GO_BUILD_MAX_PROCS=2
+ENV GOPROXY=${GO_PROXY}
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOMAXPROCS=${GO_BUILD_MAX_PROCS} \
+    go build -p=${GO_BUILD_PARALLELISM} -trimpath -ldflags="-s -w" \
+    -o /out/parser-svc ./cmd/parser-svc
+
+FROM ${DOCKER_REGISTRY}/library/ubuntu:${UBUNTU_VERSION} AS parser-runtime
+ARG UBUNTU_MIRROR=http://mirrors.aliyun.com/ubuntu-ports/
+ARG PYTHON_PACKAGE_INDEX=https://mirrors.aliyun.com/pypi/simple
+ENV TZ=UTC \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/usr/local/lib/python3.12/site-packages:/usr/local/lib/python3.12/dist-packages \
+    PARSER_WORKER_DIR=/app/parser_worker \
+    PARSER_ENGINE_ADDR=127.0.0.1:8090
+RUN sed -i "s|http://ports.ubuntu.com/ubuntu-ports/|${UBUNTU_MIRROR}|g" /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 python3-pip ca-certificates tzdata \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 65532 nonroot \
+    && useradd --system --uid 65532 --gid nonroot --home-dir /nonexistent --no-create-home nonroot
+WORKDIR /app
+COPY requirements-parser.txt ./
+RUN python3 -m pip install --break-system-packages --target=/usr/local/lib/python3.12/site-packages \
+    --index-url=${PYTHON_PACKAGE_INDEX} -r requirements-parser.txt
+COPY parser_worker/ ./parser_worker/
+RUN python3 -m compileall -q parser_worker \
+    && PYTHONPATH="/app:${PYTHONPATH}" python3 -m unittest discover -s parser_worker -p 'test_*.py' -v
+COPY --from=go-build /out/parser-svc /app/service
+COPY migrations/ /app/migrations/
+USER 65532:65532
+EXPOSE 8083 8084
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/app/service"]

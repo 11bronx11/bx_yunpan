@@ -16,6 +16,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/ai/rag"
 	"github.com/11bronx11/bx_yunpan/backend/internal/drive"
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
@@ -25,7 +26,7 @@ import (
 )
 
 const (
-	pipelineVersion    = "document-index-v2"
+	pipelineVersion    = "document-index-v5"
 	embeddingBatchSize = 10
 )
 
@@ -38,18 +39,20 @@ var (
 )
 
 type Service struct {
-	db             *gorm.DB
-	drive          *drive.Service
-	objects        *objectstore.Service
-	storage        *minio.Client
-	provider       Provider
-	parser         ParserGateway
-	reranker       Reranker
-	config         config.AI
-	embeddingCache QueryEmbeddingCache
-	retrieval      searchindex.RetrievalBackend
-	searchConfig   config.Search
-	shadowRecorder ShadowRecorder
+	db                   *gorm.DB
+	drive                *drive.Service
+	objects              *objectstore.Service
+	storage              *minio.Client
+	provider             Provider
+	parser               ParserGateway
+	parserProfileVersion string
+	pipelineVersion      string
+	reranker             Reranker
+	config               config.AI
+	embeddingCache       QueryEmbeddingCache
+	retrieval            searchindex.RetrievalBackend
+	searchConfig         config.Search
+	shadowRecorder       ShadowRecorder
 }
 
 // QueryEmbeddingCache is deliberately narrower than a general cache API. It
@@ -62,7 +65,10 @@ type QueryEmbeddingCache interface {
 
 func NewService(db *gorm.DB, driveService *drive.Service, objects *objectstore.Service, storage *minio.Client, cfg config.AI) *Service {
 	provider := NewProvider(cfg)
-	return &Service{db: db, drive: driveService, objects: objects, storage: storage, provider: provider, parser: NewBuiltinParser(provider), reranker: NewReranker(cfg), config: cfg}
+	parser := NewChunkingParser(NewBuiltinParser(provider), rag.ChunkOptions{})
+	return &Service{db: db, drive: driveService, objects: objects, storage: storage, provider: provider, parser: parser,
+		parserProfileVersion: "light-parser-v1", pipelineVersion: pipelineVersion,
+		reranker: NewReranker(cfg), config: cfg}
 }
 
 func NewServiceWithCache(db *gorm.DB, driveService *drive.Service, objects *objectstore.Service, storage *minio.Client, cfg config.AI, embeddingCache QueryEmbeddingCache) *Service {
@@ -76,6 +82,27 @@ func NewServiceWithCache(db *gorm.DB, driveService *drive.Service, objects *obje
 // external backend is unavailable or returns stale candidates.
 func (s *Service) WithRetrieval(backend searchindex.RetrievalBackend, cfg config.Search) *Service {
 	s.retrieval, s.searchConfig = backend, cfg
+	return s
+}
+
+func (s *Service) WithParser(parser ParserGateway) *Service {
+	if parser != nil {
+		s.parser = parser
+	}
+	return s
+}
+
+func (s *Service) WithParserProfileVersion(version string) *Service {
+	if version = strings.TrimSpace(version); version != "" {
+		s.parserProfileVersion = version
+	}
+	return s
+}
+
+func (s *Service) WithPipelineVersion(version string) *Service {
+	if version = strings.TrimSpace(version); version != "" {
+		s.pipelineVersion = version
+	}
 	return s
 }
 
@@ -120,7 +147,7 @@ func (s *Service) runIndex(ctx context.Context, objectID uuid.UUID, force bool, 
 		return nil
 	}
 	if object.SizeBytes > s.config.MaxObjectBytes {
-		return s.finishUnsupportedVersion(version, "ai.object_too_large")
+		return s.finishUnsupportedVersion(version, "ai.resource_limit")
 	}
 	extractionMimeType, err := s.extractionMimeType(objectID, object.MimeType)
 	if err != nil {
@@ -137,31 +164,53 @@ func (s *Service) runIndex(ctx context.Context, objectID uuid.UUID, force bool, 
 	}
 	parser := s.parser
 	if parser == nil {
-		parser = NewBuiltinParser(s.provider)
+		parser = NewChunkingParser(NewBuiltinParser(s.provider), rag.ChunkOptions{})
 	}
 	runID := version.ID
 	if metadata.RunID != nil && *metadata.RunID != uuid.Nil {
 		runID = *metadata.RunID
 	}
-	parseResult, err := parser.Parse(ctx, ParseRequest{
+	parserProfileVersion := metadata.ParserProfileVersion
+	if parserProfileVersion == "" {
+		parserProfileVersion = s.parserProfileVersion
+	}
+	parseResult, err := s.parseForIndex(ctx, parser, ParseRequest{
 		RunID: runID, ObjectID: objectID, DocumentVersionID: version.ID, ContentHash: object.SHA256,
 		MediaType: extractionMimeType, ObjectAddress: ObjectReadAddress{MediaType: extractionMimeType, Data: data},
-		ParserProfileVersion: metadata.ParserProfileVersion, SizeLimitBytes: s.config.MaxObjectBytes,
+		ParserProfileVersion: parserProfileVersion, SizeLimitBytes: s.config.MaxObjectBytes,
+		PageLimit: maxPDFPages, PixelLimit: maxVisionSourcePixels,
 	})
-	if errors.Is(err, errInvalidInput) {
-		return s.finishUnsupportedVersion(version, "ai.invalid_content")
-	}
 	if IsParseUnsupported(err) || errors.Is(err, errUnsupported) {
 		return s.finishUnsupportedVersion(version, "ai.unsupported_type")
+	}
+	if IsParseResourceLimit(err) {
+		return s.finishUnsupportedVersion(version, "ai.resource_limit")
+	}
+	if IsParsePermanent(err) {
+		return s.finishUnsupportedVersion(version, parseFailureCode(err))
+	}
+	if errors.Is(err, errInvalidInput) {
+		return s.finishUnsupportedVersion(version, "ai.invalid_content")
 	}
 	if err != nil {
 		return s.finishFailedVersion(document, version, "ai.extraction_failed", err)
 	}
-	sections := parseResult.Sections
+	chunks, chunkErr := chunksForIndex(parseResult)
+	if chunkErr != nil {
+		return s.finishUnsupportedVersion(version, "ai.chunk_limit")
+	}
 	if err := s.touchDocumentVersion(ctx, version.ID, version.LeaseToken); err != nil {
 		return s.finishFailedVersion(document, version, "ai.persistence_failed", err)
 	}
-	chunks := s.makeChunksTraced(ctx, sections)
+	_, chunkSpan := startSpan(ctx, "ai.chunk",
+		attribute.Int("ai.section_count", len(parseResult.Sections)),
+		attribute.Int("ai.chunk_count", len(chunks)),
+		attribute.String("ai.parser_id", parseResult.ParserID),
+		attribute.String("ai.parser_version", parseResult.ParserVersion),
+		attribute.String("ai.chunker_version", parseResult.ChunkerVersion),
+		attribute.String("ai.tokenizer_id", parseResult.TokenizerID),
+	)
+	chunkSpan.End()
 	if len(chunks) == 0 {
 		return s.finishUnsupportedVersion(version, "ai.empty_content")
 	}
@@ -187,11 +236,24 @@ func (s *Service) runIndex(ctx context.Context, objectID uuid.UUID, force bool, 
 			if len(embeddings[index]) != s.config.Dimension {
 				return errors.New("invalid embedding dimension")
 			}
+			pageStart, pageEnd := chunk.PageStart, chunk.PageEnd
+			if pageStart == 0 && chunk.PageNumber != nil {
+				pageStart, pageEnd = *chunk.PageNumber, *chunk.PageNumber
+			}
 			if err := tx.Exec(`
-				INSERT INTO ai_chunks (id, document_id, document_version_id, ordinal, page_number, section, content, embedding, token_count)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?::vector, ?)`,
-				uuid.Must(uuid.NewV7()), document.ID, version.ID, index, chunk.PageNumber, nullableString(chunk.Section), chunk.Content,
-				vectorLiteral(embeddings[index]), len([]rune(chunk.Content))/2,
+				INSERT INTO ai_chunks (
+					id, document_id, document_version_id, ordinal, page_number, section, kind, heading_path,
+					page_start, page_end, slide_number, sheet_name, row_start, row_end, column_start, column_end,
+					source_start, source_end, merged_ranges, encoding, source_kind, token_count, estimated_token_count,
+					token_count_is_estimate, parser_id, parser_version, vision_model_version, chunker_version, tokenizer_id, content, embedding
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::vector)`,
+				uuid.Must(uuid.NewV7()), document.ID, version.ID, index, chunk.PageNumber, nullableString(chunk.Section),
+				chunk.Kind, chunk.HeadingPath, pageStart, pageEnd, chunk.SlideNumber, chunk.SheetName,
+				chunk.RowStart, chunk.RowEnd, chunk.ColumnStart, chunk.ColumnEnd, chunk.SourceStart, chunk.SourceEnd,
+				pq.StringArray(append([]string{}, chunk.MergedRanges...)), chunk.Encoding, chunk.SourceKind,
+				len([]rune(chunk.Content))/2, chunk.TokenCount, chunk.TokenCountIsEstimate,
+				parseResult.ParserID, parseResult.ParserVersion, parseResult.VisionModelVersion, parseResult.ChunkerVersion, parseResult.TokenizerID,
+				chunk.Content, vectorLiteral(embeddings[index]),
 			).Error; err != nil {
 				return err
 			}
@@ -201,7 +263,11 @@ func (s *Service) runIndex(ctx context.Context, objectID uuid.UUID, force bool, 
 			Where("id = ? AND status = 'building' AND lease_token = ?", version.ID, version.LeaseToken).
 			Updates(map[string]any{"status": "indexed", "summary": insight.Summary, "tags": pq.StringArray(insight.Tags),
 				"language": nullableString(insight.Language), "error_code": nil, "last_error": nil,
-				"updated_at": now, "indexed_at": now, "lease_token": nil, "lease_until": nil})
+				"parser_id": parseResult.ParserID, "parser_version": parseResult.ParserVersion,
+				"vision_model_version": parseResult.VisionModelVersion,
+				"chunker_version":      parseResult.ChunkerVersion, "tokenizer_id": parseResult.TokenizerID,
+				"parser_warnings": pq.StringArray(append([]string{}, parseResult.Warnings...)),
+				"updated_at":      now, "indexed_at": now, "lease_token": nil, "lease_until": nil})
 		if versionResult.Error != nil {
 			return versionResult.Error
 		}
@@ -231,6 +297,66 @@ func (s *Service) runIndex(ctx context.Context, objectID uuid.UUID, force bool, 
 		return s.finishFailedVersion(document, version, "ai.persistence_failed", err)
 	}
 	return nil
+}
+
+func chunksForIndex(parsed ParseResult) ([]chunkInput, error) {
+	if parsed.ChunksTruncated {
+		return nil, &ParseError{Code: "ai.parse.chunk_limit", Permanent: true, Err: errors.New("parser chunk limit reached; refusing partial index publication")}
+	}
+	if len(parsed.Chunks) != 0 {
+		return parsed.Chunks, nil
+	}
+	return makeChunks(parsed.Sections), nil
+}
+
+func isVisionImageType(mediaType string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(strings.Split(mediaType, ";")[0]))
+	return normalized == "image/jpeg" || normalized == "image/png"
+}
+
+func (s *Service) parseForIndex(ctx context.Context, parser ParserGateway, request ParseRequest) (ParseResult, error) {
+	if isVisionImageType(request.MediaType) {
+		return s.parseVisionImage(ctx, request.MediaType, request.ObjectAddress.Data, request.PixelLimit)
+	}
+	if parser == nil {
+		return ParseResult{}, &ParseError{Code: "ai.parse.unavailable", Retryable: true}
+	}
+	return parser.Parse(ctx, request)
+}
+
+func (s *Service) parseVisionImage(ctx context.Context, mediaType string, data []byte, pixelLimit int64) (ParseResult, error) {
+	sections, err := extractVisionSummary(ctx, s.provider, mediaType, data, pixelLimit)
+	if err != nil {
+		switch {
+		case errors.Is(err, errResourceLimit):
+			return ParseResult{}, &ParseError{Code: "ai.parse.resource_limit", ResourceLimit: true, Err: err}
+		case errors.Is(err, errQualityFailure), errors.Is(err, errInvalidInput):
+			return ParseResult{}, &ParseError{Code: "ai.parse.quality_failed", Permanent: true, Err: err}
+		case errors.Is(err, errUnsupported):
+			return ParseResult{}, &ParseError{Code: "ai.parse.unsupported", Unsupported: true, Err: err}
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			return ParseResult{}, &ParseError{Code: "ai.parse.timeout", Retryable: true, Err: err}
+		case errors.Is(err, errProviderPermanent):
+			return ParseResult{}, &ParseError{Code: "ai.vision.rejected", Permanent: true, Err: err}
+		default:
+			return ParseResult{}, &ParseError{Code: "ai.vision.failed", Retryable: true, Err: err}
+		}
+	}
+	chunked := rag.MakeTypedChunks(sections, rag.ChunkOptions{})
+	if chunked.Truncated {
+		return ParseResult{}, &ParseError{Code: "ai.parse.chunk_limit", Permanent: true, Err: errors.New("vision summary exceeded chunk limit")}
+	}
+	visionModelVersion := "unspecified"
+	if provider, ok := s.provider.(interface{ VisionModelVersion() string }); ok {
+		if version := strings.TrimSpace(provider.VisionModelVersion()); version != "" {
+			visionModelVersion = version
+		}
+	}
+	return ParseResult{
+		ParserID: "cloud-vision", ParserVersion: "vision-provider-v1", VisionModelVersion: visionModelVersion, Sections: sections,
+		Chunks: chunked.Chunks, ChunkerVersion: chunked.Version, TokenizerID: chunked.TokenizerID,
+		BlockCount: len(sections), Quality: qualityOf(sections),
+	}, nil
 }
 
 func (s *Service) extractionMimeType(objectID uuid.UUID, mimeType string) (string, error) {
@@ -312,7 +438,7 @@ func (s *Service) startDocument(objectID uuid.UUID, force bool) (Document, bool,
 	now := time.Now().UTC()
 	document := Document{
 		ID: uuid.Must(uuid.NewV7()), ObjectID: objectID, Status: "processing", Tags: pq.StringArray{},
-		PipelineVersion: pipelineVersion, ModelVersion: s.provider.ModelVersion(),
+		PipelineVersion: s.pipelineVersion, ModelVersion: s.provider.ModelVersion(),
 	}
 	result := s.db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "object_id"}}, DoNothing: true}).Create(&document)
 	if result.Error != nil {
@@ -325,10 +451,10 @@ func (s *Service) startDocument(objectID uuid.UUID, force bool) (Document, bool,
 	query := s.db.Model(&Document{}).
 		Where("object_id = ? AND (status <> ? OR updated_at < ?)", objectID, "processing", now.Add(-s.processingLease()))
 	if !force {
-		query = query.Where("status <> ? OR pipeline_version <> ? OR model_version <> ?", "indexed", pipelineVersion, s.provider.ModelVersion())
+		query = query.Where("status <> ? OR pipeline_version <> ? OR model_version <> ?", "indexed", s.pipelineVersion, s.provider.ModelVersion())
 	}
 	result = query.Updates(map[string]any{
-		"status": "processing", "pipeline_version": pipelineVersion, "model_version": s.provider.ModelVersion(),
+		"status": "processing", "pipeline_version": s.pipelineVersion, "model_version": s.provider.ModelVersion(),
 		"error_code": nil, "updated_at": now,
 	})
 	if result.Error != nil {
@@ -373,13 +499,13 @@ func (s *Service) startDocumentVersion(objectID uuid.UUID, force bool) (Document
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err
 			}
-			document = Document{ID: uuid.Must(uuid.NewV7()), ObjectID: objectID, Status: "processing", Tags: pq.StringArray{}, PipelineVersion: pipelineVersion, ModelVersion: s.provider.ModelVersion()}
+			document = Document{ID: uuid.Must(uuid.NewV7()), ObjectID: objectID, Status: "processing", Tags: pq.StringArray{}, PipelineVersion: s.pipelineVersion, ModelVersion: s.provider.ModelVersion()}
 			if err := tx.Create(&document).Error; err != nil {
 				return err
 			}
 		} else if !force && document.ActiveVersionID != nil {
 			var active DocumentVersion
-			if err := tx.First(&active, "id = ?", *document.ActiveVersionID).Error; err == nil && active.Status == "indexed" && active.PipelineVersion == pipelineVersion && active.ModelVersion == s.provider.ModelVersion() {
+			if err := tx.First(&active, "id = ?", *document.ActiveVersionID).Error; err == nil && active.Status == "indexed" && active.PipelineVersion == s.pipelineVersion && active.ModelVersion == s.provider.ModelVersion() {
 				return nil
 			}
 		}
@@ -404,14 +530,14 @@ func (s *Service) startDocumentVersion(objectID uuid.UUID, force bool) (Document
 		}
 		leaseToken := uuid.Must(uuid.NewV7())
 		version = DocumentVersion{ID: uuid.Must(uuid.NewV7()), DocumentID: document.ID, ObjectID: objectID,
-			PipelineVersion: pipelineVersion, ModelVersion: s.provider.ModelVersion(), Generation: generation + 1,
-			Status: "building", Tags: pq.StringArray{}, LeaseToken: &leaseToken,
+			PipelineVersion: s.pipelineVersion, ModelVersion: s.provider.ModelVersion(), Generation: generation + 1,
+			Status: "building", Tags: pq.StringArray{}, ParserWarnings: pq.StringArray{}, LeaseToken: &leaseToken,
 			LeaseUntil: timePtr(now.Add(s.processingLease())), CreatedAt: now, UpdatedAt: now}
 		if err := tx.Create(&version).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&Document{}).Where("id = ?", document.ID).Updates(map[string]any{
-			"status": "processing", "pipeline_version": pipelineVersion, "model_version": s.provider.ModelVersion(), "error_code": nil, "updated_at": now,
+			"status": "processing", "pipeline_version": s.pipelineVersion, "model_version": s.provider.ModelVersion(), "error_code": nil, "updated_at": now,
 		}).Error; err != nil {
 			return err
 		}

@@ -37,7 +37,7 @@ func TestMakeChunksCapsDocument(t *testing.T) {
 	}
 }
 
-func TestExtractDOCXRejectsOversizedDocumentXML(t *testing.T) {
+func TestExtractDOCXClassifiesOversizedDocumentXMLAsResourceLimit(t *testing.T) {
 	var archive bytes.Buffer
 	writer := zip.NewWriter(&archive)
 	entry, err := writer.Create("word/document.xml")
@@ -52,8 +52,8 @@ func TestExtractDOCXRejectsOversizedDocumentXML(t *testing.T) {
 	}
 
 	_, err = extractDOCX(archive.Bytes())
-	if !errors.Is(err, errInvalidInput) {
-		t.Fatalf("expected oversized DOCX to be rejected permanently, got %v", err)
+	if !errors.Is(err, errResourceLimit) {
+		t.Fatalf("expected oversized DOCX to be rejected as a resource limit, got %v", err)
 	}
 }
 
@@ -88,8 +88,8 @@ func TestExtractDOCXPreservesParagraphBoundaries(t *testing.T) {
 func TestExtractRejectsOversizedVisionImage(t *testing.T) {
 	provider := &fakeProvider{dimension: 1024}
 	_, err := extract(context.Background(), provider, "image/jpeg", make([]byte, maxVisionImageBytes+1))
-	if !errors.Is(err, errUnsupported) {
-		t.Fatalf("expected oversized image to be unsupported, got %v", err)
+	if !errors.Is(err, errResourceLimit) {
+		t.Fatalf("expected oversized image to be a resource limit, got %v", err)
 	}
 }
 
@@ -127,6 +127,24 @@ func TestPrepareVisionImageResizesAndReencodesLargeImage(t *testing.T) {
 func TestPrepareVisionImageRejectsInvalidBytes(t *testing.T) {
 	if _, _, err := prepareVisionImage("image/png", []byte("not an image")); err == nil {
 		t.Fatal("expected invalid image to be rejected")
+	}
+}
+
+func TestPrepareVisionImageEnforcesRequestPixelLimit(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 2, 1))
+	var input bytes.Buffer
+	if err := png.Encode(&input, source); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := prepareVisionImageWithPixelLimit("image/png", input.Bytes(), 1); err == nil {
+		t.Fatal("expected image above the request pixel limit to be rejected")
+	}
+}
+
+func TestPixelLimitComparisonDoesNotOverflow(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	if !pixelLimitExceeded(maxInt, maxInt, maxVisionSourcePixels) {
+		t.Fatal("expected overflowing dimensions to exceed the pixel limit")
 	}
 }
 

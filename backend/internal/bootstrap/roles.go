@@ -104,6 +104,8 @@ func RunOutboxRelay(ctx context.Context, cfg config.Config, logger *slog.Logger)
 		WithLeaderLock(deps.RedisCoordination, cfg.Locking).
 		WithMetrics(metrics).
 		WithAIEnabled(cfg.AI.Enabled).WithSearchEnabled(cfg.Search.Enabled)
+	closeWakeups := configureOutboxWakeups(ctx, cfg, dispatcher, logger)
+	defer closeWakeups()
 	background.Go(func() { dispatcher.Run(ctx) })
 	background.Go(func() { serveWorkerMetrics(ctx, cfg.Worker.MetricsAddr, registry, logger) })
 	<-ctx.Done()

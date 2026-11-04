@@ -25,6 +25,9 @@ services:
       POSTGRES_MAX_IDLE_CONNS: "1"
       OUTBOX_BATCH_SIZE: "20"
       OUTBOX_POLL_INTERVAL: 1s
+      OUTBOX_POLL_MAX_INTERVAL: 30s
+      OUTBOX_SCAN_TIMEOUT: 10s
+      OUTBOX_NOTIFY_ENABLED: "true"
       OUTBOX_LEADER_LOCK_ENABLED: "true"
 
   object-worker:
@@ -65,6 +68,10 @@ services:
       POSTGRES_MAX_OPEN_CONNS: "6"
       POSTGRES_MAX_IDLE_CONNS: "2"
       WORKER_CONCURRENCY: "2"
+
+  parser-svc:
+    deploy:
+      replicas: 1
 
   search-indexer:
     deploy:

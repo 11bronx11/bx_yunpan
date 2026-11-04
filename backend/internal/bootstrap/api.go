@@ -48,7 +48,11 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	tokens := identity.NewTokenManager(cfg.Auth)
 	identityService := identity.NewService(deps.GORM, tokens, driveService, cfg.Identity.DefaultQuotaBytes)
 	identityHTTP := identity.NewHTTP(identityService, tokens, cfg.Auth)
-	driveHTTP := drive.NewHTTP(driveService, identityHTTP.Authenticate())
+	childrenConcurrency := cfg.Postgres.MaxOpenConns / 2
+	if childrenConcurrency < 1 {
+		childrenConcurrency = 1
+	}
+	driveHTTP := drive.NewHTTP(driveService, identityHTTP.Authenticate(), httpapi.LimitConcurrentRequests(childrenConcurrency))
 	objects := objectstore.NewService(deps.GORM)
 	uploadService := upload.NewService(deps.GORM, deps.Storage, deps.Presigner, deps.Bucket, driveService, objects, identityService, cfg.Upload)
 	uploadHTTP := upload.NewHTTP(uploadService, identityHTTP.Authenticate())

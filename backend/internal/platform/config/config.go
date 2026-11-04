@@ -26,6 +26,7 @@ type Config struct {
 	Sharing   Sharing
 	AI        AI
 	AIService AIService
+	Parser    DocumentParser
 	Tracing   Tracing
 	Registry  Registry
 	Locking   Locking
@@ -119,8 +120,13 @@ type Upload struct {
 	CleanupBatch    int
 }
 
+const maxOutboxBatchSize = 100
+
 type Outbox struct {
-	PollInterval    time.Duration
+	PollInterval    time.Duration // Minimum scan/error retry interval and follower lock retry interval.
+	MaxPollInterval time.Duration // Maximum delay before a fallback scan when idle or notifications are unavailable.
+	ScanTimeout     time.Duration // Per-operation PostgreSQL timeout for dispatcher state changes and scans.
+	NotifyEnabled   bool          // Use best-effort PostgreSQL LISTEN/NOTIFY wakeups.
 	BatchSize       int
 	MaxRetry        int
 	TaskTimeout     time.Duration
@@ -196,6 +202,25 @@ type AIService struct {
 	BreakerFailureRate    float64
 	BreakerOpenTimeout    time.Duration
 	BreakerHalfOpenProbes int
+}
+
+// DocumentParser describes the independently scaled document parsing service.
+type DocumentParser struct {
+	RemoteEnabled      bool
+	GRPCAddr           string
+	Target             string
+	Prefix             string
+	AdvertiseAddr      string
+	CallTimeout        time.Duration
+	MaxConcurrent      int
+	EngineAddr         string
+	WorkerDir          string
+	ProfileVersion     string
+	ChunkTokenBudget   int
+	ChunkOverlapTokens int
+	MaxChunks          int
+	ChunkerVersion     string
+	TokenizerID        string
 }
 
 // Registry 描述 etcd 服务注册发现参数。
@@ -334,6 +359,9 @@ func Load() (Config, error) {
 		},
 		Outbox: Outbox{
 			PollInterval:    envDuration("OUTBOX_POLL_INTERVAL", time.Second),
+			MaxPollInterval: envDuration("OUTBOX_POLL_MAX_INTERVAL", 30*time.Second),
+			ScanTimeout:     envDuration("OUTBOX_SCAN_TIMEOUT", 10*time.Second),
+			NotifyEnabled:   envBool("OUTBOX_NOTIFY_ENABLED", true),
 			BatchSize:       envInt("OUTBOX_BATCH_SIZE", 20),
 			MaxRetry:        envInt("OUTBOX_TASK_MAX_RETRY", 8),
 			TaskTimeout:     envDuration("OUTBOX_TASK_TIMEOUT", 30*time.Minute),
@@ -404,6 +432,23 @@ func Load() (Config, error) {
 			BreakerFailureRate:    envFloat("AISVC_BREAKER_FAILURE_RATE", 0.5),
 			BreakerOpenTimeout:    envDuration("AISVC_BREAKER_OPEN_TIMEOUT", 5*time.Second),
 			BreakerHalfOpenProbes: envInt("AISVC_BREAKER_HALF_OPEN_PROBES", 3),
+		},
+		Parser: DocumentParser{
+			RemoteEnabled:      envBool("PARSER_REMOTE_ENABLED", false),
+			GRPCAddr:           env("PARSER_GRPC_ADDR", ":8084"),
+			Target:             env("PARSER_GRPC_TARGET", "127.0.0.1:8084"),
+			Prefix:             env("PARSER_ETCD_SERVICE_PREFIX", "/services/document-parser"),
+			AdvertiseAddr:      env("PARSER_ADVERTISE_ADDR", ""),
+			CallTimeout:        envDuration("PARSER_CALL_TIMEOUT", 90*time.Second),
+			MaxConcurrent:      envInt("PARSER_MAX_CONCURRENT", 2),
+			EngineAddr:         env("PARSER_ENGINE_ADDR", "127.0.0.1:8090"),
+			WorkerDir:          env("PARSER_WORKER_DIR", "/app/parser_worker"),
+			ProfileVersion:     env("PARSER_PROFILE_VERSION", "light-parser-v1"),
+			ChunkTokenBudget:   envInt("PARSER_CHUNK_TOKEN_BUDGET", 600),
+			ChunkOverlapTokens: envInt("PARSER_CHUNK_OVERLAP_TOKENS", 60),
+			MaxChunks:          envInt("PARSER_MAX_CHUNKS", 256),
+			ChunkerVersion:     env("PARSER_CHUNKER_VERSION", "document-chunker-v2"),
+			TokenizerID:        env("PARSER_TOKENIZER_ID", "mixed-script-estimate-v1"),
 		},
 		Tracing: Tracing{
 			Enabled:      envBool("OTEL_TRACES_ENABLED", false),
@@ -510,8 +555,11 @@ func (c Config) Validate() error {
 	if c.Upload.SessionTTL <= 0 || c.Upload.PartURLTTL <= 0 || c.Upload.CleanupInterval <= 0 || c.Upload.CleanupBatch <= 0 {
 		errs = append(errs, errors.New("upload TTLs, cleanup interval, and cleanup batch must be positive"))
 	}
-	if c.Outbox.PollInterval <= 0 || c.Outbox.BatchSize <= 0 || c.Outbox.MaxRetry < 0 || c.Outbox.TaskTimeout <= 0 || c.Outbox.GCDelay < 0 {
+	if c.Outbox.PollInterval <= 0 || c.Outbox.MaxPollInterval < c.Outbox.PollInterval || c.Outbox.ScanTimeout <= 0 || c.Outbox.MaxRetry < 0 || c.Outbox.TaskTimeout <= 0 || c.Outbox.GCDelay < 0 {
 		errs = append(errs, errors.New("outbox settings are invalid"))
+	}
+	if c.Outbox.BatchSize <= 0 || c.Outbox.BatchSize > maxOutboxBatchSize {
+		errs = append(errs, fmt.Errorf("OUTBOX_BATCH_SIZE must be between 1 and %d", maxOutboxBatchSize))
 	}
 	if strings.TrimSpace(c.TaskQueue.URL) == "" || strings.TrimSpace(c.TaskQueue.Exchange) == "" || c.TaskQueue.Prefetch <= 0 || c.TaskQueue.PublishTimeout <= 0 || c.TaskQueue.StopTimeout <= 0 || c.TaskQueue.StopTimeout > time.Minute {
 		errs = append(errs, errors.New("RabbitMQ task queue settings are invalid"))
@@ -600,6 +648,18 @@ func (c Config) Validate() error {
 		}
 		if c.AIService.BreakerFailureRate <= 0 || c.AIService.BreakerFailureRate > 1 {
 			errs = append(errs, errors.New("AISVC_BREAKER_FAILURE_RATE must be in (0, 1]"))
+		}
+		if strings.TrimSpace(c.Parser.GRPCAddr) == "" || strings.TrimSpace(c.Parser.Target) == "" || c.Parser.CallTimeout <= 0 || c.Parser.MaxConcurrent <= 0 {
+			errs = append(errs, errors.New("document parser address, timeout, and concurrency settings are invalid"))
+		}
+		if c.Parser.ChunkTokenBudget < 64 || c.Parser.ChunkTokenBudget > 4096 || c.Parser.ChunkOverlapTokens < 0 || c.Parser.ChunkOverlapTokens >= c.Parser.ChunkTokenBudget || c.Parser.MaxChunks <= 0 || c.Parser.MaxChunks > 256 {
+			errs = append(errs, errors.New("document parser chunk token budget, overlap, or chunk cap is invalid"))
+		}
+		if strings.TrimSpace(c.Parser.ProfileVersion) == "" || strings.TrimSpace(c.Parser.ChunkerVersion) == "" || strings.TrimSpace(c.Parser.TokenizerID) == "" || strings.TrimSpace(c.Parser.EngineAddr) == "" {
+			errs = append(errs, errors.New("document parser profile, engine, chunker, and tokenizer settings are required"))
+		}
+		if c.Parser.RemoteEnabled && c.Registry.Enabled && strings.TrimSpace(c.Parser.Prefix) == "" {
+			errs = append(errs, errors.New("PARSER_ETCD_SERVICE_PREFIX is required when remote parser discovery is enabled"))
 		}
 	}
 	if c.Tracing.Enabled {

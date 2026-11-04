@@ -26,24 +26,30 @@ type Document struct {
 func (Document) TableName() string { return "ai_documents" }
 
 type DocumentVersion struct {
-	ID              uuid.UUID `gorm:"type:uuid;primaryKey"`
-	DocumentID      uuid.UUID `gorm:"type:uuid"`
-	ObjectID        uuid.UUID `gorm:"type:uuid"`
-	PipelineVersion string
-	ModelVersion    string
-	Generation      int64
-	Status          string
-	Summary         *string
-	Tags            pq.StringArray `gorm:"type:text[]"`
-	Language        *string
-	ErrorCode       *string
-	LeaseToken      *uuid.UUID `gorm:"type:uuid"`
-	LeaseUntil      *time.Time
-	LastError       *string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	IndexedAt       *time.Time
-	RetiredAt       *time.Time
+	ID                 uuid.UUID `gorm:"type:uuid;primaryKey"`
+	DocumentID         uuid.UUID `gorm:"type:uuid"`
+	ObjectID           uuid.UUID `gorm:"type:uuid"`
+	PipelineVersion    string
+	ModelVersion       string
+	ParserID           string
+	ParserVersion      string
+	VisionModelVersion string
+	ChunkerVersion     string
+	TokenizerID        string
+	ParserWarnings     pq.StringArray `gorm:"type:text[]"`
+	Generation         int64
+	Status             string
+	Summary            *string
+	Tags               pq.StringArray `gorm:"type:text[]"`
+	Language           *string
+	ErrorCode          *string
+	LeaseToken         *uuid.UUID `gorm:"type:uuid"`
+	LeaseUntil         *time.Time
+	LastError          *string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	IndexedAt          *time.Time
+	RetiredAt          *time.Time
 }
 
 func (DocumentVersion) TableName() string { return "ai_document_versions" }

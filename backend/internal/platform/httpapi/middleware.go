@@ -66,6 +66,24 @@ func LimitRequestBody(maxBytes int64) gin.HandlerFunc {
 	}
 }
 
+// LimitConcurrentRequests bounds active handlers and rejects overload without queueing.
+func LimitConcurrentRequests(max int) gin.HandlerFunc {
+	if max <= 0 {
+		return func(c *gin.Context) { c.Next() }
+	}
+	active := make(chan struct{}, max)
+	return func(c *gin.Context) {
+		select {
+		case active <- struct{}{}:
+			defer func() { <-active }()
+			c.Next()
+		default:
+			c.Header("Retry-After", "1")
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, ErrorEnvelope(c, "service.overloaded", "service temporarily overloaded"))
+		}
+	}
+}
+
 func RequestIDValue(c *gin.Context) string {
 	value, _ := c.Get(requestIDKey)
 	requestID, _ := value.(string)

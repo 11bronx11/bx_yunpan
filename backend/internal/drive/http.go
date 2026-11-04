@@ -12,18 +12,27 @@ import (
 )
 
 type HTTP struct {
-	service      *Service
-	authenticate gin.HandlerFunc
+	service         *Service
+	authenticate    gin.HandlerFunc
+	childrenLimiter gin.HandlerFunc
 }
 
-func NewHTTP(service *Service, authenticate gin.HandlerFunc) *HTTP {
-	return &HTTP{service: service, authenticate: authenticate}
+func NewHTTP(service *Service, authenticate gin.HandlerFunc, childrenLimiter ...gin.HandlerFunc) *HTTP {
+	h := &HTTP{service: service, authenticate: authenticate}
+	if len(childrenLimiter) > 0 {
+		h.childrenLimiter = childrenLimiter[0]
+	}
+	return h
 }
 
 func (h *HTTP) RegisterRoutes(v1 *gin.RouterGroup) {
 	folders := v1.Group("/folders", h.authenticate)
 	folders.GET("/root", h.root)
-	folders.GET("/:folderId/children", h.children)
+	if h.childrenLimiter == nil {
+		folders.GET("/:folderId/children", h.children)
+	} else {
+		folders.GET("/:folderId/children", h.childrenLimiter, h.children)
+	}
 	folders.GET("/:folderId/breadcrumb", h.breadcrumb)
 	folders.POST("", h.create)
 	folders.PATCH("/:folderId", h.rename)

@@ -20,14 +20,25 @@ func TestLoadUsesDevelopmentDefaults(t *testing.T) {
 	// even while reranking is disabled.
 	for _, name := range []string{
 		"AI_RERANK_ENABLED",
+		"PARSER_REMOTE_ENABLED",
 	} {
 		t.Setenv(name, "false")
 	}
+	t.Setenv("PARSER_GRPC_ADDR", ":8084")
+	t.Setenv("PARSER_GRPC_TARGET", "127.0.0.1:8084")
+	t.Setenv("PARSER_ETCD_SERVICE_PREFIX", "/services/document-parser")
+	t.Setenv("PARSER_ADVERTISE_ADDR", "")
+	t.Setenv("PARSER_CALL_TIMEOUT", "90s")
+	t.Setenv("PARSER_MAX_CONCURRENT", "2")
 	t.Setenv("AI_RERANK_BASE_URL", "")
 	t.Setenv("AI_RERANK_MODEL", "qwen3-rerank")
 	t.Setenv("AI_RERANK_CANDIDATES", "30")
 	t.Setenv("AI_RERANK_TOP_K", "8")
 	t.Setenv("AI_RERANK_TIMEOUT", "30s")
+	t.Setenv("OUTBOX_POLL_INTERVAL", "1s")
+	t.Setenv("OUTBOX_POLL_MAX_INTERVAL", "30s")
+	t.Setenv("OUTBOX_SCAN_TIMEOUT", "10s")
+	t.Setenv("OUTBOX_NOTIFY_ENABLED", "true")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("load defaults: %v", err)
@@ -47,8 +58,14 @@ func TestLoadUsesDevelopmentDefaults(t *testing.T) {
 	if cfg.Outbox.BatchSize != 20 || cfg.Outbox.TaskTimeout != 30*time.Minute || cfg.Outbox.GCDelay != 24*time.Hour {
 		t.Fatalf("unexpected outbox defaults: batch=%d timeout=%s gc_delay=%s", cfg.Outbox.BatchSize, cfg.Outbox.TaskTimeout, cfg.Outbox.GCDelay)
 	}
+	if cfg.Outbox.PollInterval != time.Second || cfg.Outbox.MaxPollInterval != 30*time.Second || cfg.Outbox.ScanTimeout != 10*time.Second || !cfg.Outbox.NotifyEnabled {
+		t.Fatalf("unexpected outbox wakeup defaults: poll=%s max_poll=%s scan_timeout=%s notify=%t", cfg.Outbox.PollInterval, cfg.Outbox.MaxPollInterval, cfg.Outbox.ScanTimeout, cfg.Outbox.NotifyEnabled)
+	}
 	if cfg.AI.RequestTimeout != 90*time.Second {
 		t.Fatalf("unexpected AI request timeout: %s", cfg.AI.RequestTimeout)
+	}
+	if cfg.Parser.RemoteEnabled || cfg.Parser.GRPCAddr != ":8084" || cfg.Parser.Target != "127.0.0.1:8084" || cfg.Parser.Prefix != "/services/document-parser" || cfg.Parser.CallTimeout != 90*time.Second || cfg.Parser.MaxConcurrent != 2 {
+		t.Fatalf("unexpected parser defaults: %#v", cfg.Parser)
 	}
 	if cfg.AI.RerankEnabled || cfg.AI.RerankBaseURL != "" || cfg.AI.RerankModel != "qwen3-rerank" || cfg.AI.RerankCandidates != 30 || cfg.AI.RerankTopK != 8 || cfg.AI.RerankTimeout != 30*time.Second {
 		t.Fatalf("unexpected reranker defaults: enabled=%t base_url_set=%t model=%q candidates=%d top_k=%d timeout=%s", cfg.AI.RerankEnabled, cfg.AI.RerankBaseURL != "", cfg.AI.RerankModel, cfg.AI.RerankCandidates, cfg.AI.RerankTopK, cfg.AI.RerankTimeout)
@@ -61,6 +78,24 @@ func TestLoadUsesDevelopmentDefaults(t *testing.T) {
 	}
 	if cfg.AI.RateLimitSearchPerMinute != 30 || cfg.AI.RateLimitAskPerMinute != 10 || cfg.AI.RateLimitReprocessPerMinute != 3 {
 		t.Fatalf("unexpected default AI rate limits: search=%d ask=%d reprocess=%d", cfg.AI.RateLimitSearchPerMinute, cfg.AI.RateLimitAskPerMinute, cfg.AI.RateLimitReprocessPerMinute)
+	}
+}
+
+func TestLoadUsesRemoteParserSettings(t *testing.T) {
+	t.Setenv("PARSER_REMOTE_ENABLED", "true")
+	t.Setenv("PARSER_GRPC_ADDR", ":9084")
+	t.Setenv("PARSER_GRPC_TARGET", "parser:9084")
+	t.Setenv("PARSER_ETCD_SERVICE_PREFIX", "/services/parser-test")
+	t.Setenv("PARSER_CALL_TIMEOUT", "45s")
+	t.Setenv("PARSER_MAX_CONCURRENT", "6")
+	t.Setenv("ETCD_ENABLED", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load remote parser config: %v", err)
+	}
+	if !cfg.Parser.RemoteEnabled || cfg.Parser.GRPCAddr != ":9084" || cfg.Parser.Target != "parser:9084" || cfg.Parser.Prefix != "/services/parser-test" || cfg.Parser.CallTimeout != 45*time.Second || cfg.Parser.MaxConcurrent != 6 {
+		t.Fatalf("unexpected remote parser config: %#v", cfg.Parser)
 	}
 }
 
@@ -89,6 +124,10 @@ func TestLoadUsesOperationalOverrides(t *testing.T) {
 	t.Setenv("UPLOAD_SESSION_TTL", "12h")
 	t.Setenv("UPLOAD_CLEANUP_BATCH", "25")
 	t.Setenv("OUTBOX_BATCH_SIZE", "50")
+	t.Setenv("OUTBOX_POLL_INTERVAL", "200ms")
+	t.Setenv("OUTBOX_POLL_MAX_INTERVAL", "4s")
+	t.Setenv("OUTBOX_SCAN_TIMEOUT", "3s")
+	t.Setenv("OUTBOX_NOTIFY_ENABLED", "false")
 	t.Setenv("OBJECT_GC_DELAY", "6h")
 	t.Setenv("AI_REQUEST_TIMEOUT", "2m")
 
@@ -105,8 +144,60 @@ func TestLoadUsesOperationalOverrides(t *testing.T) {
 	if cfg.Outbox.BatchSize != 50 || cfg.Outbox.GCDelay != 6*time.Hour {
 		t.Fatalf("unexpected outbox config: batch=%d gc_delay=%s", cfg.Outbox.BatchSize, cfg.Outbox.GCDelay)
 	}
+	if cfg.Outbox.PollInterval != 200*time.Millisecond || cfg.Outbox.MaxPollInterval != 4*time.Second || cfg.Outbox.ScanTimeout != 3*time.Second || cfg.Outbox.NotifyEnabled {
+		t.Fatalf("unexpected outbox wakeup overrides: poll=%s max_poll=%s scan_timeout=%s notify=%t", cfg.Outbox.PollInterval, cfg.Outbox.MaxPollInterval, cfg.Outbox.ScanTimeout, cfg.Outbox.NotifyEnabled)
+	}
 	if cfg.AI.RequestTimeout != 2*time.Minute {
 		t.Fatalf("unexpected AI request timeout: %s", cfg.AI.RequestTimeout)
+	}
+}
+
+func TestLoadRejectsOutboxMaxPollBelowMinimum(t *testing.T) {
+	t.Setenv("OUTBOX_POLL_INTERVAL", "2s")
+	t.Setenv("OUTBOX_POLL_MAX_INTERVAL", "1s")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected outbox max poll interval below minimum to fail")
+	}
+}
+
+func TestLoadRejectsOutboxBatchAboveBound(t *testing.T) {
+	t.Setenv("OUTBOX_BATCH_SIZE", "101")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected outbox batch above the configured bound to fail")
+	}
+}
+
+func TestLoadRejectsNonPositiveOutboxScanTimeout(t *testing.T) {
+	t.Setenv("OUTBOX_SCAN_TIMEOUT", "0s")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected non-positive outbox scan timeout to fail")
+	}
+}
+
+func TestLoadRequiresLeaderTTLAbovePollingWindow(t *testing.T) {
+	t.Setenv("OUTBOX_POLL_INTERVAL", "2s")
+	t.Setenv("OUTBOX_POLL_MAX_INTERVAL", "30s")
+	t.Setenv("OUTBOX_LEADER_LOCK_ENABLED", "true")
+	t.Setenv("OUTBOX_LEADER_LOCK_TTL", "4s")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected leader TTL at or below twice the minimum poll interval to fail")
+	}
+}
+
+func TestLoadSupportsPollingOnlySingleDispatcherMode(t *testing.T) {
+	t.Setenv("OUTBOX_POLL_INTERVAL", "200ms")
+	t.Setenv("OUTBOX_POLL_MAX_INTERVAL", "2s")
+	t.Setenv("OUTBOX_SCAN_TIMEOUT", "500ms")
+	t.Setenv("OUTBOX_NOTIFY_ENABLED", "false")
+	t.Setenv("OUTBOX_LEADER_LOCK_ENABLED", "false")
+	t.Setenv("OUTBOX_LEADER_LOCK_TTL", "1s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load polling-only configuration: %v", err)
+	}
+	if cfg.Outbox.NotifyEnabled || cfg.Locking.DispatcherLeaderEnabled || cfg.Outbox.PollInterval != 200*time.Millisecond || cfg.Outbox.MaxPollInterval != 2*time.Second {
+		t.Fatalf("unexpected polling-only configuration: notify=%t leader=%t min=%s max=%s", cfg.Outbox.NotifyEnabled, cfg.Locking.DispatcherLeaderEnabled, cfg.Outbox.PollInterval, cfg.Outbox.MaxPollInterval)
 	}
 }
 

@@ -20,12 +20,21 @@ func (p *BuiltinParser) Parse(ctx context.Context, request ParseRequest) (ParseR
 		return ParseResult{}, &ParseError{Code: "ai.parse.invalid_request", Err: errors.New("object and data are required")}
 	}
 	if request.SizeLimitBytes > 0 && int64(len(request.ObjectAddress.Data)) > request.SizeLimitBytes {
-		return ParseResult{}, &ParseError{Code: "ai.parse.resource_limit", Unsupported: true, Err: errors.New("object exceeds size limit")}
+		return ParseResult{}, &ParseError{Code: "ai.parse.resource_limit", ResourceLimit: true, Err: errors.New("object exceeds size limit")}
 	}
-	sections, err := extract(ctx, p.provider, request.MediaType, request.ObjectAddress.Data)
+	sections, err := extractWithLimits(ctx, p.provider, request.MediaType, request.ObjectAddress.Data, request.PageLimit, request.PixelLimit)
 	if err != nil {
-		if errors.Is(err, errUnsupported) || errors.Is(err, errInvalidInput) {
+		if errors.Is(err, errResourceLimit) {
+			return ParseResult{}, &ParseError{Code: "ai.parse.resource_limit", ResourceLimit: true, Err: err}
+		}
+		if errors.Is(err, errQualityFailure) {
+			return ParseResult{}, &ParseError{Code: "ai.parse.quality_failed", Permanent: true, Err: err}
+		}
+		if errors.Is(err, errUnsupported) {
 			return ParseResult{}, &ParseError{Code: "ai.parse.unsupported", Unsupported: true, Err: err}
+		}
+		if errors.Is(err, errInvalidInput) {
+			return ParseResult{}, &ParseError{Code: "ai.parse.invalid_content", Permanent: true, Err: err}
 		}
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			return ParseResult{}, &ParseError{Code: "ai.parse.timeout", Retryable: true, Err: err}
@@ -34,7 +43,7 @@ func (p *BuiltinParser) Parse(ctx context.Context, request ParseRequest) (ParseR
 	}
 	quality := qualityOf(sections)
 	if quality.TextBytes == 0 {
-		return ParseResult{}, &ParseError{Code: "ai.parse.quality_failed", Unsupported: true, Err: errors.New("parsed content is empty")}
+		return ParseResult{}, &ParseError{Code: "ai.parse.quality_failed", Permanent: true, Err: errors.New("parsed content is empty")}
 	}
 	digest := sha256.Sum256(request.ObjectAddress.Data)
 	return ParseResult{

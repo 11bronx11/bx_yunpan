@@ -48,12 +48,15 @@ export S3_SECRET_KEY="${S3_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-yunpan-dev-secret}
 # aisvc:8082 只在 Docker 网络内可解析，宿主机改指本机端口。
 aisvc_port=${AISVC_GRPC_ADDR##*:}
 export AISVC_GRPC_TARGET="${proxy_app_host}:${aisvc_port:-8082}"
+# parser-svc:8084 只在 Docker 网络内可解析，宿主机运行时改指本机端口。
+parser_port=${PARSER_GRPC_ADDR##*:}
+export PARSER_GRPC_TARGET="${proxy_app_host}:${parser_port:-8084}"
 # otel-collector:4317 同理只在 Docker 网络内可解析。
 if [[ "${OTEL_EXPORTER_OTLP_ENDPOINT:-}" == otel-collector:* ]]; then
   export OTEL_EXPORTER_OTLP_ENDPOINT="${proxy_infra_host}:${OTEL_EXPORTER_OTLP_ENDPOINT##*:}"
 fi
 # etcd 只在 compose 内网暴露，宿主机直跑时没有可连的地址：关掉服务发现，
-# 退回直连 AISVC_GRPC_TARGET。
+# 退回直连 AISVC_GRPC_TARGET 和 PARSER_GRPC_TARGET。
 if [[ "${ETCD_ENDPOINTS:-}" == etcd:* ]]; then
   export ETCD_ENABLED=false
 fi

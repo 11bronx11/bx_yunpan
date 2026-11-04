@@ -78,6 +78,24 @@ func TestIndexPublicationEmitsDurableSearchNotification(t *testing.T) {
 	if payload.ObjectID != objectID || document.ActiveVersionID == nil || payload.DocumentVersionID != *document.ActiveVersionID {
 		t.Fatalf("notification does not identify active document version: %#v", payload)
 	}
+	var storedChunk struct {
+		Kind                 string
+		SourceKind           string
+		ParserID             string
+		ParserVersion        string
+		ChunkerVersion       string
+		TokenizerID          string
+		EstimatedTokenCount  int
+		TokenCountIsEstimate bool
+	}
+	if err := db.Table("ai_chunks").Where("document_version_id = ?", *document.ActiveVersionID).Take(&storedChunk).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedChunk.Kind != "text" || storedChunk.SourceKind != "native" || storedChunk.ParserID != "builtin" || storedChunk.ParserVersion != "builtin-v1" ||
+		storedChunk.ChunkerVersion != "document-chunker-v2" || storedChunk.TokenizerID != "mixed-script-estimate-v1" ||
+		storedChunk.EstimatedTokenCount <= 0 || !storedChunk.TokenCountIsEstimate {
+		t.Fatalf("chunk source metadata was not persisted: %#v", storedChunk)
+	}
 	var deliveries []outbox.Delivery
 	if err := db.Where("event_id = ?", events[1].ID).Find(&deliveries).Error; err != nil {
 		t.Fatal(err)

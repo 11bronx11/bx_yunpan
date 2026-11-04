@@ -1,0 +1,2037 @@
+{
+  "generated_at": "2026-11-03T18:25:06+08:00",
+  "source_manifest_sha256": "46fa1a88dc77bf2fda4029fdf77273a920e86ab7933e96afcb73a6da24204181",
+  "go": {
+    "command": "go test -json -count=1 -p 2 ./...",
+    "cwd": "backend",
+    "toolchain": "go1.25.7 linux/arm64",
+    "exit_code": 0,
+    "test_counts": {
+      "pass": 186,
+      "skip": 117,
+      "fail": 0
+    },
+    "package_counts": {
+      "skip": 17,
+      "pass": 31,
+      "fail": 0
+    },
+    "packages": {
+      "github.com/11bronx11/bx_yunpan/backend/api": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/cmd/aisvc": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/cmd/api": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/cmd/maintenance-worker": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/cmd/media-worker": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/cmd/migrate": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/cmd/migrate-asynq": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/cmd/object-worker": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/cmd/outbox-relay": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/cmd/search-backfill": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/cmd/search-indexer": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/cmd/worker": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcclient": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/ai": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/ai/pb": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcserver": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/ai/rag": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/ai/ragtest": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/contract": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/internal/bootstrap": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/eventcontract": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/drive": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/identity": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/media": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/objectstore": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/outbox": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/platform/breaker": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/ownerepoch": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/platform/config": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/platform/cache": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/platform/dbmetrics": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/platform/dependencies": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/internal/platform/dblock": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/platform/health": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/platform/logging": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/internal/platform/httpapi": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/platform/storageurl": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/platform/tracing": "skip",
+      "github.com/11bronx11/bx_yunpan/backend/internal/platform/registry": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/platform/worker": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/recovery": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/search": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/storageops": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/sharing": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/workflow": "pass",
+      "github.com/11bronx11/bx_yunpan/backend/internal/upload": "pass"
+    },
+    "tests": [
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestDisabledBackendReturnsUnavailable",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestExtractPDFRejectsRawBytes",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestMakeChunksCapsDocument",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcclient",
+        "test": "TestAskIsNotRetried",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcclient",
+        "test": "TestSearchRetriesOnUnavailable",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcclient",
+        "test": "TestSearchDoesNotRetryAfterPartialStream",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcclient",
+        "test": "TestSearchDoesNotRetryInvalidArgument",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcclient",
+        "test": "TestReprocessRetries",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcclient",
+        "test": "TestBreakerShortCircuitsAfterFailures",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcclient",
+        "test": "TestRateLimitDoesNotTripBreaker",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestExtractDOCXRejectsOversizedDocumentXML",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestExtractDOCXPreservesParagraphBoundaries",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestExtractRejectsOversizedVisionImage",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestPrepareVisionImageResizesAndReencodesLargeImage",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestPrepareVisionImageRejectsInvalidBytes",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestSourceTextFileNameRecognition",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestExtractAcceptsSourceMIMEType",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestExtractConvertsGB18030SourceText",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestDecodeTextRejectsBinaryControls",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestRateLimitedMapsToTooManyRequests",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestErrorMappingRoundTripsThroughGRPC",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestIndexPublicationEmitsDurableSearchNotification",
+        "status": "skip",
+        "reason": [
+          "index_publication_test.go:56: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestIndexPublicationRollsBackWhenSearchNotificationFails",
+        "status": "skip",
+        "reason": [
+          "index_publication_test.go:91: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestBuiltinParserClassifiesUnsupportedAndReportsIdentity",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestBuiltinParserContextCancellationIsRetryable",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestProviderMapsFreeTierQuotaError",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestProviderBoundsGeneratedSummary",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestProviderMarksInvalidRequestAsPermanent",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestParseAnswerResultFiltersUnsupportedCitations",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestParseAnswerResultDropsCitationsWhenUngrounded",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestParseAnswerResultTreatsNonJSONAsUngrounded",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestDashScopeAnswerParsesGroundingContract",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestRateLimiterUsesConfiguredLimits",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestFakeRerankerReturnsInputAlignedScores",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestOrderByRerank",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestNewRerankerIsOptIn",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestRerankRejectsCanceledContext",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestHTTPRerankerRestoresScoresByIndex",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestHTTPRerankerAcceptsBareScoreArray",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestQwenDashScopeRerankerUsesCompatibleRerankContract",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestNewQwenDashScopeRerankerUsesCompatibleAPIBase",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestSearchRejectsOversizedQuery",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestAskRejectsOversizedQuestion",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestReciprocalRankFusionKeepsChunkCandidatesPerFile",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestAskRejectsTooManyFileIDs",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestNormalizeExternalSearchError",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestDocumentProcessingLease",
+        "status": "skip",
+        "reason": [
+          "service_lease_test.go:17: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestStartDocumentVersionRetainsFailedGenerationAndFencesLease",
+        "status": "skip",
+        "reason": [
+          "service_version_test.go:31: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestVersionBackfillHasActivePointersForIndexedDocuments",
+        "status": "skip",
+        "reason": [
+          "service_version_test.go:77: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestEmbedTextsRenewsVersionLeaseWithFence",
+        "status": "skip",
+        "reason": [
+          "service_version_test.go:95: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestFinishUnsupportedVersionUpdatesLegacySummaryWithoutHidingActive",
+        "status": "skip",
+        "reason": [
+          "service_version_test.go:138: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestShadowSamplingIsDeterministicAndBounded",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestMemoryShadowRecorderAndObservationDoNotStoreContent",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai",
+        "test": "TestEmbedQueryUsesVersionedCacheAndProviderFallback",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcserver",
+        "test": "TestSearchRejectsInvalidOwnerID",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcserver",
+        "test": "TestAskRejectsInvalidFileID",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcserver",
+        "test": "TestLimiterRejectionReturnsRateLimited",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcserver",
+        "test": "TestLimiterErrorFailsOpen",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcserver",
+        "test": "TestHitToProtoPreservesFields",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcserver",
+        "test": "TestCitationOptionalFieldsStayUnset",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcserver",
+        "test": "TestTaskToProtoCarriesTimestamps",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/rag",
+        "test": "TestMakeChunksKeepsHeadingAndSentenceBoundaries",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/rag",
+        "test": "TestMakeChunksHardSplitsOversizedSentence",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ai/ragtest",
+        "test": "TestReport",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/bootstrap",
+        "test": "TestWorkerAndAISvcHandlersCoverOutboxEvents",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/bootstrap",
+        "test": "TestDomainEventsAreAcknowledged",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/eventcontract",
+        "test": "TestV1PayloadFixtureCompatibility",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/eventcontract",
+        "test": "TestEnvelopeJSONGolden",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/eventcontract",
+        "test": "TestEnvelopeRejectsUnknownRouteAndMismatchedKind",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/eventcontract",
+        "test": "TestEnvelopeAcceptsAdditivePayloadFields",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/eventcontract",
+        "test": "TestAIPayloadMetadataIsOptionalAndRoundTrips",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/drive",
+        "test": "TestMutationEventsPreservePreviousMetadata",
+        "status": "skip",
+        "reason": [
+          "event_history_test.go:15: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/drive",
+        "test": "TestPreviewKindRejectsScriptableImages",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/drive",
+        "test": "TestCacheReadsObserveOtherReplicaMutations",
+        "status": "skip",
+        "reason": [
+          "service_cache_test.go:13: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/drive",
+        "test": "TestCachedFileStillChecksAuthoritativeVisibility",
+        "status": "skip",
+        "reason": [
+          "service_cache_test.go:35: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/drive",
+        "test": "TestDeleteFolderRequiresAnEmptyFolder",
+        "status": "skip",
+        "reason": [
+          "service_delete_test.go:9: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/drive",
+        "test": "TestMoveFileChangesOnlyDirectoryMetadata",
+        "status": "skip",
+        "reason": [
+          "service_move_test.go:95: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/drive",
+        "test": "TestFileViewsIncludeAIStatus",
+        "status": "skip",
+        "reason": [
+          "service_move_test.go:116: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/drive",
+        "test": "TestMoveFileRejectsDuplicateName",
+        "status": "skip",
+        "reason": [
+          "service_move_test.go:142: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/drive",
+        "test": "TestCreateFileRejectsDuplicateContentAcrossDirectories",
+        "status": "skip",
+        "reason": [
+          "service_move_test.go:155: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/drive",
+        "test": "TestMoveFileRejectsStaleVersionAndUnknownTarget",
+        "status": "skip",
+        "reason": [
+          "service_move_test.go:164: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/drive",
+        "test": "TestDeleteFileGCEventUsesCommittedObjectVersion",
+        "status": "skip",
+        "reason": [
+          "service_move_test.go:175: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/drive",
+        "test": "TestFirstPageFallsBackToSnapshotWhenEpochChanges",
+        "status": "skip",
+        "reason": [
+          "service_page_test.go:26: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/drive",
+        "test": "TestChildrenPageVisitsEachVisibleItemInDatabaseOrder",
+        "status": "skip",
+        "reason": [
+          "service_page_test.go:73: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/drive",
+        "test": "TestChildrenPageCursorScopeAndEpoch",
+        "status": "skip",
+        "reason": [
+          "service_page_test.go:132: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/drive",
+        "test": "TestChildrenPageBoundsVisibilityAndCancellation",
+        "status": "skip",
+        "reason": [
+          "service_page_test.go:192: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/drive",
+        "test": "TestChildrenPageHTTPContract",
+        "status": "skip",
+        "reason": [
+          "service_page_test.go:219: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/non-browser/refresh",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/non-browser/logout",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/same-origin_metadata/refresh",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/same-origin_metadata/logout",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/same-origin_fallback_includes_port/refresh",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/same-origin_fallback_includes_port/logout",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/foreign_origin/refresh",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/foreign_origin/logout",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/different_port/refresh",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/different_port/logout",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/opaque_origin/refresh",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/opaque_origin/logout",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/malformed_origin/refresh",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/malformed_origin/logout",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/cross-site_metadata/refresh",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/cross-site_metadata/logout",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/same-site_is_not_same-origin/refresh",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection/same-site_is_not_same-origin/logout",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshCookieOriginProtection",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestSessionRoutesRejectOriginBeforeAuthentication",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/media",
+        "test": "TestValidSourceDimensions",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshReplayCommitsFamilyRevocation",
+        "status": "skip",
+        "reason": [
+          "service_test.go:73: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRefreshReplaySerializesWithDescendantRotation",
+        "status": "skip",
+        "reason": [
+          "service_test.go:95: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestRegisterRejectsCrossColumnLoginCollision",
+        "status": "skip",
+        "reason": [
+          "service_test.go:139: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestConcurrentRegistrationSharesLoginNamespace",
+        "status": "skip",
+        "reason": [
+          "service_test.go:158: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/identity",
+        "test": "TestLoginSupportsLegacyCrossColumnCollision",
+        "status": "skip",
+        "reason": [
+          "service_test.go:190: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/objectstore",
+        "test": "TestCreateOrGetReturnsExistingObject",
+        "status": "skip",
+        "reason": [
+          "service_test.go:39: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/objectstore",
+        "test": "TestGarbageCollectRemovesDerivedDataAndIsIdempotent",
+        "status": "skip",
+        "reason": [
+          "service_test.go:78: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestV2EventContextDefaultsClosedAndCanBeEnabled",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestUnroutedMetricsExposeBacklogAndOldestAge",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestV2FlagControlsTypedDomainEventProduction",
+        "status": "skip",
+        "reason": [
+          "compatibility_test.go:59: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestLegacyRelayBridgePreservesPublishedStateAndAddsExplicitRoutes",
+        "status": "skip",
+        "reason": [
+          "compatibility_test.go:100: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestConsumeOnceRejectsInvalidInputsBeforeWriting",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestConsumeOnceRunsEffectOnlyForFirstDelivery",
+        "status": "skip",
+        "reason": [
+          "consumption_test.go:34: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestConsumeOnceMarkerRollsBackWithEffectFailure",
+        "status": "skip",
+        "reason": [
+          "consumption_test.go:82: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestAddEnvelopeEventAndDeliveriesRollbackTogether",
+        "status": "skip",
+        "reason": [
+          "consumption_test.go:119: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestAddEnvelopeDeliveryFanoutIsUniquePerDestination",
+        "status": "skip",
+        "reason": [
+          "consumption_test.go:171: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestEnsureRecoveryConcurrentInsertIsIdempotent",
+        "status": "skip",
+        "reason": [
+          "consumption_test.go:219: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestDispatcherLeaseTakeoverFencesOldACK",
+        "status": "skip",
+        "reason": [
+          "dispatcher_integration_test.go:57: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestDispatcherRealRabbitCrashBeforeACK",
+        "status": "skip",
+        "reason": [
+          "dispatcher_integration_test.go:81: TEST_RABBITMQ_URL and TEST_RABBITMQ_MANAGEMENT_URL required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestDispatcherDrainsBacklogWithoutWaitingForPollInterval",
+        "status": "skip",
+        "reason": [
+          "dispatcher_integration_test.go:125: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestFanoutRespectsAIEnabled",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestPayloadWithTraceCarriesStableTaskMetadata",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestDispatcherRecoversWhenEnqueueCommitsBeforeDeliveryStatus",
+        "status": "skip",
+        "reason": [
+          "dispatcher_test.go:63: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRecoveryBatchLegacyReceiptsAndUnsupportedRoutesCannotStarve",
+        "status": "skip",
+        "reason": [
+          "execution_recovery_test.go:35: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRecoveryBatchFiveQueuesAndFeatureSwitches/ai=false/search=false",
+        "status": "skip",
+        "reason": [
+          "execution_recovery_test.go:72: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRecoveryBatchFiveQueuesAndFeatureSwitches/ai=false/search=true",
+        "status": "skip",
+        "reason": [
+          "execution_recovery_test.go:72: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRecoveryBatchFiveQueuesAndFeatureSwitches/ai=true/search=false",
+        "status": "skip",
+        "reason": [
+          "execution_recovery_test.go:72: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRecoveryBatchFiveQueuesAndFeatureSwitches/ai=true/search=true",
+        "status": "skip",
+        "reason": [
+          "execution_recovery_test.go:72: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRecoveryBatchFiveQueuesAndFeatureSwitches",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRecoveryExecutionBoundariesAndBudget/missing",
+        "status": "skip",
+        "reason": [
+          "execution_recovery_test.go:120: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRecoveryExecutionBoundariesAndBudget/running",
+        "status": "skip",
+        "reason": [
+          "execution_recovery_test.go:120: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRecoveryExecutionBoundariesAndBudget/expired",
+        "status": "skip",
+        "reason": [
+          "execution_recovery_test.go:120: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRecoveryExecutionBoundariesAndBudget/waiting",
+        "status": "skip",
+        "reason": [
+          "execution_recovery_test.go:120: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRecoveryExecutionBoundariesAndBudget/retry_due",
+        "status": "skip",
+        "reason": [
+          "execution_recovery_test.go:120: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRecoveryExecutionBoundariesAndBudget/dead",
+        "status": "skip",
+        "reason": [
+          "execution_recovery_test.go:120: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRecoveryExecutionBoundariesAndBudget/succeeded",
+        "status": "skip",
+        "reason": [
+          "execution_recovery_test.go:120: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRecoveryExecutionBoundariesAndBudget",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRecoveryConcurrentScansReplayOnce",
+        "status": "skip",
+        "reason": [
+          "execution_recovery_test.go:195: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRealRabbitLostDeliveryReplaysOriginalTask",
+        "status": "skip",
+        "reason": [
+          "execution_recovery_test.go:232: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRealRabbitLostDeliveriesAcrossFiveQueues",
+        "status": "skip",
+        "reason": [
+          "execution_recovery_test.go:301: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestPayloadPreservesReprocessBusinessTaskID",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRabbitGCDelaySurvivesRestartAndConfigurationChange",
+        "status": "skip",
+        "reason": [
+          "rabbitmq_regression_test.go:29: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRabbitPublishFailureLeavesDurableRetry",
+        "status": "skip",
+        "reason": [
+          "rabbitmq_regression_test.go:76: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRabbitPreparationPreservesLegacyPublishedOwnership",
+        "status": "skip",
+        "reason": [
+          "rabbitmq_regression_test.go:90: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestLegacyImportPreservesBudgetAndDeadlineIdempotently",
+        "status": "skip",
+        "reason": [
+          "rabbitmq_regression_test.go:108: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestAIIndexedRoutesOnlyToEnabledSearch",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRoutesAreExplicitAndFanoutDestinationsAreIndependent",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestRoutesOmitDisabledAIConsumers",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestTargetFromDeliveryRejectsMalformedDestinations",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/outbox",
+        "test": "TestTargetAllowedForEventRejectsDestinationDrift",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/breaker",
+        "test": "TestBreakerOpensOnFailureRate",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/breaker",
+        "test": "TestBreakerStaysClosedBelowMinRequests",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/breaker",
+        "test": "TestBreakerHalfOpenRecoversAfterProbes",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/breaker",
+        "test": "TestBreakerHalfOpenReopensOnProbeFailure",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/breaker",
+        "test": "TestBreakerLimitsHalfOpenProbes",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/breaker",
+        "test": "TestBreakerForgetsOldFailuresAfterWindow",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/ownerepoch",
+        "test": "TestEpochBumpsAreAtomicAndRollbackSafe",
+        "status": "skip",
+        "reason": [
+          "epoch_test.go:27: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadRejectsInvalidWorkerConcurrency",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadUsesDevelopmentDefaults",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadSupportsDisabledAI",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadUsesOperationalOverrides",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadPrefersPostgresPrimaryDSN",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadFallsBackToLegacyPostgresDSN",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadRejectsInvalidPostgresPool",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadUsesConfiguredAIRateLimits",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadRejectsNonPositiveEnabledAIRateLimit",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadCanDisableAIRateLimit",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadRejectsInvalidRerankTopK",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadRejectsDashScopeRerankWithoutBaseURL",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadSupportsRedisRoleIsolationWithLegacyFallback",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadSupportsCacheRollbackSwitch",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadRejectsInvalidCacheBounds",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadRejectsUnknownAIServiceRole",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadRejectsExternalReadWithoutEndpoints",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/config",
+        "test": "TestLoadAcceptsExternalSearchSettings",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/cache",
+        "test": "TestEmbeddingStoreUsesBoundedLocalCache",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/cache",
+        "test": "TestEmbeddingStoreExpiresLocalValue",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/cache",
+        "test": "TestJSONStoreRealRedisFallbackBudget",
+        "status": "skip",
+        "reason": [
+          "json_integration_test.go:17: requires dedicated TEST_REDIS_ADDR and TEST_REDIS_FAULTS=1"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/cache",
+        "test": "TestJSONStoreUsesLRUAndRedis",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/cache",
+        "test": "TestJSONStoreSingleflightLoadsOnce",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/dblock",
+        "test": "TestAcquireIsExclusive",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/dblock",
+        "test": "TestReleaseDoesNotDeleteAnotherHoldersLock",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/dblock",
+        "test": "TestReleaseFreesOwnLock",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/dblock",
+        "test": "TestLockExpiresAfterTTL",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/dblock",
+        "test": "TestRenewExtendsTTL",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/dblock",
+        "test": "TestRenewFailsForAnotherHolder",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/dbmetrics",
+        "test": "TestBacklogCollectorTracksDurableWorkAndQueryFailure",
+        "status": "skip",
+        "reason": [
+          "backlog_test.go:17: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/dblock",
+        "test": "TestWatchdogSignalsLostLock",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/health",
+        "test": "TestRunReportsUnavailableProbe",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx",
+        "test": "TestInjectRequestID",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx",
+        "test": "TestInjectRequestIDLeavesContextWithoutIDUnchanged",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/httpapi",
+        "test": "TestReadinessFailsWhenDependencyIsUnavailable",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/httpapi",
+        "test": "TestReadinessReportsAdvisoryFailureWithoutRemovingAPI",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/httpapi",
+        "test": "TestRouterLimitsRequestBody",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/httpapi",
+        "test": "TestRouterPropagatesOutboxFeatureFlagsToRequests",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/storageurl",
+        "test": "TestPresignedGetObjectAddsPublicPathPrefix",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/registry",
+        "test": "TestApplyPutAndDeleteUpdatesAddresses",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/registry",
+        "test": "TestKeepsLastKnownAddressesWhenEtcdFails",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/registry",
+        "test": "TestBuildDerivesPrefixFromTarget",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/registry",
+        "test": "TestInstanceGaugeTracksAddressCount",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/worker",
+        "test": "TestMetricsMiddlewareRecordsSuccessAndFailure",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/platform/worker",
+        "test": "TestQueuesForRoleOwnsOnlyItsQueue",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/recovery",
+        "test": "TestRecoveryReplaysMissingTaskWithStableIdentityAndKeepsTerminal",
+        "status": "skip",
+        "reason": [
+          "reconciler_test.go:31: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/recovery",
+        "test": "TestRunOnceRebuildsEveryPersistentWorkClassIdempotently",
+        "status": "skip",
+        "reason": [
+          "reconciler_test.go:88: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/recovery",
+        "test": "TestRecoverStorageOperationsHonorsAvailabilityAndStaleLeases",
+        "status": "skip",
+        "reason": [
+          "reconciler_test.go:153: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestExternalTombstonesSurviveReorderedWrites",
+        "status": "skip",
+        "reason": [
+          "external_fencing_integration_test.go:17: external test endpoints are required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestExternalContainers",
+        "status": "skip",
+        "reason": [
+          "external_integration_test.go:21: TEST_SEARCH_ES_ENDPOINT and TEST_SEARCH_QDRANT_ENDPOINT are required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestElasticsearchUpsertUsesStableVersionedDocument",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestExternalHTTPErrorsClassifyRetryableResponses",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestQdrantRejectsWrongDimensionBeforeNetwork",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestElasticsearchVectorSearchUsesBoundedKNN",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestElasticsearchBulkReportsOnlyFailedItems",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestElasticsearchPrepareEpochCreatesVersionedMappings",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestElasticsearchPrepareEpochIgnoresOnlyExistingIndex400",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestElasticsearchPrepareEpochDoesNotHideMapping400",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestQdrantBulkRejectsInvalidAndKeepsStableIDs",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestGCProjectionPreservesRevivedObjectGeneration",
+        "status": "skip",
+        "reason": [
+          "gc_fencing_test.go:33: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestProjectorParsesConfiguredEpoch",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestProjectionIDsAreStable",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestIndexVersionTransitionsAreMonotonic",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestPostgresProjectionRetryAndTombstone",
+        "status": "skip",
+        "reason": [
+          "index_test.go:38: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestPostgresIndexVersionLifecycle",
+        "status": "skip",
+        "reason": [
+          "index_test.go:104: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestPostgresIndexProgressAndActivation",
+        "status": "skip",
+        "reason": [
+          "index_test.go:136: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestPostgresIndexRollbackRestoresRetiredVersion",
+        "status": "skip",
+        "reason": [
+          "index_test.go:166: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestPostgresBackfillResumesAndActivates",
+        "status": "skip",
+        "reason": [
+          "index_test.go:207: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestProjectorExternalCheckpointRecoversAfterPublishFailure",
+        "status": "skip",
+        "reason": [
+          "projector_failure_test.go:75: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestProjectorCheckpointIndexedCrashWindowOnlyAcknowledges",
+        "status": "skip",
+        "reason": [
+          "projector_failure_test.go:127: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/search",
+        "test": "TestProjectorConcurrentDuplicateDeliveryIsIdempotent",
+        "status": "skip",
+        "reason": [
+          "projector_failure_test.go:162: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/storageops",
+        "test": "TestEnqueueIsIdempotentAndRollbackSafe",
+        "status": "skip",
+        "reason": [
+          "operations_test.go:29: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/storageops",
+        "test": "TestClaimUsesLeaseAndMarksCompletion",
+        "status": "skip",
+        "reason": [
+          "operations_test.go:58: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/storageops",
+        "test": "TestExpiredLeaseCannotOverwriteReplacementWorker",
+        "status": "skip",
+        "reason": [
+          "operations_test.go:85: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/sharing",
+        "test": "TestShareCommandsRejectInvalidBodies//api/v1/shares{}",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/sharing",
+        "test": "TestShareCommandsRejectInvalidBodies//api/v1/shares{",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/sharing",
+        "test": "TestShareCommandsRejectInvalidBodies//api/v1/shares{\"file_id\":\"invalid\",\"target_folder_id\":\"invalid\"}",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/sharing",
+        "test": "TestShareCommandsRejectInvalidBodies//api/v1/shares/00000000-0000-0000-0000-000000000001/import{}",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/sharing",
+        "test": "TestShareCommandsRejectInvalidBodies//api/v1/shares/00000000-0000-0000-0000-000000000001/import{",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/sharing",
+        "test": "TestShareCommandsRejectInvalidBodies//api/v1/shares/00000000-0000-0000-0000-000000000001/import{\"file_id\":\"invalid\",\"target_folder_id\":\"invalid\"}",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/sharing",
+        "test": "TestShareCommandsRejectInvalidBodies",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/sharing",
+        "test": "TestImportSerializesConcurrentIdempotentRequests",
+        "status": "skip",
+        "reason": [
+          "service_concurrency_test.go:26: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestRabbitMQStuckOwnedConsumerHelper",
+        "status": "skip",
+        "reason": [
+          "hardening_test.go:23: subprocess helper"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestRabbitMQStuckConsumerRedeliveryPreservesDurableBudget",
+        "status": "skip",
+        "reason": [
+          "hardening_test.go:33: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestExecutionCompletionDatabaseFailureNeverACKs",
+        "status": "skip",
+        "reason": [
+          "hardening_test.go:102: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestRabbitMQWeightedDispatchWithSaturatedQueues",
+        "status": "skip",
+        "reason": [
+          "hardening_test.go:126: TEST_RABBITMQ_URL and TEST_RABBITMQ_MANAGEMENT_URL required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestStoreConcurrentDuplicateAndIdentityConflict",
+        "status": "skip",
+        "reason": [
+          "hardening_test.go:219: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestStoreRetryBudgetLeaseFenceAndShutdown",
+        "status": "skip",
+        "reason": [
+          "hardening_test.go:257: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestWeightedSchedulerFairnessAndIdleWakeup",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestStuckHandlerProcessHelper",
+        "status": "skip",
+        "reason": [
+          "hardening_test.go:347: subprocess helper"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestStuckHandlerTerminatesProcess",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestRabbitMQStoreSuppressesConcurrentDuplicate",
+        "status": "skip",
+        "reason": [
+          "hardening_test.go:366: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestStuckStoreHelper",
+        "status": "skip",
+        "reason": [
+          "hardening_test.go:425: subprocess helper"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestStuckStorePreservesBudgetBeforeExit",
+        "status": "skip",
+        "reason": [
+          "hardening_test.go:436: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestStoreRenewalRejectsLostLease",
+        "status": "skip",
+        "reason": [
+          "hardening_test.go:467: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestExecutionDatabaseFailureNeverACKs",
+        "status": "skip",
+        "reason": [
+          "hardening_test.go:494: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestRabbitMQTransport",
+        "status": "skip",
+        "reason": [
+          "rabbitmq_integration_test.go:133: TEST_RABBITMQ_URL and TEST_RABBITMQ_MANAGEMENT_URL required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestRabbitMQStability",
+        "status": "skip",
+        "reason": [
+          "rabbitmq_integration_test.go:332: TEST_STABILITY_DURATION required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestRabbitMQCrashConsumerHelper",
+        "status": "skip",
+        "reason": [
+          "rabbitmq_integration_test.go:380: subprocess helper"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestRabbitMQKilledConsumerRedelivers",
+        "status": "skip",
+        "reason": [
+          "rabbitmq_integration_test.go:397: TEST_RABBITMQ_URL and TEST_RABBITMQ_MANAGEMENT_URL required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestStoreSuppressesSuccessAndTerminalRedelivery",
+        "status": "skip",
+        "reason": [
+          "store_test.go:16: TEST_POSTGRES_DSN required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestHandlerMetadataAndCancellation",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestPanicIsRetryableAndUnknownIsTerminal",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestPublishBoundsStalledHandshake",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestRejectsUnknownQueueBeforeConnecting",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestLegacyDecodePreservesRetryAndTimeout",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestRetryPublishFailureNeverACKsOriginal",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/taskqueue",
+        "test": "TestFailureAuditFailureNeverACKsOriginal",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/workflow",
+        "test": "TestHashRequestIsStable",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/workflow",
+        "test": "TestInstanceTransitionsRejectTerminalReopen",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/workflow",
+        "test": "TestStepTransitionsIncludeCompensation",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/workflow",
+        "test": "TestPersistentFailureCompensationConvergesAndCannotReopen",
+        "status": "skip",
+        "reason": [
+          "service_test.go:56: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestCanonicalLegacyOrphanEntersGC",
+        "status": "skip",
+        "reason": [
+          "canonical_cleanup_test.go:21: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestRealMinioCanonicalFailureCleanup",
+        "status": "skip",
+        "reason": [
+          "canonical_cleanup_test.go:63: TEST_MINIO_ENDPOINT is required"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestFailedSessionDoesNotRestartCanonicalCopy",
+        "status": "skip",
+        "reason": [
+          "canonical_cleanup_test.go:155: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestAuditIdempotencyBindsUploadParameters",
+        "status": "skip",
+        "reason": [
+          "distributed_audit_test.go:20: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestAuditObjectCanBeCollectedAndReuploadedTwice",
+        "status": "skip",
+        "reason": [
+          "distributed_audit_test.go:45: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestAuditVerificationCleanupIsAtomic/false",
+        "status": "skip",
+        "reason": [
+          "distributed_audit_test.go:103: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestAuditVerificationCleanupIsAtomic/true",
+        "status": "skip",
+        "reason": [
+          "distributed_audit_test.go:103: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestAuditVerificationCleanupIsAtomic",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestAuditAbortDuringProviderCreateIsReconciled",
+        "status": "skip",
+        "reason": [
+          "distributed_audit_test.go:155: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestRealMinioUploadRecoversAfterCompleteDatabaseFailure",
+        "status": "skip",
+        "reason": [
+          "minio_integration_test.go:46: TEST_MINIO_ENDPOINT is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestPartETagColumn",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestSessionResponseIncludesConfirmedParts",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestWriteErrorDistinguishesExistingFile",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestWriteErrorDistinguishesNameConflict",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestCreateSerializesConcurrentIdempotentRequests",
+        "status": "skip",
+        "reason": [
+          "service_concurrency_test.go:192: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestCreateDistinguishesSameFolderNameConflict",
+        "status": "skip",
+        "reason": [
+          "service_concurrency_test.go:250: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestCompleteSerializesConcurrentRetries",
+        "status": "skip",
+        "reason": [
+          "service_concurrency_test.go:272: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestAbortReleasesQuotaOnceUnderConcurrency",
+        "status": "skip",
+        "reason": [
+          "service_concurrency_test.go:326: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestExpireReleasesQuotaAndMarksSession",
+        "status": "skip",
+        "reason": [
+          "service_concurrency_test.go:369: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestVerifyRetainsCanonicalObjectWhenTransactionFailsForRetry",
+        "status": "skip",
+        "reason": [
+          "service_concurrency_test.go:400: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestReconcileSucceededMultipartCreateConvergesInitializingSessionWithoutRecreatingUpload",
+        "status": "skip",
+        "reason": [
+          "service_concurrency_test.go:432: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestReconcileSucceededMultipartCompleteEmitsVerifyOnce",
+        "status": "skip",
+        "reason": [
+          "service_concurrency_test.go:468: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestVerifyHashMismatchRemovesStagingBeforeFailingSession",
+        "status": "skip",
+        "reason": [
+          "service_concurrency_test.go:503: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestVerifyConcurrentSameHashKeepsCommittedCanonicalObject",
+        "status": "skip",
+        "reason": [
+          "service_concurrency_test.go:537: TEST_POSTGRES_DSN is not set"
+        ]
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestVerificationFailureCodeRecognizesStorageThreshold",
+        "status": "pass"
+      },
+      {
+        "package": "github.com/11bronx11/bx_yunpan/backend/internal/upload",
+        "test": "TestVerificationFailureCodeFallsBackToGenericError",
+        "status": "pass"
+      }
+    ],
+    "external_test_variables_configured": false
+  },
+  "web": {
+    "command": "CI=true npm test -- --watchAll=false --runInBand --json --outputFile=/tmp/bx-yunpan-facts-20261103-web-test.json",
+    "cwd": "web",
+    "node": "v22.23.0",
+    "exit_code": 0,
+    "success": true,
+    "suite_counts": {
+      "numPassedTestSuites": 14,
+      "numFailedTestSuites": 0,
+      "numPendingTestSuites": 0
+    },
+    "test_counts": {
+      "numPassedTests": 45,
+      "numFailedTests": 0,
+      "numPendingTests": 0
+    },
+    "files": [
+      {
+        "path": "web/src/pages/Drive.test.js",
+        "status": "passed"
+      },
+      {
+        "path": "web/src/services/drive.test.js",
+        "status": "passed"
+      },
+      {
+        "path": "web/src/components/MoveFileModal.test.js",
+        "status": "passed"
+      },
+      {
+        "path": "web/src/components/SearchResultModal.test.js",
+        "status": "passed"
+      },
+      {
+        "path": "web/src/contexts/TransferContext.test.js",
+        "status": "passed"
+      },
+      {
+        "path": "web/src/services/api.test.js",
+        "status": "passed"
+      },
+      {
+        "path": "web/src/components/AIIndexModal.test.js",
+        "status": "passed"
+      },
+      {
+        "path": "web/src/components/FileSummaryModal.test.js",
+        "status": "passed"
+      },
+      {
+        "path": "web/src/App.test.js",
+        "status": "passed"
+      },
+      {
+        "path": "web/src/pages/AIAsk.test.js",
+        "status": "passed"
+      },
+      {
+        "path": "web/src/pages/AIWorkspace.test.js",
+        "status": "passed"
+      },
+      {
+        "path": "web/src/components/design/ProductUI.test.js",
+        "status": "passed"
+      },
+      {
+        "path": "web/src/utils/fileCapabilities.test.js",
+        "status": "passed"
+      },
+      {
+        "path": "web/src/utils/download.test.js",
+        "status": "passed"
+      }
+    ]
+  },
+  "not_executed": [
+    "live deployment inspection",
+    "database migrations",
+    "Docker build or service restart",
+    "external PostgreSQL/Redis/RabbitMQ/MinIO/Elasticsearch/Qdrant integration",
+    "real DashScope requests",
+    "HA/failover/capacity testing"
+  ],
+  "documentation_checks": {
+    "checked_at": "2026-11-03T10:46:28.961799+00:00",
+    "report_path": "docs/CURRENT_CODE_FACTS_2026-11-03.md",
+    "report_sha256": "c293b3206d389229f67326dd2dc0661c3758460c2b10612e7f6b963bd985606e",
+    "numbered_chapters": 22,
+    "local_links_including_toc": 209,
+    "missing_link_targets": [],
+    "toc_anchors_verified": 22,
+    "mermaid_blocks": 5,
+    "source_hashes_verified": 335,
+    "source_hash_mismatches": [],
+    "aggregate_manifest_hash_verified": true,
+    "business_source_changes": false,
+    "scope": "New report and evidence; scoped .gitignore exceptions for those three files."
+  }
+}

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -85,6 +86,46 @@ func TestRouterLimitsRequestBody(t *testing.T) {
 
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413, got %d", response.Code)
+	}
+}
+
+func TestConcurrentRequestLimitRejectsInsteadOfQueueing(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+
+	router := gin.New()
+	router.GET("/limited", LimitConcurrentRequests(1), func(c *gin.Context) {
+		close(entered)
+		<-release
+		c.Status(http.StatusNoContent)
+	})
+
+	firstResponse := httptest.NewRecorder()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		router.ServeHTTP(firstResponse, httptest.NewRequest(http.MethodGet, "/limited", nil))
+	}()
+	<-entered
+
+	secondResponse := httptest.NewRecorder()
+	router.ServeHTTP(secondResponse, httptest.NewRequest(http.MethodGet, "/limited", nil))
+	if secondResponse.Code != http.StatusServiceUnavailable {
+		t.Fatalf("second request status=%d, want=%d", secondResponse.Code, http.StatusServiceUnavailable)
+	}
+	if secondResponse.Header().Get("Retry-After") != "1" {
+		t.Fatalf("Retry-After=%q, want 1", secondResponse.Header().Get("Retry-After"))
+	}
+	if !bytes.Contains(secondResponse.Body.Bytes(), []byte(`"service.overloaded"`)) {
+		t.Fatalf("missing overload error code: %s", secondResponse.Body.String())
+	}
+
+	releaseOnce.Do(func() { close(release) })
+	<-firstDone
+	if firstResponse.Code != http.StatusNoContent {
+		t.Fatalf("first request status=%d, want=%d", firstResponse.Code, http.StatusNoContent)
 	}
 }
 

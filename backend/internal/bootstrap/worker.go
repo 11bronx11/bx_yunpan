@@ -51,6 +51,8 @@ func RunWorker(ctx context.Context, cfg config.Config, logger *slog.Logger) erro
 		WithLeaderLock(deps.RedisCoordination, cfg.Locking).
 		WithMetrics(metrics).
 		WithAIEnabled(cfg.AI.Enabled).WithSearchEnabled(cfg.Search.Enabled)
+	closeWakeups := configureOutboxWakeups(ctx, cfg, dispatcher, logger)
+	defer closeWakeups()
 	background.Go(func() { dispatcher.Run(ctx) })
 	background.Go(func() { serveWorkerMetrics(ctx, cfg.Worker.MetricsAddr, metricsRegistry, logger) })
 	background.Go(func() { runUploadCleanup(ctx, uploads, cfg.Upload.CleanupInterval, cfg.Upload.CleanupBatch, logger) })

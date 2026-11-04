@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
@@ -28,6 +30,9 @@ type Dispatcher struct {
 	aiEnabled     bool
 	searchEnabled bool
 	metrics       *Metrics
+	wakeups       <-chan struct{}
+	preparationMu sync.Mutex
+	preparedAt    time.Time
 	// redis 为 nil 时退化为单副本直接轮询，不做选主。
 	redis          redis.UniversalClient
 	markPublished  func(*gorm.DB, Delivery, time.Time) error
@@ -53,6 +58,13 @@ func (d *Dispatcher) WithPublishTimeout(timeout time.Duration) *Dispatcher {
 // health. A nil registerer is accepted for callers that do not expose metrics.
 func (d *Dispatcher) WithMetrics(metrics *Metrics) *Dispatcher {
 	d.metrics = metrics
+	return d
+}
+
+// WithWakeups makes committed delivery inserts wake the next scan. PostgreSQL
+// remains authoritative; poll bounds still recover missed notifications.
+func (d *Dispatcher) WithWakeups(wakeups <-chan struct{}) *Dispatcher {
+	d.wakeups = wakeups
 	return d
 }
 
@@ -82,7 +94,13 @@ func (d *Dispatcher) WithLeaderLock(client redis.UniversalClient, locking config
 }
 
 func (d *Dispatcher) Run(ctx context.Context) {
-	if d.redis != nil && d.locking.DispatcherLeaderEnabled {
+	if d.locking.DispatcherLeaderEnabled {
+		if d.redis == nil {
+			if d.logger != nil {
+				d.logger.ErrorContext(ctx, "outbox leader lock is enabled but Redis coordination is unavailable")
+			}
+			return
+		}
 		d.runAsFollower(ctx)
 		return
 	}
@@ -92,25 +110,36 @@ func (d *Dispatcher) Run(ctx context.Context) {
 // runAsFollower 反复尝试抢锁：抢到就投递并由 watchdog 续期，没抢到就
 // 等一轮再试。丢锁后立刻停止投递并回到抢锁状态。
 func (d *Dispatcher) runAsFollower(ctx context.Context) {
+	minimum, maximum := d.pollBounds()
+	retryWait := minimum
+	retryCap := minDuration(maximum, 5*time.Second)
+	if retryCap < minimum {
+		retryCap = minimum
+	}
 	for ctx.Err() == nil {
 		lock := dblock.NewRedisLock(d.redis, d.locking.LeaderKey, d.locking.LeaderTTL)
 		err := lock.Acquire(ctx)
 		switch {
 		case err == nil:
-			d.logger.InfoContext(ctx, "outbox dispatcher acquired leadership", "key", d.locking.LeaderKey)
+			retryWait = minimum
+			d.invalidatePreparation()
+			if d.logger != nil {
+				d.logger.InfoContext(ctx, "outbox dispatcher acquired leadership", "key", d.locking.LeaderKey)
+			}
 			d.lead(ctx, lock)
 		case errors.Is(err, dblock.ErrNotAcquired):
 			// 正常状态：别的副本在投递，本副本待命。
 		case ctx.Err() != nil:
 			return
 		default:
-			d.logger.WarnContext(ctx, "acquire dispatcher leadership", "error", err)
+			if d.logger != nil {
+				d.logger.WarnContext(ctx, "acquire dispatcher leadership", "error", err)
+			}
 		}
-		select {
-		case <-ctx.Done():
+		if waitForPoll(ctx, nil, nil, jitterDown(retryWait, minimum)) == pollWaitCanceled {
 			return
-		case <-time.After(d.config.PollInterval):
 		}
+		retryWait = nextPollInterval(retryWait, minimum, retryCap)
 	}
 }
 
@@ -127,7 +156,7 @@ func (d *Dispatcher) lead(ctx context.Context, lock *dblock.RedisLock) {
 	// 用独立 context 释放：ctx 可能已因停机取消，复用它连 DEL 都发不出去。
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer cancel()
-	if err := lock.Release(releaseCtx); err != nil {
+	if err := lock.Release(releaseCtx); err != nil && d.logger != nil {
 		d.logger.WarnContext(ctx, "release dispatcher leadership", "error", err)
 	}
 }
@@ -135,32 +164,75 @@ func (d *Dispatcher) lead(ctx context.Context, lock *dblock.RedisLock) {
 // poll 是投递主循环。lost 非 nil 时，它一旦关闭就退出——表示不再持有
 // 选主锁，必须立即停手。
 func (d *Dispatcher) poll(ctx context.Context, lost <-chan struct{}) {
-	ticker := time.NewTicker(d.config.PollInterval)
-	defer ticker.Stop()
-	for {
-		processed, err := d.dispatchBatchCount(ctx)
-		if err != nil {
-			d.logger.ErrorContext(ctx, "dispatch outbox", "error", err)
-		}
-		// Drain a backlog without imposing an artificial batch/interval ceiling.
-		// Check cancellation and leadership between every bounded batch.
-		if err == nil && processed >= d.config.BatchSize && processed > 0 {
+	workCtx, stopWork := context.WithCancel(ctx)
+	if lost != nil {
+		go func() {
 			select {
-			case <-ctx.Done():
-				return
 			case <-lost:
-				return
-			default:
-				continue
+				stopWork()
+			case <-workCtx.Done():
 			}
-		}
+		}()
+	}
+	defer stopWork()
+	ctx = workCtx
+	minWait, maxWait := d.pollBounds()
+	idleWait, errorWait := minWait, minWait
+	errorCap := minDuration(maxWait, 5*time.Second)
+	if errorCap < minWait {
+		errorCap = minWait
+	}
+	wakeups := d.wakeups
+	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-lost:
-			d.logger.WarnContext(ctx, "outbox dispatcher lost leadership", "key", d.locking.LeaderKey)
+			if d.logger != nil {
+				d.logger.WarnContext(ctx, "outbox dispatcher lost leadership", "key", d.locking.LeaderKey)
+			}
 			return
-		case <-ticker.C:
+		default:
+		}
+
+		processed, err := d.dispatchBatchCountWithLeadership(ctx, lost)
+		if errors.Is(err, errLeadershipLost) || ctx.Err() != nil {
+			if d.logger != nil && errors.Is(err, errLeadershipLost) {
+				d.logger.WarnContext(ctx, "outbox dispatcher lost leadership", "key", d.locking.LeaderKey)
+			}
+			return
+		}
+		if err != nil {
+			if d.logger != nil {
+				d.logger.ErrorContext(ctx, "dispatch outbox", "error", err)
+			}
+			if wait := waitForPoll(ctx, lost, nil, jitterDown(errorWait, minWait)); wait == pollWaitCanceled || wait == pollWaitLeadershipLost {
+				return
+			}
+			errorWait = nextPollInterval(errorWait, minWait, errorCap)
+			continue
+		}
+		errorWait = minWait
+		if processed > 0 {
+			// Continue immediately after any work, including a partial batch.
+			idleWait = minWait
+			continue
+		}
+
+		// Notifications wake new work immediately. This bounded adaptive scan is
+		// the recovery path for missed notifications, scheduled retries, and
+		// deployments with notifications disabled; it avoids an aggregate query
+		// over the active delivery set on every idle pass.
+		switch waitForPoll(ctx, lost, wakeups, jitterDown(idleWait, minWait)) {
+		case pollWaitCanceled, pollWaitLeadershipLost:
+			return
+		case pollWaitNotified:
+			idleWait = minWait
+		case pollWaitChannelClosed:
+			wakeups = nil
+			idleWait = minWait
+		case pollWaitElapsed:
+			idleWait = nextPollInterval(idleWait, minWait, maxWait)
 		}
 	}
 }
@@ -171,25 +243,138 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context) error {
 }
 
 func (d *Dispatcher) dispatchBatchCount(ctx context.Context) (int, error) {
-	if err := d.prepareDeliveries(ctx); err != nil {
+	return d.dispatchBatchCountWithLeadership(ctx, nil)
+}
+
+func (d *Dispatcher) dispatchBatchCountWithLeadership(ctx context.Context, lost <-chan struct{}) (int, error) {
+	if err := d.prepareDeliveriesForDispatch(ctx); err != nil {
 		return 0, err
 	}
 	claimed, err := d.claimDeliveries(ctx)
 	if err != nil {
 		return 0, err
 	}
-	var firstErr error
-	for _, item := range claimed {
+	processed := 0
+	for index, item := range claimed {
+		select {
+		case <-ctx.Done():
+			d.releaseClaims(ctx, claimed[index:])
+			return processed, ctx.Err()
+		case <-lost:
+			d.releaseClaims(ctx, claimed[index:])
+			return processed, errLeadershipLost
+		default:
+		}
 		if err := d.sendDelivery(ctx, item); err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
+			processed++
 			if d.logger != nil {
 				d.logger.WarnContext(ctx, "dispatch outbox delivery", "event_id", item.event.ID, "error", err)
 			}
+			// Stop at the first broker failure. This keeps one unhealthy broker
+			// from consuming the full claimed batch timeout budget.
+			d.releaseClaims(ctx, claimed[index+1:])
+			return processed, err
+		}
+		processed++
+	}
+	return processed, nil
+}
+
+var errLeadershipLost = errors.New("outbox dispatcher leadership lost")
+
+func (d *Dispatcher) releaseClaims(ctx context.Context, claimed []claimedDelivery) {
+	if len(claimed) == 0 {
+		return
+	}
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	for _, item := range claimed {
+		delivery := item.delivery
+		if delivery.LeaseToken == nil {
+			continue
+		}
+		if err := d.db.WithContext(releaseCtx).Model(&Delivery{}).
+			Where("event_id = ? AND transport = ? AND destination = ? AND status = 'sending' AND lease_token = ?", delivery.EventID, delivery.Transport, delivery.Destination, delivery.LeaseToken).
+			Updates(map[string]any{"status": "pending", "lease_until": nil, "lease_token": nil}).Error; err != nil && d.logger != nil {
+			d.logger.Warn("release unprocessed outbox claim", "event_id", delivery.EventID, "error", err)
 		}
 	}
-	return len(claimed), firstErr
+}
+
+func (d *Dispatcher) pollBounds() (time.Duration, time.Duration) {
+	minimum := d.config.PollInterval
+	if minimum <= 0 {
+		minimum = time.Second
+	}
+	maximum := d.config.MaxPollInterval
+	if maximum < minimum {
+		maximum = minimum
+	}
+	return minimum, maximum
+}
+
+func (d *Dispatcher) scanContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := d.config.ScanTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+type pollWaitResult uint8
+
+const (
+	pollWaitElapsed pollWaitResult = iota
+	pollWaitNotified
+	pollWaitCanceled
+	pollWaitLeadershipLost
+	pollWaitChannelClosed
+)
+
+func waitForPoll(ctx context.Context, lost, wakeups <-chan struct{}, delay time.Duration) pollWaitResult {
+	if delay <= 0 {
+		delay = time.Millisecond
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return pollWaitCanceled
+	case <-lost:
+		return pollWaitLeadershipLost
+	case _, ok := <-wakeups:
+		if !ok {
+			return pollWaitChannelClosed
+		}
+		return pollWaitNotified
+	case <-timer.C:
+		return pollWaitElapsed
+	}
+}
+
+func nextPollInterval(current, minimum, maximum time.Duration) time.Duration {
+	if current < minimum {
+		return minimum
+	}
+	if current >= maximum/2 {
+		return maximum
+	}
+	return minDuration(current*2, maximum)
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func jitterDown(delay, minimum time.Duration) time.Duration {
+	if delay <= minimum {
+		return delay
+	}
+	spread := minDuration(delay/5, delay-minimum)
+	return delay - time.Duration(rand.Float64()*float64(spread))
 }
 
 type claimedDelivery struct {
@@ -198,7 +383,9 @@ type claimedDelivery struct {
 }
 
 func (d *Dispatcher) prepareDeliveries(ctx context.Context) error {
-	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	scanCtx, cancel := d.scanContext(ctx)
+	defer cancel()
+	return d.db.WithContext(scanCtx).Transaction(func(tx *gorm.DB) error {
 		if err := ensureLegacyDeliveries(tx, d.aiEnabled); err != nil {
 			return err
 		}
@@ -212,25 +399,68 @@ func (d *Dispatcher) prepareDeliveries(ctx context.Context) error {
 		if _, err := RecoverPublishedBatch(tx, now, 15*time.Minute, d.config.BatchSize, d.aiEnabled, d.searchEnabled); err != nil {
 			return err
 		}
-		// Pin GC eligibility once. Retries, restarts and config changes never
-		// move a persisted deadline earlier or start a fresh delay.
-		if err := tx.Exec(`UPDATE outbox_deliveries d SET not_before =
-          CASE WHEN d.destination IN ('object.gc.v1@maintenance', 'object.gc_requested.v1@maintenance')
-          THEN GREATEST(e.available_at, e.created_at + (? * interval '1 millisecond'))
-          ELSE e.available_at END
-          FROM outbox_events e WHERE d.event_id=e.id AND d.transport='rabbitmq' AND d.not_before IS NULL`, d.config.GCDelay.Milliseconds()).Error; err != nil {
+		if err := pinDeliveryDeadlines(tx, d.config.GCDelay); err != nil {
 			return err
 		}
 		return reportUnroutedEvents(ctx, tx, d.logger, d.aiEnabled, d.metrics)
 	})
 }
 
+// prepareDeliveriesForDispatch keeps compatibility repair and recovery out of
+// the per-batch hot path. A successful full pass is repeated at most once per
+// fallback interval; new rows still get their one-time eligibility deadline
+// pinned on every batch so a notification can be claimed immediately.
+func (d *Dispatcher) prepareDeliveriesForDispatch(ctx context.Context) error {
+	_, interval := d.pollBounds()
+	d.preparationMu.Lock()
+	defer d.preparationMu.Unlock()
+	if !d.preparedAt.IsZero() && time.Since(d.preparedAt) < interval {
+		return d.pinPendingDeliveryDeadlines(ctx)
+	}
+	if err := d.prepareDeliveries(ctx); err != nil {
+		return err
+	}
+	// Advance only after the transaction commits; failures remain immediately
+	// retryable under the dispatch error backoff.
+	d.preparedAt = time.Now()
+	return nil
+}
+
+func (d *Dispatcher) invalidatePreparation() {
+	d.preparationMu.Lock()
+	d.preparedAt = time.Time{}
+	d.preparationMu.Unlock()
+}
+
+func (d *Dispatcher) pinPendingDeliveryDeadlines(ctx context.Context) error {
+	scanCtx, cancel := d.scanContext(ctx)
+	defer cancel()
+	return pinDeliveryDeadlines(d.db.WithContext(scanCtx), d.config.GCDelay)
+}
+
+func pinDeliveryDeadlines(tx *gorm.DB, gcDelay time.Duration) error {
+	// not_before is write-once. Restrict the update to active RabbitMQ rows so
+	// the partial due-delivery index can exclude historical published rows.
+	return tx.Exec(`UPDATE outbox_deliveries d SET not_before =
+      CASE WHEN d.destination IN ('object.gc.v1@maintenance', 'object.gc_requested.v1@maintenance')
+      THEN GREATEST(e.available_at, e.created_at + (? * interval '1 millisecond'))
+      ELSE e.available_at END
+      FROM outbox_events e
+      WHERE d.event_id=e.id AND d.transport='rabbitmq'
+        AND d.status IN ('pending','failed','sending') AND d.not_before IS NULL`, gcDelay.Milliseconds()).Error
+}
+
 // claimDeliveries 只持有数据库锁，不在事务中访问 Redis。
 func (d *Dispatcher) claimDeliveries(ctx context.Context) ([]claimedDelivery, error) {
+	scanCtx, cancel := d.scanContext(ctx)
+	defer cancel()
 	items := make([]claimedDelivery, 0, d.config.BatchSize)
 	recovered := 0
-	err := d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		now := time.Now().UTC()
+	err := d.db.WithContext(scanCtx).Transaction(func(tx *gorm.DB) error {
+		var now time.Time
+		if err := tx.Raw("SELECT clock_timestamp()").Scan(&now).Error; err != nil {
+			return err
+		}
 		var deliveries []Delivery
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
 			Where("transport = 'rabbitmq' AND not_before <= ? AND ((status IN ? AND available_at <= ?) OR (status = 'sending' AND lease_until <= ?))", now, []string{"pending", "failed"}, now, now).
@@ -285,15 +515,19 @@ func (d *Dispatcher) claimDeliveries(ctx context.Context) ([]claimedDelivery, er
 
 func (d *Dispatcher) sendDelivery(ctx context.Context, item claimedDelivery) error {
 	delivery, event := item.delivery, item.event
+	if err := ctx.Err(); err != nil {
+		d.releaseClaims(ctx, []claimedDelivery{item})
+		return err
+	}
 	target, ok := targetFromDelivery(delivery)
 	if !ok {
-		return d.failDelivery(delivery, "unsupported delivery transport or destination")
+		return d.failDeliveryContext(ctx, delivery, "unsupported delivery transport or destination")
 	}
 	if target.Queue == "ai" && !d.aiEnabled {
-		return d.ackDelivery(delivery, event)
+		return d.ackDeliveryContext(ctx, delivery, event)
 	}
 	if target, ok = targetAllowedForEventWithSearch(event.EventType, d.aiEnabled, d.searchEnabled, delivery); !ok {
-		return d.failDelivery(delivery, "unsupported delivery transport or destination")
+		return d.failDeliveryContext(ctx, delivery, "unsupported delivery transport or destination")
 	}
 	payload := payloadWithTrace(event, d.logger)
 	maxRetry, timeout := d.config.MaxRetry, d.config.TaskTimeout
@@ -305,13 +539,23 @@ func (d *Dispatcher) sendDelivery(ctx context.Context, item claimedDelivery) err
 	}
 	err := d.client.Publish(ctx, taskqueue.Task{ID: event.ID.String() + ":" + target.Destination, Kind: target.TaskType, Queue: target.Queue, Body: payload, RetryCount: delivery.TaskRetryCount, MaxRetry: maxRetry, Timeout: timeout})
 	if err != nil {
-		return d.failDelivery(delivery, err.Error())
+		if ctx.Err() != nil {
+			d.releaseClaims(ctx, []claimedDelivery{item})
+			return ctx.Err()
+		}
+		return d.failDeliveryContext(ctx, delivery, err.Error())
 	}
-	return d.ackDelivery(delivery, event)
+	return d.ackDeliveryContext(ctx, delivery, event)
 }
 
 func (d *Dispatcher) ackDelivery(delivery Delivery, event Event) error {
-	err := d.db.Transaction(func(tx *gorm.DB) error {
+	return d.ackDeliveryContext(context.Background(), delivery, event)
+}
+
+func (d *Dispatcher) ackDeliveryContext(ctx context.Context, delivery Delivery, event Event) error {
+	ackCtx, cancel := d.scanContext(context.WithoutCancel(ctx))
+	defer cancel()
+	err := d.db.WithContext(ackCtx).Transaction(func(tx *gorm.DB) error {
 		if err := d.markPublished(tx, delivery, time.Now().UTC()); err != nil {
 			return err
 		}
@@ -321,15 +565,31 @@ func (d *Dispatcher) ackDelivery(delivery Delivery, event Event) error {
 		return nil
 	}
 	// ACK 失败后释放 claim，下一轮可用稳定 TaskID 重试。
-	_ = d.db.Model(&Delivery{}).Where("event_id = ? AND transport = ? AND destination = ? AND status = 'sending' AND lease_token = ?", delivery.EventID, delivery.Transport, delivery.Destination, delivery.LeaseToken).
-		Updates(map[string]any{"status": "pending", "available_at": time.Now().UTC(), "lease_until": nil, "lease_token": nil}).Error
+	ackCtx = context.WithoutCancel(ackCtx)
+	d.releaseClaims(ackCtx, []claimedDelivery{{delivery: delivery}})
 	return err
 }
 
 func (d *Dispatcher) failDelivery(delivery Delivery, message string) error {
-	err := d.db.Model(&Delivery{}).
+	return d.failDeliveryContext(context.Background(), delivery, message)
+}
+
+func (d *Dispatcher) failDeliveryContext(ctx context.Context, delivery Delivery, message string) error {
+	if err := ctx.Err(); err != nil {
+		d.releaseClaims(ctx, []claimedDelivery{{delivery: delivery}})
+		return err
+	}
+	scanCtx, cancel := d.scanContext(ctx)
+	defer cancel()
+	delay := backoff(delivery.Attempt)
+	err := d.db.WithContext(scanCtx).Model(&Delivery{}).
 		Where("event_id = ? AND transport = ? AND destination = ? AND status = 'sending' AND lease_token = ?", delivery.EventID, delivery.Transport, delivery.Destination, delivery.LeaseToken).
-		Updates(map[string]any{"status": "failed", "available_at": time.Now().UTC().Add(backoff(delivery.Attempt)), "lease_until": nil, "lease_token": nil, "last_error": message}).Error
+		Updates(map[string]any{"status": "failed", "available_at": gorm.Expr("clock_timestamp() + (? * interval '1 millisecond')", delay.Milliseconds()), "lease_until": nil, "lease_token": nil, "last_error": message}).Error
+	if err != nil {
+		// The status write may have timed out before reaching PostgreSQL. A
+		// token-fenced release avoids holding this claim until its lease expires.
+		d.releaseClaims(scanCtx, []claimedDelivery{{delivery: delivery}})
+	}
 	return errors.Join(errors.New(message), err)
 }
 

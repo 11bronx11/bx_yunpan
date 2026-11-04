@@ -35,8 +35,16 @@ docker_registry=${DOCKER_REGISTRY:-$(env_value DOCKER_REGISTRY)}
 docker_registry=${docker_registry:-docker.io}
 go_version=${GO_VERSION:-$(env_value GO_VERSION)}
 go_version=${go_version:-1.25.13}
+ubuntu_version=${UBUNTU_VERSION:-$(env_value UBUNTU_VERSION)}
+ubuntu_version=${ubuntu_version:-24.04}
+ubuntu_mirror=${UBUNTU_MIRROR:-$(env_value UBUNTU_MIRROR)}
+ubuntu_mirror=${ubuntu_mirror:-http://mirrors.aliyun.com/ubuntu-ports/}
+parser_python_index=${PARSER_PYTHON_INDEX:-$(env_value PARSER_PYTHON_INDEX)}
+parser_python_index=${parser_python_index:-https://mirrors.aliyun.com/pypi/simple}
 go_proxy=${GO_PROXY:-$(env_value GO_PROXY)}
 go_proxy=${go_proxy:-https://proxy.golang.org,direct}
+parser_go_proxy=${PARSER_GO_PROXY:-$(env_value PARSER_GO_PROXY)}
+parser_go_proxy=${parser_go_proxy:-https://goproxy.cn,direct}
 node_version=${NODE_VERSION:-$(env_value NODE_VERSION)}
 node_version=${node_version:-22.23.0}
 go_build_parallelism=${GO_BUILD_PARALLELISM:-$(env_value GO_BUILD_PARALLELISM)}
@@ -66,11 +74,11 @@ done
 
 targets=("$@")
 if ((${#targets[@]} == 0)); then
-  targets=(migrate api worker aisvc web)
+	targets=(migrate api worker aisvc parser-svc web)
 fi
 for target in "${targets[@]}"; do
   case "$target" in
-    migrate|migrate-asynq|api|worker|aisvc|outbox-relay|object-worker|media-worker|maintenance-worker|search-indexer|web) ;;
+		migrate|migrate-asynq|api|worker|aisvc|parser-svc|outbox-relay|object-worker|media-worker|maintenance-worker|search-indexer|web) ;;
     *) echo "Unsupported build target: $target" >&2; exit 2 ;;
   esac
 done
@@ -103,6 +111,15 @@ for target in "${targets[@]}"; do
       --tag "bx-yunpan-web:$image_tag" \
       "$root_dir/web"
   else
+    dockerfile="$root_dir/backend/Dockerfile"
+    target_build_args=()
+    if [[ "$target" == parser-svc ]]; then
+      dockerfile="$root_dir/backend/Dockerfile.parser"
+      target_build_args+=(--build-arg "UBUNTU_VERSION=$ubuntu_version")
+      target_build_args+=(--build-arg "UBUNTU_MIRROR=$ubuntu_mirror")
+      target_build_args+=(--build-arg "GO_PROXY=$parser_go_proxy")
+      target_build_args+=(--build-arg "PYTHON_PACKAGE_INDEX=$parser_python_index")
+    fi
     docker build "${build_limits[@]}" \
       --build-arg "DOCKER_REGISTRY=$docker_registry" \
       --build-arg "GO_VERSION=$go_version" \
@@ -110,7 +127,9 @@ for target in "${targets[@]}"; do
       --build-arg "GO_BUILD_PARALLELISM=$go_build_parallelism" \
       --build-arg "GO_BUILD_MAX_PROCS=$go_build_max_procs" \
       --build-arg "TARGET=$target" \
+      "${target_build_args[@]}" \
       --tag "bx-yunpan-$target:$image_tag" \
+      -f "$dockerfile" \
       "$root_dir/backend"
   fi
 done

@@ -113,8 +113,8 @@ func (l *RedisLock) Held() bool { return l.token != "" }
 // Watchdog 在后台按 ttl/3 的间隔续期，直到 ctx 结束或续期失败。
 // 失败时关闭返回的 channel，通知调用方立刻退出临界区。
 //
-// 间隔取 ttl/3 而不是 ttl/2：留出至少两次重试机会，一次网络抖动不会
-// 直接丢锁。
+// 间隔取 ttl/3 而不是 ttl/2，为续期和关闭临界区留出时间。任何一次续期
+// 失败都会 fail closed；短暂 Redis 故障可能让本实例暂时退出领导者状态。
 func (l *RedisLock) Watchdog(ctx context.Context, logger *slog.Logger) <-chan struct{} {
 	lost := make(chan struct{})
 	interval := l.ttl / 3

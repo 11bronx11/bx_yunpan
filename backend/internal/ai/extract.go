@@ -23,8 +23,10 @@ import (
 )
 
 var (
-	errUnsupported  = errors.New("unsupported file type")
-	errInvalidInput = errors.New("invalid file content")
+	errUnsupported    = errors.New("unsupported file type")
+	errInvalidInput   = errors.New("invalid file content")
+	errResourceLimit  = errors.New("document resource limit exceeded")
+	errQualityFailure = errors.New("document parse quality failure")
 )
 
 const (
@@ -41,11 +43,17 @@ type extractedSection = rag.Section
 type chunkInput = rag.Chunk
 
 func extract(ctx context.Context, provider Provider, mimeType string, data []byte) ([]extractedSection, error) {
+	return extractWithLimits(ctx, provider, mimeType, data, 0, 0)
+}
+
+func extractWithLimits(ctx context.Context, provider Provider, mimeType string, data []byte, pageLimit int, pixelLimit int64) ([]extractedSection, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
 	}
+	pageLimit = effectivePageLimit(pageLimit)
+	pixelLimit = effectivePixelLimit(pixelLimit)
 	mimeType = strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0]))
 	switch mimeType {
 	case "text/plain", "text/markdown", "text/x-markdown", "application/json", "text/csv",
@@ -56,27 +64,43 @@ func extract(ctx context.Context, provider Provider, mimeType string, data []byt
 		if err != nil {
 			return nil, fmt.Errorf("%w: text is not valid UTF-8 or GB18030", errInvalidInput)
 		}
+		if mimeType == "text/csv" {
+			return []extractedSection{{Text: text, Kind: rag.KindTable}}, nil
+		}
 		return []extractedSection{{Text: text}}, nil
 	case "application/pdf":
-		return extractPDF(data)
+		return extractPDFWithLimit(data, pageLimit)
 	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
 		return extractDOCX(data)
 	case "image/jpeg", "image/png":
 		if len(data) > maxVisionImageBytes {
-			return nil, fmt.Errorf("%w: image exceeds AI size limit", errUnsupported)
+			return nil, fmt.Errorf("%w: image exceeds size limit", errResourceLimit)
 		}
-		optimizedMimeType, optimizedData, err := prepareVisionImage(mimeType, data)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %v", errInvalidInput, err)
-		}
-		text, err := provider.ExtractImage(ctx, optimizedMimeType, optimizedData)
-		if err != nil {
-			return nil, err
-		}
-		return []extractedSection{{Text: text, Section: "image OCR and visual description"}}, nil
+		return nil, errUnsupported
 	default:
 		return nil, errUnsupported
 	}
+}
+
+func extractVisionSummary(ctx context.Context, provider Provider, mimeType string, data []byte, pixelLimit int64) ([]extractedSection, error) {
+	if len(data) > maxVisionImageBytes {
+		return nil, fmt.Errorf("%w: image exceeds size limit", errResourceLimit)
+	}
+	optimizedMimeType, optimizedData, err := prepareVisionImageWithPixelLimit(mimeType, data, pixelLimit)
+	if err != nil {
+		if errors.Is(err, errResourceLimit) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %v", errInvalidInput, err)
+	}
+	text, err := provider.ExtractImage(ctx, optimizedMimeType, optimizedData)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(text) == "" {
+		return nil, fmt.Errorf("%w: image produced no text", errQualityFailure)
+	}
+	return []extractedSection{{Text: text, Kind: rag.KindVisionSummary, SourceKind: rag.SourceKindCloudVision, Section: "cloud vision summary"}}, nil
 }
 
 func decodeText(data []byte) (string, error) {
@@ -126,11 +150,19 @@ func isSourceTextFileName(name string) bool {
 }
 
 func prepareVisionImage(mimeType string, data []byte) (string, []byte, error) {
+	return prepareVisionImageWithPixelLimit(mimeType, data, maxVisionSourcePixels)
+}
+
+func prepareVisionImageWithPixelLimit(mimeType string, data []byte, pixelLimit int64) (string, []byte, error) {
+	pixelLimit = effectivePixelLimit(pixelLimit)
 	config, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return "", nil, errors.New("decode image metadata")
 	}
-	if config.Width <= 0 || config.Height <= 0 || int64(config.Width)*int64(config.Height) > maxVisionSourcePixels {
+	if pixelLimitExceeded(config.Width, config.Height, pixelLimit) {
+		if config.Width > 0 && config.Height > 0 {
+			return "", nil, fmt.Errorf("%w: image exceeds pixel limit", errResourceLimit)
+		}
 		return "", nil, errors.New("invalid image dimensions")
 	}
 	if config.Width <= maxVisionEdge && config.Height <= maxVisionEdge && len(data) <= visionReencodeBytes {
@@ -182,13 +214,21 @@ func maxInt(left, right int) int {
 }
 
 func extractPDF(data []byte) ([]extractedSection, error) {
+	return extractPDFWithLimit(data, maxPDFPages)
+}
+
+func extractPDFWithLimit(data []byte, pageLimit int) ([]extractedSection, error) {
+	pageLimit = effectivePageLimit(pageLimit)
 	reader, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, fmt.Errorf("%w: open PDF: %v", errInvalidInput, err)
 	}
 	pages := reader.NumPage()
-	if pages <= 0 || pages > maxPDFPages {
+	if pages <= 0 {
 		return nil, fmt.Errorf("%w: invalid PDF page count", errInvalidInput)
+	}
+	if pages > pageLimit {
+		return nil, fmt.Errorf("%w: PDF page limit exceeded", errResourceLimit)
 	}
 	fonts := make(map[string]*pdf.Font)
 	sections := make([]extractedSection, 0, pages)
@@ -211,15 +251,37 @@ func extractPDF(data []byte) ([]extractedSection, error) {
 		}
 		totalBytes += len(text)
 		if totalBytes > maxExtractedTextBytes {
-			return nil, fmt.Errorf("%w: PDF extracted text is too large", errInvalidInput)
+			return nil, fmt.Errorf("%w: PDF extracted text is too large", errResourceLimit)
 		}
 		pageValue := pageNumber
 		sections = append(sections, extractedSection{Text: text, PageNumber: &pageValue, Section: "PDF text layer"})
 	}
 	if len(sections) == 0 {
-		return nil, fmt.Errorf("%w: PDF has no extractable text", errInvalidInput)
+		return nil, fmt.Errorf("%w: PDF has no extractable text", errQualityFailure)
 	}
 	return sections, nil
+}
+
+func effectivePageLimit(limit int) int {
+	if limit <= 0 || limit > maxPDFPages {
+		return maxPDFPages
+	}
+	return limit
+}
+
+func effectivePixelLimit(limit int64) int64 {
+	if limit <= 0 || limit > maxVisionSourcePixels {
+		return maxVisionSourcePixels
+	}
+	return limit
+}
+
+func pixelLimitExceeded(width, height int, limit int64) bool {
+	if width <= 0 || height <= 0 || limit <= 0 {
+		return true
+	}
+	height64 := int64(height)
+	return height64 > limit || int64(width) > limit/height64
 }
 
 func extractDOCX(data []byte) ([]extractedSection, error) {
@@ -232,7 +294,7 @@ func extractDOCX(data []byte) ([]extractedSection, error) {
 			continue
 		}
 		if file.UncompressedSize64 > maxExtractedTextBytes {
-			return nil, fmt.Errorf("%w: DOCX document XML is too large", errInvalidInput)
+			return nil, fmt.Errorf("%w: DOCX document XML is too large", errResourceLimit)
 		}
 		stream, err := file.Open()
 		if err != nil {

@@ -18,6 +18,97 @@ service AIService {
   rpc Reprocess(ReprocessRequest) returns (ReprocessResponse);
 }
 
+// DocumentParserService isolates CPU and memory intensive document parsing
+// from the AI indexer. Its instances are discovered independently from AIService.
+service DocumentParserService {
+  rpc ParseDocument(ParseDocumentRequest) returns (ParseDocumentResponse);
+}
+
+message ParseDocumentRequest {
+  string run_id = 1;
+  string object_id = 2;
+  string document_version_id = 3;
+  string content_hash = 4;
+  string media_type = 5;
+  bytes content = 6;
+  string parser_profile_version = 7;
+  int64 size_limit_bytes = 8;
+  int32 page_limit = 9;
+  int64 pixel_limit = 10;
+  string trace_id = 11;
+  int32 chunk_token_budget = 12;
+  int32 chunk_overlap_tokens = 13;
+  int32 max_chunks = 14;
+  string chunker_version = 15;
+  string tokenizer_id = 16;
+}
+
+message ParseDocumentResponse {
+  string artifact_uri = 1;
+  string artifact_hash = 2;
+  string parser_id = 3;
+  string parser_version = 4;
+  string language = 5;
+  int32 page_count = 6;
+  int32 block_count = 7;
+  repeated ParsedSection sections = 8;
+  ParseQuality quality = 9;
+  repeated string warnings = 10;
+  repeated ParsedChunk chunks = 11;
+  string chunker_version = 12;
+  string tokenizer_id = 13;
+  bool chunks_truncated = 14;
+}
+
+message ParsedSection {
+  string text = 1;
+  int32 page_number = 2;
+  string section = 3;
+  string kind = 4;
+  string heading_path = 5;
+  int32 slide_number = 6;
+  string sheet_name = 7;
+  int32 row_start = 8;
+  int32 row_end = 9;
+  int32 column_start = 10;
+  int32 column_end = 11;
+  int64 source_start = 12;
+  int64 source_end = 13;
+  bool has_header = 14;
+  repeated string merged_ranges = 15;
+  string encoding = 16;
+  int32 page_end = 17;
+  string source_kind = 18;
+}
+
+message ParsedChunk {
+  string content = 1;
+  string kind = 2;
+  string heading_path = 3;
+  int32 page_start = 4;
+  int32 page_end = 5;
+  int32 slide_number = 6;
+  string sheet_name = 7;
+  int32 row_start = 8;
+  int32 row_end = 9;
+  int32 column_start = 10;
+  int32 column_end = 11;
+  int64 source_start = 12;
+  int64 source_end = 13;
+  int32 estimated_token_count = 14;
+  bool token_count_is_estimate = 15;
+  repeated string merged_ranges = 16;
+  string encoding = 17;
+  string source_kind = 18;
+}
+
+message ParseQuality {
+  int32 text_bytes = 1;
+  double text_density = 2;
+  double empty_page_ratio = 3;
+  int32 replacement_runes = 4;
+}
+
 message SearchRequest {
   string owner_id = 1;
   string query = 2;

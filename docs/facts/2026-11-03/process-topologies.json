@@ -1,0 +1,2357 @@
+{
+  "generated_at": "2026-11-03T11:14:38.169150+00:00",
+  "commit": "ef0fc2362a286976848c8bf3640113f841cd6473",
+  "method": "Execute an unchanged copy of up.sh with a fake docker executable and synthetic .env in a temporary directory. Expand the real Compose file via read-only docker compose config, then apply captured explicit service selection, dependency closure and scale overrides. No Docker daemon query, container creation or real .env read.",
+  "counting": "Sum configured long-running container instances; one Go business executable per Go service instance. Excludes exited initialization jobs, init helpers, middleware child processes and browser processes.",
+  "compose_version": "2.40.3+ds1-0ubuntu1~24.04.1",
+  "source_files": [
+    {
+      "path": "backend/Dockerfile",
+      "sha256": "41e025ead9261b76fae19a076b97b477fea8bccfc07292bbd550eafe2a0d8aec"
+    },
+    {
+      "path": "backend/internal/ai/grpcclient/client.go",
+      "sha256": "e6da7fa3c89fdfed5a111b41084c81d5918ad22f2a34c08c77f159644b49cfd4"
+    },
+    {
+      "path": "backend/internal/ai/http.go",
+      "sha256": "feb7c4bba5b999780264af44e9bafb64430f2f8cffb832cad5e460c102a1104d"
+    },
+    {
+      "path": "backend/internal/ai/parser_builtin.go",
+      "sha256": "dd861d23a68104ad13cc7c5d5692400ce337d53bbc1c92ce7235d2f8fd6ff7bd"
+    },
+    {
+      "path": "backend/internal/ai/search.go",
+      "sha256": "a38523cbfeff073265864b833b95686fb00859f52472ee642984f418982958f4"
+    },
+    {
+      "path": "backend/internal/ai/service.go",
+      "sha256": "99e90306c72ba30166a7b31a75fabb79417024ebe10e7f4fa66e5c337e7476d1"
+    },
+    {
+      "path": "backend/internal/ai/tasks.go",
+      "sha256": "001f2eabbf358c804a2ac5e24c2bbff985180f9efab53befa5ec87236d03843c"
+    },
+    {
+      "path": "backend/internal/ai/tracing.go",
+      "sha256": "81b3850ef6f35638424547f9a45fcac8fbcd55542f709a905e8520056e567617"
+    },
+    {
+      "path": "backend/internal/bootstrap/aisvc.go",
+      "sha256": "fa2e0b46afcdcce44e2b1c366d074f99a1dec39c31a2cb225edb30ff69099d44"
+    },
+    {
+      "path": "backend/internal/bootstrap/api.go",
+      "sha256": "70b9b3dad07fe4755851f02700d62f0c8990013e01078aeb3f916447ec3405eb"
+    },
+    {
+      "path": "backend/internal/bootstrap/roles.go",
+      "sha256": "10332bfe3702a1142e384312e51ba43ea7172c02a5a0362e68438ed832277aca"
+    },
+    {
+      "path": "backend/internal/bootstrap/worker.go",
+      "sha256": "e13c143ef9594063df52337e26f06fb1ce43b398532fc1ee72f98976732091b4"
+    },
+    {
+      "path": "backend/internal/drive/files.go",
+      "sha256": "ab2777809022bd3ae523da4c8af4c6aff071ef355bb49d4c95f440f4ca9071cf"
+    },
+    {
+      "path": "backend/internal/drive/service.go",
+      "sha256": "f5b0af49fb22c8dd4de209ba3ae8f3348195714e897e2761facb9b5fb84930d6"
+    },
+    {
+      "path": "backend/internal/identity/service.go",
+      "sha256": "d6ad7fa7d9d032d6e9193aef079094d88cb64f318ef2a69f7898b25043e86c28"
+    },
+    {
+      "path": "backend/internal/media/service.go",
+      "sha256": "850bc4326284cdb4d0e63d6ba2fcd598b90fa71f862ca9428d3a1f3eb1d21bd7"
+    },
+    {
+      "path": "backend/internal/objectstore/service.go",
+      "sha256": "5513c91b16a2fdb2c14eefd44c7cfa8dd1ce2cd0d0cdaa0ec2d9df402cb536e0"
+    },
+    {
+      "path": "backend/internal/outbox/dispatcher.go",
+      "sha256": "56128b9617c0db5d107650c99108abc535f1e85969bfaed6692028d78dd9374c"
+    },
+    {
+      "path": "backend/internal/outbox/routes.go",
+      "sha256": "ddb29931d3a4ffd9a0b768c16b3c0950f6644a7f2a29daada8404f036041358c"
+    },
+    {
+      "path": "backend/internal/platform/config/config.go",
+      "sha256": "617f2329fe66d17e13d57923beda22f830d4624b3eae1602e1ee58d618f755da"
+    },
+    {
+      "path": "backend/internal/platform/dependencies/dependencies.go",
+      "sha256": "5142335c00e4a6bd7542f521e25fe30081b7c5b86c46baa4f18d35a8b19da258"
+    },
+    {
+      "path": "backend/internal/platform/registry/resolver.go",
+      "sha256": "c75ba03dfa47cc8b39fcdc7388db417c8d77899966591b2d709b5d0cdadbd44c"
+    },
+    {
+      "path": "backend/internal/platform/storageurl/presigner.go",
+      "sha256": "0b6fb485208b9c7f9bf1056f431a7b66451dcaabcd9fb401b5a874d96162444e"
+    },
+    {
+      "path": "backend/internal/platform/tracing/tracing.go",
+      "sha256": "e16a640193e25cbb5e7c57270ec6789f6cb5d6b2ded6f53d5707ecb5881c79a1"
+    },
+    {
+      "path": "backend/internal/platform/worker/role.go",
+      "sha256": "c7a787f09647e44fb458ca7efda79f0c00e943e6a40d53e2fbafd5047f9d0818"
+    },
+    {
+      "path": "backend/internal/platform/worker/server.go",
+      "sha256": "d20cace6b905d7690c07da63047778564c0bd67151758bbbf75947672fb62dac"
+    },
+    {
+      "path": "backend/internal/sharing/service.go",
+      "sha256": "02c01c07870485cfbb6ba47656ac6bb6c973c53bb11ddd28306443dd2af4b2ad"
+    },
+    {
+      "path": "backend/internal/storageops/operations.go",
+      "sha256": "20949dff0eca8ae7ab4d5a7679da2a52482c94faf90639591da8692ea6cc3c35"
+    },
+    {
+      "path": "backend/internal/taskqueue/execution.go",
+      "sha256": "774b3e9ef05e3d345e91e87739335db92fe1c89f3908fcb0bfb64b7e2ce2bbbe"
+    },
+    {
+      "path": "backend/internal/taskqueue/taskqueue.go",
+      "sha256": "429f845f91ca37f56b6a1d3cebe0a5ff70d45c07470bd16f16501e5948a58349"
+    },
+    {
+      "path": "backend/internal/taskqueue/timeout.go",
+      "sha256": "f7c075aa9d50b1f687fa07c1f9c5d25bde35b647cc41c917ce8a2e2bbfc476de"
+    },
+    {
+      "path": "backend/internal/upload/service.go",
+      "sha256": "b4c3281fe2d04e13b93175a1f852e57ff0c5c9488365978662b8538a5356e252"
+    },
+    {
+      "path": "deploy/.env.example",
+      "sha256": "af460d9288b6adee4d71824ce6d99730a29f2713a6c0e1c4fa9aaabe308e226d"
+    },
+    {
+      "path": "deploy/.env.no-ai.example",
+      "sha256": "4a55da0602e06ecaac934137a448ed1760608c5125514502170cbb0320b72c02"
+    },
+    {
+      "path": "deploy/build.sh",
+      "sha256": "d145aa0628b8fa6943ef47c6309920f3b3eaf851bb0c814d942ef437fc01dda6"
+    },
+    {
+      "path": "deploy/compose.staging.yaml",
+      "sha256": "2ae2c540053e67bc055c91f762dca73a6e779697345e011e4098d315c76836eb"
+    },
+    {
+      "path": "deploy/compose.yaml",
+      "sha256": "c66de64324855dd0d113886ada6702d90189e4f5017c49b80ceb7af5eb47084b"
+    },
+    {
+      "path": "deploy/infra-up.sh",
+      "sha256": "0a1ac68b1da8d1da258c003dc45a5b75c9c32344762832e14f69cc64bc55b120"
+    },
+    {
+      "path": "deploy/init-env.sh",
+      "sha256": "3b32a78e61c63a13b5f77bbcda9283878d17b56b32c15ab264c2deb609fc8dbe"
+    },
+    {
+      "path": "deploy/local-env.sh",
+      "sha256": "145a032f5e82e4bf97b9f577fec5c514fbb4fbae426321d595ea865010aef26f"
+    },
+    {
+      "path": "deploy/local-frontend.sh",
+      "sha256": "8f0851c59a860f686e2a1584ff6fae63b346c88dc52c134322707cfa73c8dd2f"
+    },
+    {
+      "path": "deploy/local-run.sh",
+      "sha256": "4a11b36bf15c5b6287b4902a6d037a7e706fcbfbbc964de572a0ea692d415641"
+    },
+    {
+      "path": "deploy/otel/config.yaml",
+      "sha256": "022ab791b906908a558a587d36b5c8df8a4a90ffbe27183fe1a4919889b738c2"
+    },
+    {
+      "path": "deploy/prometheus/prometheus.yaml",
+      "sha256": "2fd375e9ae82e8ce95e4ce503b6a3372b0fe8b50e8f1e8045e449e1048f3d6ed"
+    },
+    {
+      "path": "deploy/up.sh",
+      "sha256": "f6d0e45b3f5071b5908bf4b822ed2c34248d5e107168f1cfa73c65c28b246e6b"
+    },
+    {
+      "path": "web/Dockerfile",
+      "sha256": "a8856e851573c2fe87db2afd244319c1db342c32f93b1c5a829cb8aa9e58bc8c"
+    },
+    {
+      "path": "web/nginx-app.conf",
+      "sha256": "b0c25d2e09cb1bc112a9199d129bc9395294fe3ed79c608c106a8351447e8d34"
+    },
+    {
+      "path": "web/src/services/drive.js",
+      "sha256": "16718870c556bb285eff247fb3d4801996b96a0fcf785fdffb583f136c7b470a"
+    },
+    {
+      "path": "web/src/setupProxy.js",
+      "sha256": "ba900936eb7dc7b20d616363049c610d0812bdf815b37818109887d3d57496c1"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "core_only",
+      "synthetic_config": {
+        "AI_ENABLED": "false",
+        "AI_PROVIDER": "fake"
+      },
+      "up_flags": [],
+      "profiles": [
+        "app"
+      ],
+      "runtime_overrides": {},
+      "explicit_targets": [],
+      "scale_overrides": {},
+      "services": {
+        "api": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "migrate": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "postgres"
+          ]
+        },
+        "minio": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "minio-init": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "minio"
+          ]
+        },
+        "postgres": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "rabbitmq": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "web": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": [
+            "api"
+          ]
+        },
+        "worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        }
+      },
+      "long_running_containers": 7,
+      "go_business_processes": 2,
+      "one_shot_containers": 2
+    },
+    {
+      "id": "default",
+      "synthetic_config": {
+        "AI_ENABLED": "true",
+        "AI_PROVIDER": "fake"
+      },
+      "up_flags": [],
+      "profiles": [
+        "app",
+        "ai"
+      ],
+      "runtime_overrides": {},
+      "explicit_targets": [],
+      "scale_overrides": {
+        "aisvc": 1
+      },
+      "services": {
+        "aisvc": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "etcd",
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "api": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "etcd": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "migrate": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "postgres"
+          ]
+        },
+        "minio": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "minio-init": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "minio"
+          ]
+        },
+        "postgres": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "rabbitmq": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "web": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": [
+            "api"
+          ]
+        },
+        "worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        }
+      },
+      "long_running_containers": 9,
+      "go_business_processes": 3,
+      "one_shot_containers": 2
+    },
+    {
+      "id": "api2_aisvc2",
+      "synthetic_config": {
+        "AI_ENABLED": "true",
+        "AI_PROVIDER": "fake"
+      },
+      "up_flags": [
+        "--api-replicas",
+        "2",
+        "--aisvc-replicas",
+        "2"
+      ],
+      "profiles": [
+        "app",
+        "ai"
+      ],
+      "runtime_overrides": {},
+      "explicit_targets": [],
+      "scale_overrides": {
+        "aisvc": 2,
+        "api": 2
+      },
+      "services": {
+        "aisvc": {
+          "replicas": 2,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "etcd",
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "api": {
+          "replicas": 2,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "etcd": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "migrate": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "postgres"
+          ]
+        },
+        "minio": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "minio-init": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "minio"
+          ]
+        },
+        "postgres": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "rabbitmq": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "web": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": [
+            "api"
+          ]
+        },
+        "worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        }
+      },
+      "long_running_containers": 11,
+      "go_business_processes": 5,
+      "one_shot_containers": 2
+    },
+    {
+      "id": "ai_split",
+      "synthetic_config": {
+        "AI_ENABLED": "true",
+        "AI_PROVIDER": "fake"
+      },
+      "up_flags": [
+        "--ai-split"
+      ],
+      "profiles": [
+        "app",
+        "ai-split"
+      ],
+      "runtime_overrides": {
+        "AISVC_GRPC_TARGET": "ai-query:8082"
+      },
+      "explicit_targets": [],
+      "scale_overrides": {
+        "ai-query": 1,
+        "ai-indexer": 1
+      },
+      "services": {
+        "ai-indexer": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "ai-query": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "etcd",
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "api": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "etcd": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "migrate": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "postgres"
+          ]
+        },
+        "minio": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "minio-init": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "minio"
+          ]
+        },
+        "postgres": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "rabbitmq": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "web": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": [
+            "api"
+          ]
+        },
+        "worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        }
+      },
+      "long_running_containers": 10,
+      "go_business_processes": 4,
+      "one_shot_containers": 2
+    },
+    {
+      "id": "distributed",
+      "synthetic_config": {
+        "AI_ENABLED": "true",
+        "AI_PROVIDER": "fake"
+      },
+      "up_flags": [
+        "--distributed-workers"
+      ],
+      "profiles": [
+        "app",
+        "ai",
+        "distributed"
+      ],
+      "runtime_overrides": {},
+      "explicit_targets": [
+        "migrate",
+        "api",
+        "web",
+        "outbox-relay",
+        "object-worker",
+        "media-worker",
+        "maintenance-worker",
+        "aisvc"
+      ],
+      "scale_overrides": {
+        "aisvc": 1
+      },
+      "services": {
+        "aisvc": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "etcd",
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "api": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "etcd": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "maintenance-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "media-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "migrate": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "postgres"
+          ]
+        },
+        "minio": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "minio-init": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "minio"
+          ]
+        },
+        "object-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "outbox-relay": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "postgres": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "rabbitmq": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "web": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": [
+            "api"
+          ]
+        }
+      },
+      "long_running_containers": 12,
+      "go_business_processes": 6,
+      "one_shot_containers": 2
+    },
+    {
+      "id": "distributed_ai_split",
+      "synthetic_config": {
+        "AI_ENABLED": "true",
+        "AI_PROVIDER": "fake"
+      },
+      "up_flags": [
+        "--distributed-workers",
+        "--ai-split"
+      ],
+      "profiles": [
+        "app",
+        "ai-split",
+        "distributed"
+      ],
+      "runtime_overrides": {
+        "AISVC_GRPC_TARGET": "ai-query:8082"
+      },
+      "explicit_targets": [
+        "migrate",
+        "api",
+        "web",
+        "outbox-relay",
+        "object-worker",
+        "media-worker",
+        "maintenance-worker",
+        "ai-query",
+        "ai-indexer"
+      ],
+      "scale_overrides": {
+        "ai-query": 1,
+        "ai-indexer": 1
+      },
+      "services": {
+        "ai-indexer": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "ai-query": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "etcd",
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "api": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "etcd": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "maintenance-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "media-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "migrate": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "postgres"
+          ]
+        },
+        "minio": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "minio-init": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "minio"
+          ]
+        },
+        "object-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "outbox-relay": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "postgres": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "rabbitmq": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "web": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": [
+            "api"
+          ]
+        }
+      },
+      "long_running_containers": 13,
+      "go_business_processes": 7,
+      "one_shot_containers": 2
+    },
+    {
+      "id": "distributed_ai_split_redis_split",
+      "synthetic_config": {
+        "AI_ENABLED": "true",
+        "AI_PROVIDER": "fake"
+      },
+      "up_flags": [
+        "--distributed-workers",
+        "--ai-split",
+        "--redis-split"
+      ],
+      "profiles": [
+        "app",
+        "ai-split",
+        "distributed",
+        "redis-split"
+      ],
+      "runtime_overrides": {
+        "REDIS_COORDINATION_ADDR": "redis-coordination:6379",
+        "REDIS_CACHE_ADDR": "redis-cache:6379",
+        "AISVC_GRPC_TARGET": "ai-query:8082"
+      },
+      "explicit_targets": [
+        "migrate",
+        "api",
+        "web",
+        "outbox-relay",
+        "object-worker",
+        "media-worker",
+        "maintenance-worker",
+        "ai-query",
+        "ai-indexer",
+        "redis-coordination",
+        "redis-cache"
+      ],
+      "scale_overrides": {
+        "ai-query": 1,
+        "ai-indexer": 1
+      },
+      "services": {
+        "ai-indexer": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "ai-query": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "etcd",
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "api": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "etcd": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "maintenance-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "media-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "migrate": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "postgres"
+          ]
+        },
+        "minio": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "minio-init": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "minio"
+          ]
+        },
+        "object-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "outbox-relay": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "postgres": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "rabbitmq": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis-cache": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis-coordination": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "web": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": [
+            "api"
+          ]
+        }
+      },
+      "long_running_containers": 15,
+      "go_business_processes": 7,
+      "one_shot_containers": 2
+    },
+    {
+      "id": "distributed_ai_split_search",
+      "synthetic_config": {
+        "AI_ENABLED": "true",
+        "AI_PROVIDER": "fake"
+      },
+      "up_flags": [
+        "--distributed-workers",
+        "--ai-split",
+        "--search-indexer"
+      ],
+      "profiles": [
+        "app",
+        "ai-split",
+        "distributed",
+        "search"
+      ],
+      "runtime_overrides": {
+        "AISVC_GRPC_TARGET": "ai-query:8082",
+        "SEARCH_INDEX_ENABLED": "true"
+      },
+      "explicit_targets": [
+        "migrate",
+        "api",
+        "web",
+        "outbox-relay",
+        "object-worker",
+        "media-worker",
+        "maintenance-worker",
+        "ai-query",
+        "ai-indexer",
+        "search-indexer"
+      ],
+      "scale_overrides": {
+        "ai-query": 1,
+        "ai-indexer": 1
+      },
+      "services": {
+        "ai-indexer": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "ai-query": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "etcd",
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "api": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "etcd": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "maintenance-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "media-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "migrate": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "postgres"
+          ]
+        },
+        "minio": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "minio-init": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "minio"
+          ]
+        },
+        "object-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "outbox-relay": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "postgres": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "rabbitmq": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "search-indexer": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "web": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": [
+            "api"
+          ]
+        }
+      },
+      "long_running_containers": 14,
+      "go_business_processes": 8,
+      "one_shot_containers": 2
+    },
+    {
+      "id": "distributed_ai_split_redis_search_external",
+      "synthetic_config": {
+        "AI_ENABLED": "true",
+        "AI_PROVIDER": "fake"
+      },
+      "up_flags": [
+        "--distributed-workers",
+        "--ai-split",
+        "--redis-split",
+        "--search-indexer",
+        "--search-backends"
+      ],
+      "profiles": [
+        "app",
+        "ai-split",
+        "distributed",
+        "redis-split",
+        "search",
+        "search-external"
+      ],
+      "runtime_overrides": {
+        "REDIS_COORDINATION_ADDR": "redis-coordination:6379",
+        "REDIS_CACHE_ADDR": "redis-cache:6379",
+        "AISVC_GRPC_TARGET": "ai-query:8082",
+        "SEARCH_INDEX_ENABLED": "true",
+        "SEARCH_WRITE_BACKENDS": "es_qdrant",
+        "SEARCH_ES_ENDPOINT": "http://elasticsearch:9200",
+        "SEARCH_QDRANT_ENDPOINT": "http://qdrant:6333"
+      },
+      "explicit_targets": [
+        "migrate",
+        "api",
+        "web",
+        "outbox-relay",
+        "object-worker",
+        "media-worker",
+        "maintenance-worker",
+        "ai-query",
+        "ai-indexer",
+        "redis-coordination",
+        "redis-cache",
+        "search-indexer",
+        "elasticsearch",
+        "qdrant"
+      ],
+      "scale_overrides": {
+        "ai-query": 1,
+        "ai-indexer": 1
+      },
+      "services": {
+        "ai-indexer": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "ai-query": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "etcd",
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "api": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "elasticsearch": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "etcd": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "maintenance-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "media-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "migrate": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "postgres"
+          ]
+        },
+        "minio": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "minio-init": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "minio"
+          ]
+        },
+        "object-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "outbox-relay": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "postgres": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "qdrant": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "rabbitmq": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis-cache": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis-coordination": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "search-indexer": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "web": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": [
+            "api"
+          ]
+        }
+      },
+      "long_running_containers": 18,
+      "go_business_processes": 8,
+      "one_shot_containers": 2
+    },
+    {
+      "id": "default_observability",
+      "synthetic_config": {
+        "AI_ENABLED": "true",
+        "AI_PROVIDER": "fake"
+      },
+      "up_flags": [
+        "--observability"
+      ],
+      "profiles": [
+        "app",
+        "ai",
+        "observability"
+      ],
+      "runtime_overrides": {},
+      "explicit_targets": [],
+      "scale_overrides": {
+        "aisvc": 1
+      },
+      "services": {
+        "aisvc": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "etcd",
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "api": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "etcd": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "grafana": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": [
+            "prometheus"
+          ]
+        },
+        "jaeger": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "migrate": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "postgres"
+          ]
+        },
+        "minio": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "minio-init": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "minio"
+          ]
+        },
+        "otel-collector": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": [
+            "jaeger"
+          ]
+        },
+        "postgres": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "prometheus": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "rabbitmq": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "web": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": [
+            "api"
+          ]
+        },
+        "worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        }
+      },
+      "long_running_containers": 13,
+      "go_business_processes": 3,
+      "one_shot_containers": 2
+    },
+    {
+      "id": "distributed_observability",
+      "synthetic_config": {
+        "AI_ENABLED": "true",
+        "AI_PROVIDER": "fake"
+      },
+      "up_flags": [
+        "--distributed-workers",
+        "--observability"
+      ],
+      "profiles": [
+        "app",
+        "ai",
+        "observability",
+        "distributed"
+      ],
+      "runtime_overrides": {},
+      "explicit_targets": [
+        "migrate",
+        "api",
+        "web",
+        "outbox-relay",
+        "object-worker",
+        "media-worker",
+        "maintenance-worker",
+        "aisvc"
+      ],
+      "scale_overrides": {
+        "aisvc": 1
+      },
+      "services": {
+        "aisvc": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "etcd",
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "api": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "etcd": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "maintenance-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "media-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "migrate": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "postgres"
+          ]
+        },
+        "minio": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "minio-init": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "minio"
+          ]
+        },
+        "object-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "outbox-relay": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "postgres": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "rabbitmq": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "web": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": [
+            "api"
+          ]
+        }
+      },
+      "long_running_containers": 12,
+      "go_business_processes": 6,
+      "one_shot_containers": 2
+    },
+    {
+      "id": "all_flags",
+      "synthetic_config": {
+        "AI_ENABLED": "true",
+        "AI_PROVIDER": "fake"
+      },
+      "up_flags": [
+        "--distributed-workers",
+        "--ai-split",
+        "--redis-split",
+        "--search-indexer",
+        "--search-backends",
+        "--observability"
+      ],
+      "profiles": [
+        "app",
+        "ai-split",
+        "observability",
+        "distributed",
+        "redis-split",
+        "search",
+        "search-external"
+      ],
+      "runtime_overrides": {
+        "REDIS_COORDINATION_ADDR": "redis-coordination:6379",
+        "REDIS_CACHE_ADDR": "redis-cache:6379",
+        "AISVC_GRPC_TARGET": "ai-query:8082",
+        "SEARCH_INDEX_ENABLED": "true",
+        "SEARCH_WRITE_BACKENDS": "es_qdrant",
+        "SEARCH_ES_ENDPOINT": "http://elasticsearch:9200",
+        "SEARCH_QDRANT_ENDPOINT": "http://qdrant:6333"
+      },
+      "explicit_targets": [
+        "migrate",
+        "api",
+        "web",
+        "outbox-relay",
+        "object-worker",
+        "media-worker",
+        "maintenance-worker",
+        "ai-query",
+        "ai-indexer",
+        "redis-coordination",
+        "redis-cache",
+        "search-indexer",
+        "elasticsearch",
+        "qdrant"
+      ],
+      "scale_overrides": {
+        "ai-query": 1,
+        "ai-indexer": 1
+      },
+      "services": {
+        "ai-indexer": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "ai-query": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "etcd",
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "api": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "elasticsearch": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "etcd": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "maintenance-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "media-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "migrate": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "postgres"
+          ]
+        },
+        "minio": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "minio-init": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "minio"
+          ]
+        },
+        "object-worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "outbox-relay": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "postgres": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "qdrant": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "rabbitmq": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis-cache": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis-coordination": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "search-indexer": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "web": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": [
+            "api"
+          ]
+        }
+      },
+      "long_running_containers": 18,
+      "go_business_processes": 8,
+      "one_shot_containers": 2
+    },
+    {
+      "id": "discovery_disabled",
+      "synthetic_config": {
+        "AI_ENABLED": "true",
+        "AI_PROVIDER": "fake",
+        "ETCD_ENABLED": "false"
+      },
+      "up_flags": [],
+      "profiles": [
+        "app",
+        "ai"
+      ],
+      "runtime_overrides": {},
+      "explicit_targets": [],
+      "scale_overrides": {
+        "aisvc": 1
+      },
+      "services": {
+        "aisvc": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "etcd",
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "api": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "etcd": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "migrate": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "postgres"
+          ]
+        },
+        "minio": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "minio-init": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "minio"
+          ]
+        },
+        "postgres": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "rabbitmq": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "web": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": [
+            "api"
+          ]
+        },
+        "worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        }
+      },
+      "long_running_containers": 9,
+      "go_business_processes": 3,
+      "one_shot_containers": 2
+    },
+    {
+      "id": "ai_split_api2_query3",
+      "synthetic_config": {
+        "AI_ENABLED": "true",
+        "AI_PROVIDER": "fake"
+      },
+      "up_flags": [
+        "--ai-split",
+        "--api-replicas",
+        "2",
+        "--aisvc-replicas",
+        "3"
+      ],
+      "profiles": [
+        "app",
+        "ai-split"
+      ],
+      "runtime_overrides": {
+        "AISVC_GRPC_TARGET": "ai-query:8082"
+      },
+      "explicit_targets": [],
+      "scale_overrides": {
+        "ai-query": 3,
+        "ai-indexer": 1,
+        "api": 2
+      },
+      "services": {
+        "ai-indexer": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        },
+        "ai-query": {
+          "replicas": 3,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "etcd",
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "api": {
+          "replicas": 2,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "redis"
+          ]
+        },
+        "etcd": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "migrate": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "postgres"
+          ]
+        },
+        "minio": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "minio-init": {
+          "replicas": 1,
+          "one_shot": true,
+          "go_business": false,
+          "dependencies": [
+            "minio"
+          ]
+        },
+        "postgres": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "rabbitmq": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "redis": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": []
+        },
+        "web": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": false,
+          "dependencies": [
+            "api"
+          ]
+        },
+        "worker": {
+          "replicas": 1,
+          "one_shot": false,
+          "go_business": true,
+          "dependencies": [
+            "migrate",
+            "minio-init",
+            "rabbitmq",
+            "redis"
+          ]
+        }
+      },
+      "long_running_containers": 13,
+      "go_business_processes": 7,
+      "one_shot_containers": 2
+    }
+  ],
+  "staging_overlay": {
+    "profiles": [
+      "app",
+      "distributed",
+      "ai-split",
+      "search"
+    ],
+    "replicas": {
+      "ai-indexer": 1,
+      "ai-query": 1,
+      "api": 2,
+      "etcd": 1,
+      "maintenance-worker": 1,
+      "media-worker": 1,
+      "minio": 1,
+      "object-worker": 1,
+      "outbox-relay": 2,
+      "postgres": 1,
+      "rabbitmq": 1,
+      "redis": 1,
+      "search-indexer": 1,
+      "web": 1,
+      "worker": 0
+    },
+    "long_running_containers": 16,
+    "go_business_processes": 10,
+    "one_shot_containers": 2
+  },
+  "documentation_checks": {
+    "checked_at": "2026-11-03T11:25:46.993277+00:00",
+    "report_path": "docs/PROCESS_STARTUP_AND_FLOW_2026-11-03.md",
+    "report_sha256": "dac08020fc244da9d02f0b3ced2789add7c3c4ba874a1fe9286eba6f228ec94b",
+    "numbered_sections": 14,
+    "local_links": 74,
+    "missing_links": [],
+    "mermaid_diagrams": 4,
+    "matrix_rows_verified": 14,
+    "staging_overlay_verified": true,
+    "source_files_verified": 49,
+    "source_hash_mismatches": []
+  }
+}

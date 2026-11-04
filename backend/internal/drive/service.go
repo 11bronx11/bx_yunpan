@@ -125,6 +125,9 @@ func (s *Service) Children(ownerID, folderID uuid.UUID) ([]Folder, []FileView, e
 		if err == nil {
 			return cached.Folders, cached.Files, nil
 		}
+		if sourceErr, ok := platformcache.SourceLoadCause(err); ok {
+			return nil, nil, sourceErr
+		}
 	}
 	return s.loadChildren(ownerID, folderID)
 }
@@ -232,8 +235,8 @@ func (s *Service) childrenPage(ctx context.Context, ownerID, folderID uuid.UUID,
 				return nil, nil, false, "", ErrCursorStale
 			}
 			return cached.Folders, cached.Files, cached.HasMore, cached.Cursor, nil
-		} else if errors.Is(cacheErr, ErrCursorStale) {
-			return nil, nil, false, "", cacheErr
+		} else if sourceErr, ok := platformcache.SourceLoadCause(cacheErr); ok {
+			return nil, nil, false, "", sourceErr
 		}
 	}
 	page, err := load()
@@ -677,6 +680,9 @@ func (s *Service) File(ownerID, fileID uuid.UUID) (FileView, error) {
 				return FileView{}, ErrNotFound
 			}
 			return cached, nil
+		}
+		if sourceErr, ok := platformcache.SourceLoadCause(err); ok {
+			return FileView{}, sourceErr
 		}
 	}
 	return s.loadFile(ownerID, fileID)

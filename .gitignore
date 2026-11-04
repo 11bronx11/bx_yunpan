@@ -34,4 +34,15 @@ docs/*
 !docs/ARCHITECTURE_UPGRADE_FINAL_EXECUTION_PLAN.md
 !docs/HIGH_CONCURRENCY_UPGRADE_PLAN.md
 !docs/HIGH_CONCURRENCY_TEST_CHECKLIST.md
+!docs/CURRENT_CODE_FACTS_2026-11-03.md
+!docs/PROCESS_STARTUP_AND_FLOW_2026-11-03.md
+!docs/AI_DOCUMENT_PARSER_CHUNKING_CONTINUATION_PLAN.md
+!docs/缓存优化说明.md
+!docs/facts/
+docs/facts/*
+!docs/facts/2026-11-03/
+docs/facts/2026-11-03/*
+!docs/facts/2026-11-03/source-manifest.json
+!docs/facts/2026-11-03/validation.json
+!docs/facts/2026-11-03/process-topologies.json
 artifacts/

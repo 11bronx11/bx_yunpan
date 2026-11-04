@@ -8,11 +8,8 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"sync"
-	"time"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
-	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -28,7 +25,6 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dependencies"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx"
-	"github.com/11bronx11/bx_yunpan/backend/internal/platform/registry"
 	platformworker "github.com/11bronx11/bx_yunpan/backend/internal/platform/worker"
 	searchindex "github.com/11bronx11/bx_yunpan/backend/internal/search"
 )
@@ -59,7 +55,14 @@ func runCombinedAISvc(ctx context.Context, cfg config.Config, logger *slog.Logge
 	driveService := drive.NewService(deps.GORM)
 	objects := objectstore.NewService(deps.GORM)
 	aiCache := newQueryEmbeddingCache(cfg, deps)
-	aiService := ai.NewServiceWithCache(deps.GORM, driveService, objects, deps.Storage, cfg.AI, aiCache)
+	metricsRegistry := prometheus.NewRegistry()
+	parser, closeParser, err := newParserGateway(cfg, logger, metricsRegistry)
+	if err != nil {
+		return err
+	}
+	defer closeParser()
+	aiService := ai.NewServiceWithCache(deps.GORM, driveService, objects, deps.Storage, cfg.AI, aiCache).
+		WithParser(parser).WithParserProfileVersion(cfg.Parser.ProfileVersion).WithPipelineVersion(indexPipelineVersion(cfg))
 	configureAISearch(aiService, cfg)
 
 	// 限流下移到 aisvc：放 API 侧的话多副本各自计数，总量会是副本数的倍数，
@@ -73,10 +76,9 @@ func runCombinedAISvc(ctx context.Context, cfg config.Config, logger *slog.Logge
 		})
 	}
 
-	registry := prometheus.NewRegistry()
 	server := grpc.NewServer(grpcx.ServerInterceptors(grpcx.ServerOptions{
 		Logger:  logger,
-		Metrics: grpcx.NewMetrics(registry, "server"),
+		Metrics: grpcx.NewMetrics(metricsRegistry, "server"),
 		Mapper:  ai.GRPCStatus,
 	})...)
 	defer server.Stop()
@@ -112,7 +114,7 @@ func runCombinedAISvc(ctx context.Context, cfg config.Config, logger *slog.Logge
 	workerDone := make(chan struct{})
 	defer func() { stopWorker(); <-workerDone }()
 	aiQueues := map[string]int{platformworker.QueueAI: cfg.Worker.Queues[platformworker.QueueAI]}
-	workerMetrics := platformworker.NewMetrics(registry, platformworker.Role("aisvc"), aiQueues)
+	workerMetrics := platformworker.NewMetrics(metricsRegistry, platformworker.Role("aisvc"), aiQueues)
 	go func() {
 		defer close(workerDone)
 		workerErr <- platformworker.RunQueuesWithMetrics(workerCtx, cfg, aiQueues, logger, aiWorkerHandlers(aiService, logger), workerMetrics, deps.GORM)
@@ -147,7 +149,7 @@ func RunAIQuery(ctx context.Context, cfg config.Config, logger *slog.Logger) err
 	}
 	defer deps.Close()
 	service := ai.NewServiceWithCache(deps.GORM, drive.NewService(deps.GORM), objectstore.NewService(deps.GORM), deps.Storage, cfg.AI,
-		newQueryEmbeddingCache(cfg, deps))
+		newQueryEmbeddingCache(cfg, deps)).WithParserProfileVersion(cfg.Parser.ProfileVersion).WithPipelineVersion(indexPipelineVersion(cfg))
 	configureAISearch(service, cfg)
 	var limiter ai.RequestLimiter
 	if cfg.AI.RateLimitEnabled {
@@ -182,9 +184,15 @@ func RunAIIndexer(ctx context.Context, cfg config.Config, logger *slog.Logger) e
 		return err
 	}
 	defer deps.Close()
-	service := ai.NewServiceWithCache(deps.GORM, drive.NewService(deps.GORM), objectstore.NewService(deps.GORM), deps.Storage, cfg.AI, nil)
-	aiQueues := map[string]int{platformworker.QueueAI: cfg.Worker.Queues[platformworker.QueueAI]}
 	metricsRegistry := prometheus.NewRegistry()
+	parser, closeParser, err := newParserGateway(cfg, logger, metricsRegistry)
+	if err != nil {
+		return err
+	}
+	defer closeParser()
+	service := ai.NewServiceWithCache(deps.GORM, drive.NewService(deps.GORM), objectstore.NewService(deps.GORM), deps.Storage, cfg.AI, nil).
+		WithParser(parser).WithParserProfileVersion(cfg.Parser.ProfileVersion).WithPipelineVersion(indexPipelineVersion(cfg))
+	aiQueues := map[string]int{platformworker.QueueAI: cfg.Worker.Queues[platformworker.QueueAI]}
 	workerMetrics := platformworker.NewMetrics(metricsRegistry, platformworker.Role("ai-indexer"), aiQueues)
 	go serveWorkerMetrics(ctx, cfg.Worker.MetricsAddr, metricsRegistry, logger)
 	return platformworker.RunQueuesWithMetrics(ctx, cfg, aiQueues, logger, aiWorkerHandlers(service, logger), workerMetrics, deps.GORM)
@@ -244,47 +252,7 @@ func startAIServer(ctx context.Context, cfg config.Config, logger *slog.Logger, 
 // registerAISvc 把本实例注册到 etcd，返回幂等的撤销函数。
 // 未启用 etcd 时返回空操作，让单副本部署无需额外依赖。
 func registerAISvc(ctx context.Context, cfg config.Config, logger *slog.Logger, listener net.Listener) (func(), error) {
-	noop := func() {}
-	client, err := registry.Open(cfg.Registry)
-	if err != nil {
-		return noop, err
-	}
-	if client == nil {
-		return noop, nil
-	}
-
-	address := cfg.Registry.AdvertiseAddr
-	if address == "" {
-		// 未显式配置时用监听地址推断：容器内 hostname 是容器 ID，
-		// 同一 compose 网络里其他服务可以解析到它。
-		address, err = advertiseAddress(listener)
-		if err != nil {
-			_ = client.Close()
-			return noop, err
-		}
-	}
-
-	instanceID := uuid.Must(uuid.NewV7()).String()
-	registrar := registry.NewRegistrar(client, logger,
-		cfg.Registry.Prefix+"/"+instanceID, address, cfg.Registry.LeaseTTL)
-	if err := registrar.Register(ctx); err != nil {
-		_ = client.Close()
-		return noop, err
-	}
-
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			// 用独立 context：停机时 ctx 已取消，复用它 Revoke 发不出去，
-			// 实例就得等一个 TTL 才被摘除。
-			revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-			defer cancel()
-			if err := registrar.Deregister(revokeCtx); err != nil {
-				logger.WarnContext(ctx, "deregister aisvc", "error", err)
-			}
-			_ = client.Close()
-		})
-	}, nil
+	return registerEtcdInstance(ctx, cfg, logger, listener, cfg.Registry.Prefix, cfg.Registry.AdvertiseAddr, "aisvc")
 }
 
 // advertiseAddress 把监听地址补成对端可 dial 的形式：":8082" 这种

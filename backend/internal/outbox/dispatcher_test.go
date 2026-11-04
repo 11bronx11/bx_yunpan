@@ -59,6 +59,84 @@ func TestPayloadWithTraceCarriesStableTaskMetadata(t *testing.T) {
 	}
 }
 
+func TestWaitForPollInterruptsForNotificationCancellationAndLeadership(t *testing.T) {
+	t.Run("notification", func(t *testing.T) {
+		wakeups := make(chan struct{}, 1)
+		wakeups <- struct{}{}
+		if got := waitForPoll(context.Background(), nil, wakeups, time.Hour); got != pollWaitNotified {
+			t.Fatalf("wait result = %v, want notification", got)
+		}
+	})
+
+	t.Run("context cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if got := waitForPoll(ctx, nil, nil, time.Hour); got != pollWaitCanceled {
+			t.Fatalf("wait result = %v, want cancellation", got)
+		}
+	})
+
+	t.Run("leadership loss", func(t *testing.T) {
+		lost := make(chan struct{})
+		close(lost)
+		if got := waitForPoll(context.Background(), lost, nil, time.Hour); got != pollWaitLeadershipLost {
+			t.Fatalf("wait result = %v, want leadership loss", got)
+		}
+	})
+
+	t.Run("closed notification channel", func(t *testing.T) {
+		wakeups := make(chan struct{})
+		close(wakeups)
+		if got := waitForPoll(context.Background(), nil, wakeups, time.Hour); got != pollWaitChannelClosed {
+			t.Fatalf("wait result = %v, want closed channel", got)
+		}
+	})
+}
+
+func TestPollBackoffIsBounded(t *testing.T) {
+	minimum, maximum := time.Second, 30*time.Second
+	got := []time.Duration{minimum}
+	for range 8 {
+		got = append(got, nextPollInterval(got[len(got)-1], minimum, maximum))
+	}
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second, 30 * time.Second, 30 * time.Second, 30 * time.Second}
+	if len(got) != len(want) {
+		t.Fatalf("backoff lengths differ: got=%v want=%v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("backoff[%d] = %s, want %s", i, got[i], want[i])
+		}
+	}
+	if jitter := jitterDown(maximum, minimum); jitter < maximum*4/5 || jitter > maximum {
+		t.Fatalf("downward jitter = %s, want within [%s,%s]", jitter, maximum*4/5, maximum)
+	}
+	if jitter := jitterDown(minimum, minimum); jitter != minimum {
+		t.Fatalf("minimum backoff jitter = %s, want %s", jitter, minimum)
+	}
+}
+
+func TestPollBoundsUseConfiguredFallbackAndClampInvalidDirectConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  config.Outbox
+		minimum time.Duration
+		maximum time.Duration
+	}{
+		{name: "configured", config: config.Outbox{PollInterval: 200 * time.Millisecond, MaxPollInterval: 4 * time.Second}, minimum: 200 * time.Millisecond, maximum: 4 * time.Second},
+		{name: "default minimum", config: config.Outbox{}, minimum: time.Second, maximum: time.Second},
+		{name: "maximum below minimum", config: config.Outbox{PollInterval: 2 * time.Second, MaxPollInterval: time.Second}, minimum: 2 * time.Second, maximum: 2 * time.Second},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			minimum, maximum := newDispatcher(nil, nil, nil, test.config).pollBounds()
+			if minimum != test.minimum || maximum != test.maximum {
+				t.Fatalf("poll bounds = (%s, %s), want (%s, %s)", minimum, maximum, test.minimum, test.maximum)
+			}
+		})
+	}
+}
+
 func TestDispatcherRecoversWhenEnqueueCommitsBeforeDeliveryStatus(t *testing.T) {
 	db := isolatedOutboxDB(t)
 	eventID, aggregateID := uuid.New(), uuid.New()

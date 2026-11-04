@@ -22,6 +22,746 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type ParseDocumentRequest struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	RunId                string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	ObjectId             string                 `protobuf:"bytes,2,opt,name=object_id,json=objectId,proto3" json:"object_id,omitempty"`
+	DocumentVersionId    string                 `protobuf:"bytes,3,opt,name=document_version_id,json=documentVersionId,proto3" json:"document_version_id,omitempty"`
+	ContentHash          string                 `protobuf:"bytes,4,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"`
+	MediaType            string                 `protobuf:"bytes,5,opt,name=media_type,json=mediaType,proto3" json:"media_type,omitempty"`
+	Content              []byte                 `protobuf:"bytes,6,opt,name=content,proto3" json:"content,omitempty"`
+	ParserProfileVersion string                 `protobuf:"bytes,7,opt,name=parser_profile_version,json=parserProfileVersion,proto3" json:"parser_profile_version,omitempty"`
+	SizeLimitBytes       int64                  `protobuf:"varint,8,opt,name=size_limit_bytes,json=sizeLimitBytes,proto3" json:"size_limit_bytes,omitempty"`
+	PageLimit            int32                  `protobuf:"varint,9,opt,name=page_limit,json=pageLimit,proto3" json:"page_limit,omitempty"`
+	PixelLimit           int64                  `protobuf:"varint,10,opt,name=pixel_limit,json=pixelLimit,proto3" json:"pixel_limit,omitempty"`
+	TraceId              string                 `protobuf:"bytes,11,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	ChunkTokenBudget     int32                  `protobuf:"varint,12,opt,name=chunk_token_budget,json=chunkTokenBudget,proto3" json:"chunk_token_budget,omitempty"`
+	ChunkOverlapTokens   int32                  `protobuf:"varint,13,opt,name=chunk_overlap_tokens,json=chunkOverlapTokens,proto3" json:"chunk_overlap_tokens,omitempty"`
+	MaxChunks            int32                  `protobuf:"varint,14,opt,name=max_chunks,json=maxChunks,proto3" json:"max_chunks,omitempty"`
+	ChunkerVersion       string                 `protobuf:"bytes,15,opt,name=chunker_version,json=chunkerVersion,proto3" json:"chunker_version,omitempty"`
+	TokenizerId          string                 `protobuf:"bytes,16,opt,name=tokenizer_id,json=tokenizerId,proto3" json:"tokenizer_id,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *ParseDocumentRequest) Reset() {
+	*x = ParseDocumentRequest{}
+	mi := &file_ai_v1_ai_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ParseDocumentRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ParseDocumentRequest) ProtoMessage() {}
+
+func (x *ParseDocumentRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ai_v1_ai_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ParseDocumentRequest.ProtoReflect.Descriptor instead.
+func (*ParseDocumentRequest) Descriptor() ([]byte, []int) {
+	return file_ai_v1_ai_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *ParseDocumentRequest) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *ParseDocumentRequest) GetObjectId() string {
+	if x != nil {
+		return x.ObjectId
+	}
+	return ""
+}
+
+func (x *ParseDocumentRequest) GetDocumentVersionId() string {
+	if x != nil {
+		return x.DocumentVersionId
+	}
+	return ""
+}
+
+func (x *ParseDocumentRequest) GetContentHash() string {
+	if x != nil {
+		return x.ContentHash
+	}
+	return ""
+}
+
+func (x *ParseDocumentRequest) GetMediaType() string {
+	if x != nil {
+		return x.MediaType
+	}
+	return ""
+}
+
+func (x *ParseDocumentRequest) GetContent() []byte {
+	if x != nil {
+		return x.Content
+	}
+	return nil
+}
+
+func (x *ParseDocumentRequest) GetParserProfileVersion() string {
+	if x != nil {
+		return x.ParserProfileVersion
+	}
+	return ""
+}
+
+func (x *ParseDocumentRequest) GetSizeLimitBytes() int64 {
+	if x != nil {
+		return x.SizeLimitBytes
+	}
+	return 0
+}
+
+func (x *ParseDocumentRequest) GetPageLimit() int32 {
+	if x != nil {
+		return x.PageLimit
+	}
+	return 0
+}
+
+func (x *ParseDocumentRequest) GetPixelLimit() int64 {
+	if x != nil {
+		return x.PixelLimit
+	}
+	return 0
+}
+
+func (x *ParseDocumentRequest) GetTraceId() string {
+	if x != nil {
+		return x.TraceId
+	}
+	return ""
+}
+
+func (x *ParseDocumentRequest) GetChunkTokenBudget() int32 {
+	if x != nil {
+		return x.ChunkTokenBudget
+	}
+	return 0
+}
+
+func (x *ParseDocumentRequest) GetChunkOverlapTokens() int32 {
+	if x != nil {
+		return x.ChunkOverlapTokens
+	}
+	return 0
+}
+
+func (x *ParseDocumentRequest) GetMaxChunks() int32 {
+	if x != nil {
+		return x.MaxChunks
+	}
+	return 0
+}
+
+func (x *ParseDocumentRequest) GetChunkerVersion() string {
+	if x != nil {
+		return x.ChunkerVersion
+	}
+	return ""
+}
+
+func (x *ParseDocumentRequest) GetTokenizerId() string {
+	if x != nil {
+		return x.TokenizerId
+	}
+	return ""
+}
+
+type ParseDocumentResponse struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ArtifactUri     string                 `protobuf:"bytes,1,opt,name=artifact_uri,json=artifactUri,proto3" json:"artifact_uri,omitempty"`
+	ArtifactHash    string                 `protobuf:"bytes,2,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"`
+	ParserId        string                 `protobuf:"bytes,3,opt,name=parser_id,json=parserId,proto3" json:"parser_id,omitempty"`
+	ParserVersion   string                 `protobuf:"bytes,4,opt,name=parser_version,json=parserVersion,proto3" json:"parser_version,omitempty"`
+	Language        string                 `protobuf:"bytes,5,opt,name=language,proto3" json:"language,omitempty"`
+	PageCount       int32                  `protobuf:"varint,6,opt,name=page_count,json=pageCount,proto3" json:"page_count,omitempty"`
+	BlockCount      int32                  `protobuf:"varint,7,opt,name=block_count,json=blockCount,proto3" json:"block_count,omitempty"`
+	Sections        []*ParsedSection       `protobuf:"bytes,8,rep,name=sections,proto3" json:"sections,omitempty"`
+	Quality         *ParseQuality          `protobuf:"bytes,9,opt,name=quality,proto3" json:"quality,omitempty"`
+	Warnings        []string               `protobuf:"bytes,10,rep,name=warnings,proto3" json:"warnings,omitempty"`
+	Chunks          []*ParsedChunk         `protobuf:"bytes,11,rep,name=chunks,proto3" json:"chunks,omitempty"`
+	ChunkerVersion  string                 `protobuf:"bytes,12,opt,name=chunker_version,json=chunkerVersion,proto3" json:"chunker_version,omitempty"`
+	TokenizerId     string                 `protobuf:"bytes,13,opt,name=tokenizer_id,json=tokenizerId,proto3" json:"tokenizer_id,omitempty"`
+	ChunksTruncated bool                   `protobuf:"varint,14,opt,name=chunks_truncated,json=chunksTruncated,proto3" json:"chunks_truncated,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ParseDocumentResponse) Reset() {
+	*x = ParseDocumentResponse{}
+	mi := &file_ai_v1_ai_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ParseDocumentResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ParseDocumentResponse) ProtoMessage() {}
+
+func (x *ParseDocumentResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ai_v1_ai_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ParseDocumentResponse.ProtoReflect.Descriptor instead.
+func (*ParseDocumentResponse) Descriptor() ([]byte, []int) {
+	return file_ai_v1_ai_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ParseDocumentResponse) GetArtifactUri() string {
+	if x != nil {
+		return x.ArtifactUri
+	}
+	return ""
+}
+
+func (x *ParseDocumentResponse) GetArtifactHash() string {
+	if x != nil {
+		return x.ArtifactHash
+	}
+	return ""
+}
+
+func (x *ParseDocumentResponse) GetParserId() string {
+	if x != nil {
+		return x.ParserId
+	}
+	return ""
+}
+
+func (x *ParseDocumentResponse) GetParserVersion() string {
+	if x != nil {
+		return x.ParserVersion
+	}
+	return ""
+}
+
+func (x *ParseDocumentResponse) GetLanguage() string {
+	if x != nil {
+		return x.Language
+	}
+	return ""
+}
+
+func (x *ParseDocumentResponse) GetPageCount() int32 {
+	if x != nil {
+		return x.PageCount
+	}
+	return 0
+}
+
+func (x *ParseDocumentResponse) GetBlockCount() int32 {
+	if x != nil {
+		return x.BlockCount
+	}
+	return 0
+}
+
+func (x *ParseDocumentResponse) GetSections() []*ParsedSection {
+	if x != nil {
+		return x.Sections
+	}
+	return nil
+}
+
+func (x *ParseDocumentResponse) GetQuality() *ParseQuality {
+	if x != nil {
+		return x.Quality
+	}
+	return nil
+}
+
+func (x *ParseDocumentResponse) GetWarnings() []string {
+	if x != nil {
+		return x.Warnings
+	}
+	return nil
+}
+
+func (x *ParseDocumentResponse) GetChunks() []*ParsedChunk {
+	if x != nil {
+		return x.Chunks
+	}
+	return nil
+}
+
+func (x *ParseDocumentResponse) GetChunkerVersion() string {
+	if x != nil {
+		return x.ChunkerVersion
+	}
+	return ""
+}
+
+func (x *ParseDocumentResponse) GetTokenizerId() string {
+	if x != nil {
+		return x.TokenizerId
+	}
+	return ""
+}
+
+func (x *ParseDocumentResponse) GetChunksTruncated() bool {
+	if x != nil {
+		return x.ChunksTruncated
+	}
+	return false
+}
+
+type ParsedSection struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
+	PageNumber    int32                  `protobuf:"varint,2,opt,name=page_number,json=pageNumber,proto3" json:"page_number,omitempty"`
+	Section       string                 `protobuf:"bytes,3,opt,name=section,proto3" json:"section,omitempty"`
+	Kind          string                 `protobuf:"bytes,4,opt,name=kind,proto3" json:"kind,omitempty"`
+	HeadingPath   string                 `protobuf:"bytes,5,opt,name=heading_path,json=headingPath,proto3" json:"heading_path,omitempty"`
+	SlideNumber   int32                  `protobuf:"varint,6,opt,name=slide_number,json=slideNumber,proto3" json:"slide_number,omitempty"`
+	SheetName     string                 `protobuf:"bytes,7,opt,name=sheet_name,json=sheetName,proto3" json:"sheet_name,omitempty"`
+	RowStart      int32                  `protobuf:"varint,8,opt,name=row_start,json=rowStart,proto3" json:"row_start,omitempty"`
+	RowEnd        int32                  `protobuf:"varint,9,opt,name=row_end,json=rowEnd,proto3" json:"row_end,omitempty"`
+	ColumnStart   int32                  `protobuf:"varint,10,opt,name=column_start,json=columnStart,proto3" json:"column_start,omitempty"`
+	ColumnEnd     int32                  `protobuf:"varint,11,opt,name=column_end,json=columnEnd,proto3" json:"column_end,omitempty"`
+	SourceStart   int64                  `protobuf:"varint,12,opt,name=source_start,json=sourceStart,proto3" json:"source_start,omitempty"`
+	SourceEnd     int64                  `protobuf:"varint,13,opt,name=source_end,json=sourceEnd,proto3" json:"source_end,omitempty"`
+	HasHeader     bool                   `protobuf:"varint,14,opt,name=has_header,json=hasHeader,proto3" json:"has_header,omitempty"`
+	MergedRanges  []string               `protobuf:"bytes,15,rep,name=merged_ranges,json=mergedRanges,proto3" json:"merged_ranges,omitempty"`
+	Encoding      string                 `protobuf:"bytes,16,opt,name=encoding,proto3" json:"encoding,omitempty"`
+	PageEnd       int32                  `protobuf:"varint,17,opt,name=page_end,json=pageEnd,proto3" json:"page_end,omitempty"`
+	SourceKind    string                 `protobuf:"bytes,18,opt,name=source_kind,json=sourceKind,proto3" json:"source_kind,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ParsedSection) Reset() {
+	*x = ParsedSection{}
+	mi := &file_ai_v1_ai_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ParsedSection) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ParsedSection) ProtoMessage() {}
+
+func (x *ParsedSection) ProtoReflect() protoreflect.Message {
+	mi := &file_ai_v1_ai_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ParsedSection.ProtoReflect.Descriptor instead.
+func (*ParsedSection) Descriptor() ([]byte, []int) {
+	return file_ai_v1_ai_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ParsedSection) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *ParsedSection) GetPageNumber() int32 {
+	if x != nil {
+		return x.PageNumber
+	}
+	return 0
+}
+
+func (x *ParsedSection) GetSection() string {
+	if x != nil {
+		return x.Section
+	}
+	return ""
+}
+
+func (x *ParsedSection) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ParsedSection) GetHeadingPath() string {
+	if x != nil {
+		return x.HeadingPath
+	}
+	return ""
+}
+
+func (x *ParsedSection) GetSlideNumber() int32 {
+	if x != nil {
+		return x.SlideNumber
+	}
+	return 0
+}
+
+func (x *ParsedSection) GetSheetName() string {
+	if x != nil {
+		return x.SheetName
+	}
+	return ""
+}
+
+func (x *ParsedSection) GetRowStart() int32 {
+	if x != nil {
+		return x.RowStart
+	}
+	return 0
+}
+
+func (x *ParsedSection) GetRowEnd() int32 {
+	if x != nil {
+		return x.RowEnd
+	}
+	return 0
+}
+
+func (x *ParsedSection) GetColumnStart() int32 {
+	if x != nil {
+		return x.ColumnStart
+	}
+	return 0
+}
+
+func (x *ParsedSection) GetColumnEnd() int32 {
+	if x != nil {
+		return x.ColumnEnd
+	}
+	return 0
+}
+
+func (x *ParsedSection) GetSourceStart() int64 {
+	if x != nil {
+		return x.SourceStart
+	}
+	return 0
+}
+
+func (x *ParsedSection) GetSourceEnd() int64 {
+	if x != nil {
+		return x.SourceEnd
+	}
+	return 0
+}
+
+func (x *ParsedSection) GetHasHeader() bool {
+	if x != nil {
+		return x.HasHeader
+	}
+	return false
+}
+
+func (x *ParsedSection) GetMergedRanges() []string {
+	if x != nil {
+		return x.MergedRanges
+	}
+	return nil
+}
+
+func (x *ParsedSection) GetEncoding() string {
+	if x != nil {
+		return x.Encoding
+	}
+	return ""
+}
+
+func (x *ParsedSection) GetPageEnd() int32 {
+	if x != nil {
+		return x.PageEnd
+	}
+	return 0
+}
+
+func (x *ParsedSection) GetSourceKind() string {
+	if x != nil {
+		return x.SourceKind
+	}
+	return ""
+}
+
+type ParsedChunk struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	Content              string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	Kind                 string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	HeadingPath          string                 `protobuf:"bytes,3,opt,name=heading_path,json=headingPath,proto3" json:"heading_path,omitempty"`
+	PageStart            int32                  `protobuf:"varint,4,opt,name=page_start,json=pageStart,proto3" json:"page_start,omitempty"`
+	PageEnd              int32                  `protobuf:"varint,5,opt,name=page_end,json=pageEnd,proto3" json:"page_end,omitempty"`
+	SlideNumber          int32                  `protobuf:"varint,6,opt,name=slide_number,json=slideNumber,proto3" json:"slide_number,omitempty"`
+	SheetName            string                 `protobuf:"bytes,7,opt,name=sheet_name,json=sheetName,proto3" json:"sheet_name,omitempty"`
+	RowStart             int32                  `protobuf:"varint,8,opt,name=row_start,json=rowStart,proto3" json:"row_start,omitempty"`
+	RowEnd               int32                  `protobuf:"varint,9,opt,name=row_end,json=rowEnd,proto3" json:"row_end,omitempty"`
+	ColumnStart          int32                  `protobuf:"varint,10,opt,name=column_start,json=columnStart,proto3" json:"column_start,omitempty"`
+	ColumnEnd            int32                  `protobuf:"varint,11,opt,name=column_end,json=columnEnd,proto3" json:"column_end,omitempty"`
+	SourceStart          int64                  `protobuf:"varint,12,opt,name=source_start,json=sourceStart,proto3" json:"source_start,omitempty"`
+	SourceEnd            int64                  `protobuf:"varint,13,opt,name=source_end,json=sourceEnd,proto3" json:"source_end,omitempty"`
+	EstimatedTokenCount  int32                  `protobuf:"varint,14,opt,name=estimated_token_count,json=estimatedTokenCount,proto3" json:"estimated_token_count,omitempty"`
+	TokenCountIsEstimate bool                   `protobuf:"varint,15,opt,name=token_count_is_estimate,json=tokenCountIsEstimate,proto3" json:"token_count_is_estimate,omitempty"`
+	MergedRanges         []string               `protobuf:"bytes,16,rep,name=merged_ranges,json=mergedRanges,proto3" json:"merged_ranges,omitempty"`
+	Encoding             string                 `protobuf:"bytes,17,opt,name=encoding,proto3" json:"encoding,omitempty"`
+	SourceKind           string                 `protobuf:"bytes,18,opt,name=source_kind,json=sourceKind,proto3" json:"source_kind,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *ParsedChunk) Reset() {
+	*x = ParsedChunk{}
+	mi := &file_ai_v1_ai_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ParsedChunk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ParsedChunk) ProtoMessage() {}
+
+func (x *ParsedChunk) ProtoReflect() protoreflect.Message {
+	mi := &file_ai_v1_ai_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ParsedChunk.ProtoReflect.Descriptor instead.
+func (*ParsedChunk) Descriptor() ([]byte, []int) {
+	return file_ai_v1_ai_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ParsedChunk) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *ParsedChunk) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ParsedChunk) GetHeadingPath() string {
+	if x != nil {
+		return x.HeadingPath
+	}
+	return ""
+}
+
+func (x *ParsedChunk) GetPageStart() int32 {
+	if x != nil {
+		return x.PageStart
+	}
+	return 0
+}
+
+func (x *ParsedChunk) GetPageEnd() int32 {
+	if x != nil {
+		return x.PageEnd
+	}
+	return 0
+}
+
+func (x *ParsedChunk) GetSlideNumber() int32 {
+	if x != nil {
+		return x.SlideNumber
+	}
+	return 0
+}
+
+func (x *ParsedChunk) GetSheetName() string {
+	if x != nil {
+		return x.SheetName
+	}
+	return ""
+}
+
+func (x *ParsedChunk) GetRowStart() int32 {
+	if x != nil {
+		return x.RowStart
+	}
+	return 0
+}
+
+func (x *ParsedChunk) GetRowEnd() int32 {
+	if x != nil {
+		return x.RowEnd
+	}
+	return 0
+}
+
+func (x *ParsedChunk) GetColumnStart() int32 {
+	if x != nil {
+		return x.ColumnStart
+	}
+	return 0
+}
+
+func (x *ParsedChunk) GetColumnEnd() int32 {
+	if x != nil {
+		return x.ColumnEnd
+	}
+	return 0
+}
+
+func (x *ParsedChunk) GetSourceStart() int64 {
+	if x != nil {
+		return x.SourceStart
+	}
+	return 0
+}
+
+func (x *ParsedChunk) GetSourceEnd() int64 {
+	if x != nil {
+		return x.SourceEnd
+	}
+	return 0
+}
+
+func (x *ParsedChunk) GetEstimatedTokenCount() int32 {
+	if x != nil {
+		return x.EstimatedTokenCount
+	}
+	return 0
+}
+
+func (x *ParsedChunk) GetTokenCountIsEstimate() bool {
+	if x != nil {
+		return x.TokenCountIsEstimate
+	}
+	return false
+}
+
+func (x *ParsedChunk) GetMergedRanges() []string {
+	if x != nil {
+		return x.MergedRanges
+	}
+	return nil
+}
+
+func (x *ParsedChunk) GetEncoding() string {
+	if x != nil {
+		return x.Encoding
+	}
+	return ""
+}
+
+func (x *ParsedChunk) GetSourceKind() string {
+	if x != nil {
+		return x.SourceKind
+	}
+	return ""
+}
+
+type ParseQuality struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	TextBytes        int32                  `protobuf:"varint,1,opt,name=text_bytes,json=textBytes,proto3" json:"text_bytes,omitempty"`
+	TextDensity      float64                `protobuf:"fixed64,2,opt,name=text_density,json=textDensity,proto3" json:"text_density,omitempty"`
+	EmptyPageRatio   float64                `protobuf:"fixed64,3,opt,name=empty_page_ratio,json=emptyPageRatio,proto3" json:"empty_page_ratio,omitempty"`
+	ReplacementRunes int32                  `protobuf:"varint,4,opt,name=replacement_runes,json=replacementRunes,proto3" json:"replacement_runes,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ParseQuality) Reset() {
+	*x = ParseQuality{}
+	mi := &file_ai_v1_ai_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ParseQuality) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ParseQuality) ProtoMessage() {}
+
+func (x *ParseQuality) ProtoReflect() protoreflect.Message {
+	mi := &file_ai_v1_ai_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ParseQuality.ProtoReflect.Descriptor instead.
+func (*ParseQuality) Descriptor() ([]byte, []int) {
+	return file_ai_v1_ai_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ParseQuality) GetTextBytes() int32 {
+	if x != nil {
+		return x.TextBytes
+	}
+	return 0
+}
+
+func (x *ParseQuality) GetTextDensity() float64 {
+	if x != nil {
+		return x.TextDensity
+	}
+	return 0
+}
+
+func (x *ParseQuality) GetEmptyPageRatio() float64 {
+	if x != nil {
+		return x.EmptyPageRatio
+	}
+	return 0
+}
+
+func (x *ParseQuality) GetReplacementRunes() int32 {
+	if x != nil {
+		return x.ReplacementRunes
+	}
+	return 0
+}
+
 type SearchRequest struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	OwnerId string                 `protobuf:"bytes,1,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
@@ -38,7 +778,7 @@ type SearchRequest struct {
 
 func (x *SearchRequest) Reset() {
 	*x = SearchRequest{}
-	mi := &file_ai_v1_ai_proto_msgTypes[0]
+	mi := &file_ai_v1_ai_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -50,7 +790,7 @@ func (x *SearchRequest) String() string {
 func (*SearchRequest) ProtoMessage() {}
 
 func (x *SearchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v1_ai_proto_msgTypes[0]
+	mi := &file_ai_v1_ai_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -63,7 +803,7 @@ func (x *SearchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchRequest.ProtoReflect.Descriptor instead.
 func (*SearchRequest) Descriptor() ([]byte, []int) {
-	return file_ai_v1_ai_proto_rawDescGZIP(), []int{0}
+	return file_ai_v1_ai_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *SearchRequest) GetOwnerId() string {
@@ -133,7 +873,7 @@ type FileRef struct {
 
 func (x *FileRef) Reset() {
 	*x = FileRef{}
-	mi := &file_ai_v1_ai_proto_msgTypes[1]
+	mi := &file_ai_v1_ai_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -145,7 +885,7 @@ func (x *FileRef) String() string {
 func (*FileRef) ProtoMessage() {}
 
 func (x *FileRef) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v1_ai_proto_msgTypes[1]
+	mi := &file_ai_v1_ai_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -158,7 +898,7 @@ func (x *FileRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileRef.ProtoReflect.Descriptor instead.
 func (*FileRef) Descriptor() ([]byte, []int) {
-	return file_ai_v1_ai_proto_rawDescGZIP(), []int{1}
+	return file_ai_v1_ai_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *FileRef) GetId() string {
@@ -245,7 +985,7 @@ type Citation struct {
 
 func (x *Citation) Reset() {
 	*x = Citation{}
-	mi := &file_ai_v1_ai_proto_msgTypes[2]
+	mi := &file_ai_v1_ai_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -257,7 +997,7 @@ func (x *Citation) String() string {
 func (*Citation) ProtoMessage() {}
 
 func (x *Citation) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v1_ai_proto_msgTypes[2]
+	mi := &file_ai_v1_ai_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -270,7 +1010,7 @@ func (x *Citation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Citation.ProtoReflect.Descriptor instead.
 func (*Citation) Descriptor() ([]byte, []int) {
-	return file_ai_v1_ai_proto_rawDescGZIP(), []int{2}
+	return file_ai_v1_ai_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Citation) GetId() string {
@@ -327,7 +1067,7 @@ type SearchHit struct {
 
 func (x *SearchHit) Reset() {
 	*x = SearchHit{}
-	mi := &file_ai_v1_ai_proto_msgTypes[3]
+	mi := &file_ai_v1_ai_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -339,7 +1079,7 @@ func (x *SearchHit) String() string {
 func (*SearchHit) ProtoMessage() {}
 
 func (x *SearchHit) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v1_ai_proto_msgTypes[3]
+	mi := &file_ai_v1_ai_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -352,7 +1092,7 @@ func (x *SearchHit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchHit.ProtoReflect.Descriptor instead.
 func (*SearchHit) Descriptor() ([]byte, []int) {
-	return file_ai_v1_ai_proto_rawDescGZIP(), []int{3}
+	return file_ai_v1_ai_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *SearchHit) GetFile() *FileRef {
@@ -395,7 +1135,7 @@ type AskRequest struct {
 
 func (x *AskRequest) Reset() {
 	*x = AskRequest{}
-	mi := &file_ai_v1_ai_proto_msgTypes[4]
+	mi := &file_ai_v1_ai_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -407,7 +1147,7 @@ func (x *AskRequest) String() string {
 func (*AskRequest) ProtoMessage() {}
 
 func (x *AskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v1_ai_proto_msgTypes[4]
+	mi := &file_ai_v1_ai_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -420,7 +1160,7 @@ func (x *AskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AskRequest.ProtoReflect.Descriptor instead.
 func (*AskRequest) Descriptor() ([]byte, []int) {
-	return file_ai_v1_ai_proto_rawDescGZIP(), []int{4}
+	return file_ai_v1_ai_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *AskRequest) GetOwnerId() string {
@@ -461,7 +1201,7 @@ type AskResponse struct {
 
 func (x *AskResponse) Reset() {
 	*x = AskResponse{}
-	mi := &file_ai_v1_ai_proto_msgTypes[5]
+	mi := &file_ai_v1_ai_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -473,7 +1213,7 @@ func (x *AskResponse) String() string {
 func (*AskResponse) ProtoMessage() {}
 
 func (x *AskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v1_ai_proto_msgTypes[5]
+	mi := &file_ai_v1_ai_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -486,7 +1226,7 @@ func (x *AskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AskResponse.ProtoReflect.Descriptor instead.
 func (*AskResponse) Descriptor() ([]byte, []int) {
-	return file_ai_v1_ai_proto_rawDescGZIP(), []int{5}
+	return file_ai_v1_ai_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *AskResponse) GetAnswer() string {
@@ -514,7 +1254,7 @@ type ReprocessRequest struct {
 
 func (x *ReprocessRequest) Reset() {
 	*x = ReprocessRequest{}
-	mi := &file_ai_v1_ai_proto_msgTypes[6]
+	mi := &file_ai_v1_ai_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -526,7 +1266,7 @@ func (x *ReprocessRequest) String() string {
 func (*ReprocessRequest) ProtoMessage() {}
 
 func (x *ReprocessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v1_ai_proto_msgTypes[6]
+	mi := &file_ai_v1_ai_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -539,7 +1279,7 @@ func (x *ReprocessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReprocessRequest.ProtoReflect.Descriptor instead.
 func (*ReprocessRequest) Descriptor() ([]byte, []int) {
-	return file_ai_v1_ai_proto_rawDescGZIP(), []int{6}
+	return file_ai_v1_ai_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ReprocessRequest) GetOwnerId() string {
@@ -572,7 +1312,7 @@ type ReprocessResponse struct {
 
 func (x *ReprocessResponse) Reset() {
 	*x = ReprocessResponse{}
-	mi := &file_ai_v1_ai_proto_msgTypes[7]
+	mi := &file_ai_v1_ai_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -584,7 +1324,7 @@ func (x *ReprocessResponse) String() string {
 func (*ReprocessResponse) ProtoMessage() {}
 
 func (x *ReprocessResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v1_ai_proto_msgTypes[7]
+	mi := &file_ai_v1_ai_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -597,7 +1337,7 @@ func (x *ReprocessResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReprocessResponse.ProtoReflect.Descriptor instead.
 func (*ReprocessResponse) Descriptor() ([]byte, []int) {
-	return file_ai_v1_ai_proto_rawDescGZIP(), []int{7}
+	return file_ai_v1_ai_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ReprocessResponse) GetTask() *Task {
@@ -626,7 +1366,7 @@ type Task struct {
 
 func (x *Task) Reset() {
 	*x = Task{}
-	mi := &file_ai_v1_ai_proto_msgTypes[8]
+	mi := &file_ai_v1_ai_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -638,7 +1378,7 @@ func (x *Task) String() string {
 func (*Task) ProtoMessage() {}
 
 func (x *Task) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v1_ai_proto_msgTypes[8]
+	mi := &file_ai_v1_ai_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -651,7 +1391,7 @@ func (x *Task) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Task.ProtoReflect.Descriptor instead.
 func (*Task) Descriptor() ([]byte, []int) {
-	return file_ai_v1_ai_proto_rawDescGZIP(), []int{8}
+	return file_ai_v1_ai_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Task) GetId() string {
@@ -735,7 +1475,104 @@ var File_ai_v1_ai_proto protoreflect.FileDescriptor
 
 const file_ai_v1_ai_proto_rawDesc = "" +
 	"\n" +
-	"\x0eai/v1/ai.proto\x12\fyunpan.ai.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe8\x01\n" +
+	"\x0eai/v1/ai.proto\x12\fyunpan.ai.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xdc\x04\n" +
+	"\x14ParseDocumentRequest\x12\x15\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1b\n" +
+	"\tobject_id\x18\x02 \x01(\tR\bobjectId\x12.\n" +
+	"\x13document_version_id\x18\x03 \x01(\tR\x11documentVersionId\x12!\n" +
+	"\fcontent_hash\x18\x04 \x01(\tR\vcontentHash\x12\x1d\n" +
+	"\n" +
+	"media_type\x18\x05 \x01(\tR\tmediaType\x12\x18\n" +
+	"\acontent\x18\x06 \x01(\fR\acontent\x124\n" +
+	"\x16parser_profile_version\x18\a \x01(\tR\x14parserProfileVersion\x12(\n" +
+	"\x10size_limit_bytes\x18\b \x01(\x03R\x0esizeLimitBytes\x12\x1d\n" +
+	"\n" +
+	"page_limit\x18\t \x01(\x05R\tpageLimit\x12\x1f\n" +
+	"\vpixel_limit\x18\n" +
+	" \x01(\x03R\n" +
+	"pixelLimit\x12\x19\n" +
+	"\btrace_id\x18\v \x01(\tR\atraceId\x12,\n" +
+	"\x12chunk_token_budget\x18\f \x01(\x05R\x10chunkTokenBudget\x120\n" +
+	"\x14chunk_overlap_tokens\x18\r \x01(\x05R\x12chunkOverlapTokens\x12\x1d\n" +
+	"\n" +
+	"max_chunks\x18\x0e \x01(\x05R\tmaxChunks\x12'\n" +
+	"\x0fchunker_version\x18\x0f \x01(\tR\x0echunkerVersion\x12!\n" +
+	"\ftokenizer_id\x18\x10 \x01(\tR\vtokenizerId\"\xb4\x04\n" +
+	"\x15ParseDocumentResponse\x12!\n" +
+	"\fartifact_uri\x18\x01 \x01(\tR\vartifactUri\x12#\n" +
+	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x12\x1b\n" +
+	"\tparser_id\x18\x03 \x01(\tR\bparserId\x12%\n" +
+	"\x0eparser_version\x18\x04 \x01(\tR\rparserVersion\x12\x1a\n" +
+	"\blanguage\x18\x05 \x01(\tR\blanguage\x12\x1d\n" +
+	"\n" +
+	"page_count\x18\x06 \x01(\x05R\tpageCount\x12\x1f\n" +
+	"\vblock_count\x18\a \x01(\x05R\n" +
+	"blockCount\x127\n" +
+	"\bsections\x18\b \x03(\v2\x1b.yunpan.ai.v1.ParsedSectionR\bsections\x124\n" +
+	"\aquality\x18\t \x01(\v2\x1a.yunpan.ai.v1.ParseQualityR\aquality\x12\x1a\n" +
+	"\bwarnings\x18\n" +
+	" \x03(\tR\bwarnings\x121\n" +
+	"\x06chunks\x18\v \x03(\v2\x19.yunpan.ai.v1.ParsedChunkR\x06chunks\x12'\n" +
+	"\x0fchunker_version\x18\f \x01(\tR\x0echunkerVersion\x12!\n" +
+	"\ftokenizer_id\x18\r \x01(\tR\vtokenizerId\x12)\n" +
+	"\x10chunks_truncated\x18\x0e \x01(\bR\x0fchunksTruncated\"\xad\x04\n" +
+	"\rParsedSection\x12\x12\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\x12\x1f\n" +
+	"\vpage_number\x18\x02 \x01(\x05R\n" +
+	"pageNumber\x12\x18\n" +
+	"\asection\x18\x03 \x01(\tR\asection\x12\x12\n" +
+	"\x04kind\x18\x04 \x01(\tR\x04kind\x12!\n" +
+	"\fheading_path\x18\x05 \x01(\tR\vheadingPath\x12!\n" +
+	"\fslide_number\x18\x06 \x01(\x05R\vslideNumber\x12\x1d\n" +
+	"\n" +
+	"sheet_name\x18\a \x01(\tR\tsheetName\x12\x1b\n" +
+	"\trow_start\x18\b \x01(\x05R\browStart\x12\x17\n" +
+	"\arow_end\x18\t \x01(\x05R\x06rowEnd\x12!\n" +
+	"\fcolumn_start\x18\n" +
+	" \x01(\x05R\vcolumnStart\x12\x1d\n" +
+	"\n" +
+	"column_end\x18\v \x01(\x05R\tcolumnEnd\x12!\n" +
+	"\fsource_start\x18\f \x01(\x03R\vsourceStart\x12\x1d\n" +
+	"\n" +
+	"source_end\x18\r \x01(\x03R\tsourceEnd\x12\x1d\n" +
+	"\n" +
+	"has_header\x18\x0e \x01(\bR\thasHeader\x12#\n" +
+	"\rmerged_ranges\x18\x0f \x03(\tR\fmergedRanges\x12\x1a\n" +
+	"\bencoding\x18\x10 \x01(\tR\bencoding\x12\x19\n" +
+	"\bpage_end\x18\x11 \x01(\x05R\apageEnd\x12\x1f\n" +
+	"\vsource_kind\x18\x12 \x01(\tR\n" +
+	"sourceKind\"\xe1\x04\n" +
+	"\vParsedChunk\x12\x18\n" +
+	"\acontent\x18\x01 \x01(\tR\acontent\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\x12!\n" +
+	"\fheading_path\x18\x03 \x01(\tR\vheadingPath\x12\x1d\n" +
+	"\n" +
+	"page_start\x18\x04 \x01(\x05R\tpageStart\x12\x19\n" +
+	"\bpage_end\x18\x05 \x01(\x05R\apageEnd\x12!\n" +
+	"\fslide_number\x18\x06 \x01(\x05R\vslideNumber\x12\x1d\n" +
+	"\n" +
+	"sheet_name\x18\a \x01(\tR\tsheetName\x12\x1b\n" +
+	"\trow_start\x18\b \x01(\x05R\browStart\x12\x17\n" +
+	"\arow_end\x18\t \x01(\x05R\x06rowEnd\x12!\n" +
+	"\fcolumn_start\x18\n" +
+	" \x01(\x05R\vcolumnStart\x12\x1d\n" +
+	"\n" +
+	"column_end\x18\v \x01(\x05R\tcolumnEnd\x12!\n" +
+	"\fsource_start\x18\f \x01(\x03R\vsourceStart\x12\x1d\n" +
+	"\n" +
+	"source_end\x18\r \x01(\x03R\tsourceEnd\x122\n" +
+	"\x15estimated_token_count\x18\x0e \x01(\x05R\x13estimatedTokenCount\x125\n" +
+	"\x17token_count_is_estimate\x18\x0f \x01(\bR\x14tokenCountIsEstimate\x12#\n" +
+	"\rmerged_ranges\x18\x10 \x03(\tR\fmergedRanges\x12\x1a\n" +
+	"\bencoding\x18\x11 \x01(\tR\bencoding\x12\x1f\n" +
+	"\vsource_kind\x18\x12 \x01(\tR\n" +
+	"sourceKind\"\xa7\x01\n" +
+	"\fParseQuality\x12\x1d\n" +
+	"\n" +
+	"text_bytes\x18\x01 \x01(\x05R\ttextBytes\x12!\n" +
+	"\ftext_density\x18\x02 \x01(\x01R\vtextDensity\x12(\n" +
+	"\x10empty_page_ratio\x18\x03 \x01(\x01R\x0eemptyPageRatio\x12+\n" +
+	"\x11replacement_runes\x18\x04 \x01(\x05R\x10replacementRunes\"\xe8\x01\n" +
 	"\rSearchRequest\x12\x19\n" +
 	"\bowner_id\x18\x01 \x01(\tR\aownerId\x12\x14\n" +
 	"\x05query\x18\x02 \x01(\tR\x05query\x12\x12\n" +
@@ -818,7 +1655,9 @@ const file_ai_v1_ai_proto_rawDesc = "" +
 	"\tAIService\x12@\n" +
 	"\x06Search\x12\x1b.yunpan.ai.v1.SearchRequest\x1a\x17.yunpan.ai.v1.SearchHit0\x01\x12:\n" +
 	"\x03Ask\x12\x18.yunpan.ai.v1.AskRequest\x1a\x19.yunpan.ai.v1.AskResponse\x12L\n" +
-	"\tReprocess\x12\x1e.yunpan.ai.v1.ReprocessRequest\x1a\x1f.yunpan.ai.v1.ReprocessResponseB:Z8github.com/11bronx11/bx_yunpan/backend/internal/ai/pb;pbb\x06proto3"
+	"\tReprocess\x12\x1e.yunpan.ai.v1.ReprocessRequest\x1a\x1f.yunpan.ai.v1.ReprocessResponse2q\n" +
+	"\x15DocumentParserService\x12X\n" +
+	"\rParseDocument\x12\".yunpan.ai.v1.ParseDocumentRequest\x1a#.yunpan.ai.v1.ParseDocumentResponseB:Z8github.com/11bronx11/bx_yunpan/backend/internal/ai/pb;pbb\x06proto3"
 
 var (
 	file_ai_v1_ai_proto_rawDescOnce sync.Once
@@ -832,39 +1671,49 @@ func file_ai_v1_ai_proto_rawDescGZIP() []byte {
 	return file_ai_v1_ai_proto_rawDescData
 }
 
-var file_ai_v1_ai_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_ai_v1_ai_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_ai_v1_ai_proto_goTypes = []any{
-	(*SearchRequest)(nil),         // 0: yunpan.ai.v1.SearchRequest
-	(*FileRef)(nil),               // 1: yunpan.ai.v1.FileRef
-	(*Citation)(nil),              // 2: yunpan.ai.v1.Citation
-	(*SearchHit)(nil),             // 3: yunpan.ai.v1.SearchHit
-	(*AskRequest)(nil),            // 4: yunpan.ai.v1.AskRequest
-	(*AskResponse)(nil),           // 5: yunpan.ai.v1.AskResponse
-	(*ReprocessRequest)(nil),      // 6: yunpan.ai.v1.ReprocessRequest
-	(*ReprocessResponse)(nil),     // 7: yunpan.ai.v1.ReprocessResponse
-	(*Task)(nil),                  // 8: yunpan.ai.v1.Task
-	(*timestamppb.Timestamp)(nil), // 9: google.protobuf.Timestamp
+	(*ParseDocumentRequest)(nil),  // 0: yunpan.ai.v1.ParseDocumentRequest
+	(*ParseDocumentResponse)(nil), // 1: yunpan.ai.v1.ParseDocumentResponse
+	(*ParsedSection)(nil),         // 2: yunpan.ai.v1.ParsedSection
+	(*ParsedChunk)(nil),           // 3: yunpan.ai.v1.ParsedChunk
+	(*ParseQuality)(nil),          // 4: yunpan.ai.v1.ParseQuality
+	(*SearchRequest)(nil),         // 5: yunpan.ai.v1.SearchRequest
+	(*FileRef)(nil),               // 6: yunpan.ai.v1.FileRef
+	(*Citation)(nil),              // 7: yunpan.ai.v1.Citation
+	(*SearchHit)(nil),             // 8: yunpan.ai.v1.SearchHit
+	(*AskRequest)(nil),            // 9: yunpan.ai.v1.AskRequest
+	(*AskResponse)(nil),           // 10: yunpan.ai.v1.AskResponse
+	(*ReprocessRequest)(nil),      // 11: yunpan.ai.v1.ReprocessRequest
+	(*ReprocessResponse)(nil),     // 12: yunpan.ai.v1.ReprocessResponse
+	(*Task)(nil),                  // 13: yunpan.ai.v1.Task
+	(*timestamppb.Timestamp)(nil), // 14: google.protobuf.Timestamp
 }
 var file_ai_v1_ai_proto_depIdxs = []int32{
-	9,  // 0: yunpan.ai.v1.FileRef.created_at:type_name -> google.protobuf.Timestamp
-	9,  // 1: yunpan.ai.v1.FileRef.updated_at:type_name -> google.protobuf.Timestamp
-	1,  // 2: yunpan.ai.v1.SearchHit.file:type_name -> yunpan.ai.v1.FileRef
-	2,  // 3: yunpan.ai.v1.SearchHit.citations:type_name -> yunpan.ai.v1.Citation
-	2,  // 4: yunpan.ai.v1.AskResponse.citations:type_name -> yunpan.ai.v1.Citation
-	8,  // 5: yunpan.ai.v1.ReprocessResponse.task:type_name -> yunpan.ai.v1.Task
-	9,  // 6: yunpan.ai.v1.Task.created_at:type_name -> google.protobuf.Timestamp
-	9,  // 7: yunpan.ai.v1.Task.updated_at:type_name -> google.protobuf.Timestamp
-	0,  // 8: yunpan.ai.v1.AIService.Search:input_type -> yunpan.ai.v1.SearchRequest
-	4,  // 9: yunpan.ai.v1.AIService.Ask:input_type -> yunpan.ai.v1.AskRequest
-	6,  // 10: yunpan.ai.v1.AIService.Reprocess:input_type -> yunpan.ai.v1.ReprocessRequest
-	3,  // 11: yunpan.ai.v1.AIService.Search:output_type -> yunpan.ai.v1.SearchHit
-	5,  // 12: yunpan.ai.v1.AIService.Ask:output_type -> yunpan.ai.v1.AskResponse
-	7,  // 13: yunpan.ai.v1.AIService.Reprocess:output_type -> yunpan.ai.v1.ReprocessResponse
-	11, // [11:14] is the sub-list for method output_type
-	8,  // [8:11] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	2,  // 0: yunpan.ai.v1.ParseDocumentResponse.sections:type_name -> yunpan.ai.v1.ParsedSection
+	4,  // 1: yunpan.ai.v1.ParseDocumentResponse.quality:type_name -> yunpan.ai.v1.ParseQuality
+	3,  // 2: yunpan.ai.v1.ParseDocumentResponse.chunks:type_name -> yunpan.ai.v1.ParsedChunk
+	14, // 3: yunpan.ai.v1.FileRef.created_at:type_name -> google.protobuf.Timestamp
+	14, // 4: yunpan.ai.v1.FileRef.updated_at:type_name -> google.protobuf.Timestamp
+	6,  // 5: yunpan.ai.v1.SearchHit.file:type_name -> yunpan.ai.v1.FileRef
+	7,  // 6: yunpan.ai.v1.SearchHit.citations:type_name -> yunpan.ai.v1.Citation
+	7,  // 7: yunpan.ai.v1.AskResponse.citations:type_name -> yunpan.ai.v1.Citation
+	13, // 8: yunpan.ai.v1.ReprocessResponse.task:type_name -> yunpan.ai.v1.Task
+	14, // 9: yunpan.ai.v1.Task.created_at:type_name -> google.protobuf.Timestamp
+	14, // 10: yunpan.ai.v1.Task.updated_at:type_name -> google.protobuf.Timestamp
+	5,  // 11: yunpan.ai.v1.AIService.Search:input_type -> yunpan.ai.v1.SearchRequest
+	9,  // 12: yunpan.ai.v1.AIService.Ask:input_type -> yunpan.ai.v1.AskRequest
+	11, // 13: yunpan.ai.v1.AIService.Reprocess:input_type -> yunpan.ai.v1.ReprocessRequest
+	0,  // 14: yunpan.ai.v1.DocumentParserService.ParseDocument:input_type -> yunpan.ai.v1.ParseDocumentRequest
+	8,  // 15: yunpan.ai.v1.AIService.Search:output_type -> yunpan.ai.v1.SearchHit
+	10, // 16: yunpan.ai.v1.AIService.Ask:output_type -> yunpan.ai.v1.AskResponse
+	12, // 17: yunpan.ai.v1.AIService.Reprocess:output_type -> yunpan.ai.v1.ReprocessResponse
+	1,  // 18: yunpan.ai.v1.DocumentParserService.ParseDocument:output_type -> yunpan.ai.v1.ParseDocumentResponse
+	15, // [15:19] is the sub-list for method output_type
+	11, // [11:15] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_ai_v1_ai_proto_init() }
@@ -872,19 +1721,19 @@ func file_ai_v1_ai_proto_init() {
 	if File_ai_v1_ai_proto != nil {
 		return
 	}
-	file_ai_v1_ai_proto_msgTypes[0].OneofWrappers = []any{}
-	file_ai_v1_ai_proto_msgTypes[2].OneofWrappers = []any{}
-	file_ai_v1_ai_proto_msgTypes[4].OneofWrappers = []any{}
-	file_ai_v1_ai_proto_msgTypes[8].OneofWrappers = []any{}
+	file_ai_v1_ai_proto_msgTypes[5].OneofWrappers = []any{}
+	file_ai_v1_ai_proto_msgTypes[7].OneofWrappers = []any{}
+	file_ai_v1_ai_proto_msgTypes[9].OneofWrappers = []any{}
+	file_ai_v1_ai_proto_msgTypes[13].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ai_v1_ai_proto_rawDesc), len(file_ai_v1_ai_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   14,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_ai_v1_ai_proto_goTypes,
 		DependencyIndexes: file_ai_v1_ai_proto_depIdxs,

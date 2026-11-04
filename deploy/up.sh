@@ -8,6 +8,8 @@ env_file="$deploy_dir/.env"
 build=true
 observability=false
 aisvc_replicas=
+parser_replicas=
+parser_replicas_override=false
 api_replicas=
 distributed_workers=false
 ai_split=false
@@ -17,7 +19,7 @@ search_backends=false
 
 usage() {
   cat <<'EOF'
-Usage: ./deploy/up.sh [--no-build] [--observability] [--distributed-workers] [--ai-split] [--redis-split] [--search-indexer] [--search-backends] [--api-replicas N] [--aisvc-replicas N]
+Usage: ./deploy/up.sh [--no-build] [--observability] [--distributed-workers] [--ai-split] [--redis-split] [--search-indexer] [--search-backends] [--api-replicas N] [--aisvc-replicas N] [--parser-replicas N]
 
   --no-build           Start existing images without building them.
   --observability      Also start Prometheus, Grafana, and OpenTelemetry Collector.
@@ -28,6 +30,7 @@ Usage: ./deploy/up.sh [--no-build] [--observability] [--distributed-workers] [--
   --search-backends    Start the opt-in single-node Elasticsearch/Qdrant profile.
   --api-replicas N      Scale core API only when explicitly requested.
   --aisvc-replicas N   Override AISVC_REPLICAS for this run.
+  --parser-replicas N  Override PARSER_REPLICAS for this run.
 EOF
 }
 
@@ -52,6 +55,16 @@ while (($#)); do
       shift
       ;;
     --aisvc-replicas=*) aisvc_replicas=${1#*=} ;;
+    --parser-replicas)
+      (($# >= 2)) || { echo "--parser-replicas requires a value" >&2; exit 2; }
+      parser_replicas=$2
+      parser_replicas_override=true
+      shift
+      ;;
+    --parser-replicas=*)
+      parser_replicas=${1#*=}
+      parser_replicas_override=true
+      ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -186,6 +199,26 @@ else
   aisvc_replicas=0
 fi
 
+parser_remote_enabled=$(env_value PARSER_REMOTE_ENABLED)
+parser_remote_enabled=${parser_remote_enabled:-true}
+if [[ "$parser_remote_enabled" != "true" && "$parser_remote_enabled" != "false" ]]; then
+  echo "PARSER_REMOTE_ENABLED must be true or false." >&2
+  exit 1
+fi
+if [[ "$ai_enabled" == true && "$parser_remote_enabled" == true ]]; then
+  parser_replicas=${parser_replicas:-$(env_value PARSER_REPLICAS)}
+  parser_replicas=${parser_replicas:-1}
+  if [[ ! "$parser_replicas" =~ ^[1-9][0-9]*$ ]]; then
+    echo "PARSER_REPLICAS must be a positive integer when remote parsing is enabled." >&2
+    exit 1
+  fi
+elif [[ "$parser_replicas_override" == true ]]; then
+  echo "--parser-replicas requires AI_ENABLED=true and PARSER_REMOTE_ENABLED=true." >&2
+  exit 1
+else
+  parser_replicas=0
+fi
+
 if [[ -n "$api_replicas" && ! "$api_replicas" =~ ^[1-9][0-9]*$ ]]; then
   echo "API_REPLICAS must be a positive integer when specified." >&2
   exit 1
@@ -227,6 +260,9 @@ if [[ "$build" == true ]]; then
   fi
   if [[ "$ai_enabled" == true ]]; then
     build_targets+=(aisvc)
+    if [[ "$parser_remote_enabled" == true ]]; then
+      build_targets+=(parser-svc)
+    fi
   fi
   if [[ "$search_indexer" == true ]]; then
     build_targets+=(search-indexer)
@@ -237,6 +273,9 @@ fi
 profiles=(--profile app)
 if [[ "$ai_enabled" == true && "$ai_split" == false ]]; then
   profiles+=(--profile ai)
+fi
+if [[ "$ai_enabled" == true && "$parser_remote_enabled" == true ]]; then
+  profiles+=(--profile parser)
 fi
 if [[ "$ai_enabled" == true && "$ai_split" == true ]]; then
   profiles+=(--profile ai-split)
@@ -282,6 +321,9 @@ if [[ "$ai_enabled" == true ]]; then
     scale_args+=(--scale "aisvc=$aisvc_replicas")
   fi
 fi
+if [[ "$parser_replicas" -gt 0 ]]; then
+  scale_args+=(--scale "parser-svc=$parser_replicas")
+fi
 if [[ -n "$api_replicas" ]]; then
   scale_args+=(--scale "api=$api_replicas")
 fi
@@ -293,6 +335,9 @@ if [[ "$distributed_workers" == true ]]; then
       distributed_services+=(ai-query ai-indexer)
     else
       distributed_services+=(aisvc)
+    fi
+    if [[ "$parser_remote_enabled" == true ]]; then
+      distributed_services+=(parser-svc)
     fi
   fi
   if [[ "$redis_split" == true ]]; then
@@ -356,8 +401,13 @@ fi
 if [[ "$ai_enabled" == false ]]; then
   # Profile-disabled services are not orphans, so remove old AI containers
   # explicitly when switching an existing deployment to core-only mode.
-  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile ai --profile ai-split stop aisvc ai-query ai-indexer etcd
-  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile ai --profile ai-split rm -f aisvc ai-query ai-indexer etcd
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile ai --profile ai-split --profile parser stop aisvc ai-query ai-indexer parser-svc etcd
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile ai --profile ai-split --profile parser rm -f aisvc ai-query ai-indexer parser-svc etcd
+fi
+
+if [[ "$ai_enabled" == true && "$parser_remote_enabled" == false ]]; then
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile parser stop parser-svc >/dev/null
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile parser rm -f parser-svc >/dev/null
 fi
 
 if [[ "$redis_split" == false ]]; then

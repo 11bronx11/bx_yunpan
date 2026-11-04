@@ -213,3 +213,111 @@ var AIService_ServiceDesc = grpc.ServiceDesc{
 	},
 	Metadata: "ai/v1/ai.proto",
 }
+
+const (
+	DocumentParserService_ParseDocument_FullMethodName = "/yunpan.ai.v1.DocumentParserService/ParseDocument"
+)
+
+// DocumentParserServiceClient is the client API for DocumentParserService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// DocumentParserService isolates CPU and memory intensive document parsing
+// from the AI indexer. Its instances are discovered independently from AIService.
+type DocumentParserServiceClient interface {
+	ParseDocument(ctx context.Context, in *ParseDocumentRequest, opts ...grpc.CallOption) (*ParseDocumentResponse, error)
+}
+
+type documentParserServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewDocumentParserServiceClient(cc grpc.ClientConnInterface) DocumentParserServiceClient {
+	return &documentParserServiceClient{cc}
+}
+
+func (c *documentParserServiceClient) ParseDocument(ctx context.Context, in *ParseDocumentRequest, opts ...grpc.CallOption) (*ParseDocumentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ParseDocumentResponse)
+	err := c.cc.Invoke(ctx, DocumentParserService_ParseDocument_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// DocumentParserServiceServer is the server API for DocumentParserService service.
+// All implementations must embed UnimplementedDocumentParserServiceServer
+// for forward compatibility.
+//
+// DocumentParserService isolates CPU and memory intensive document parsing
+// from the AI indexer. Its instances are discovered independently from AIService.
+type DocumentParserServiceServer interface {
+	ParseDocument(context.Context, *ParseDocumentRequest) (*ParseDocumentResponse, error)
+	mustEmbedUnimplementedDocumentParserServiceServer()
+}
+
+// UnimplementedDocumentParserServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedDocumentParserServiceServer struct{}
+
+func (UnimplementedDocumentParserServiceServer) ParseDocument(context.Context, *ParseDocumentRequest) (*ParseDocumentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ParseDocument not implemented")
+}
+func (UnimplementedDocumentParserServiceServer) mustEmbedUnimplementedDocumentParserServiceServer() {}
+func (UnimplementedDocumentParserServiceServer) testEmbeddedByValue()                               {}
+
+// UnsafeDocumentParserServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to DocumentParserServiceServer will
+// result in compilation errors.
+type UnsafeDocumentParserServiceServer interface {
+	mustEmbedUnimplementedDocumentParserServiceServer()
+}
+
+func RegisterDocumentParserServiceServer(s grpc.ServiceRegistrar, srv DocumentParserServiceServer) {
+	// If the following call panics, it indicates UnimplementedDocumentParserServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&DocumentParserService_ServiceDesc, srv)
+}
+
+func _DocumentParserService_ParseDocument_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ParseDocumentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DocumentParserServiceServer).ParseDocument(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DocumentParserService_ParseDocument_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DocumentParserServiceServer).ParseDocument(ctx, req.(*ParseDocumentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// DocumentParserService_ServiceDesc is the grpc.ServiceDesc for DocumentParserService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var DocumentParserService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "yunpan.ai.v1.DocumentParserService",
+	HandlerType: (*DocumentParserServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ParseDocument",
+			Handler:    _DocumentParserService_ParseDocument_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "ai/v1/ai.proto",
+}

@@ -90,6 +90,8 @@ type fakeProvider struct{ dimension int }
 
 func (p *fakeProvider) ModelVersion() string { return "local-deterministic-v1" }
 
+func (p *fakeProvider) VisionModelVersion() string { return "local-deterministic-v1" }
+
 func (p *fakeProvider) Embeddings(_ context.Context, texts []string) ([][]float32, error) {
 	result := make([][]float32, 0, len(texts))
 	for _, text := range texts {
@@ -189,6 +191,8 @@ type dashScopeProvider struct {
 func (p *dashScopeProvider) ModelVersion() string {
 	return p.chatModel + "+" + p.embeddingModel
 }
+
+func (p *dashScopeProvider) VisionModelVersion() string { return p.visionModel }
 
 func (p *dashScopeProvider) Embeddings(ctx context.Context, texts []string) ([][]float32, error) {
 	var response struct {
