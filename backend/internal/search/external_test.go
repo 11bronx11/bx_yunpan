@@ -62,6 +62,26 @@ func TestQdrantRejectsWrongDimensionBeforeNetwork(t *testing.T) {
 	}
 }
 
+func TestElasticsearchRejectsPartialSearchSuccess(t *testing.T) {
+	for _, body := range []string{
+		`{"timed_out":true,"hits":{"hits":[]}}`,
+		`{"_shards":{"failed":1},"hits":{"hits":[]}}`,
+		`{}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) }))
+			defer server.Close()
+			index := NewElasticsearchIndex(server.URL, "", "", server.Client())
+			if _, err := index.SearchText(context.Background(), RetrievalRequest{TargetVersion: "v1"}); !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("partial text result accepted: %v", err)
+			}
+			if _, err := index.SearchVector(context.Background(), RetrievalRequest{TargetVersion: "v1"}, []float32{1, 0}); !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("partial vector result accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestElasticsearchVectorSearchUsesBoundedKNN(t *testing.T) {
 	var body map[string]any
 	chunkID, objectID, versionID := uuid.New(), uuid.New(), uuid.New()

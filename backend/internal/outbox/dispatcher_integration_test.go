@@ -210,11 +210,12 @@ func TestDispatcherThrottlesCompatibilityPreparationButPinsNewDeliveries(t *test
 	if err != nil || processed != 1 {
 		t.Fatalf("compatibility recovery dispatch: processed=%d error=%v", processed, err)
 	}
-	if err := db.First(&fresh, "event_id = ? AND transport = 'rabbitmq'", legacyID).Error; err != nil {
+	var recovered Delivery
+	if err := db.First(&recovered, "event_id = ? AND transport = 'rabbitmq'", legacyID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if fresh.Status != "published" {
-		t.Fatalf("legacy delivery status = %q, want published", fresh.Status)
+	if recovered.Status != "published" {
+		t.Fatalf("legacy delivery status = %q, want published", recovered.Status)
 	}
 }
 

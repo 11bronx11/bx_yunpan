@@ -119,6 +119,10 @@ func TestPostgresIndexVersionLifecycle(t *testing.T) {
 	if err != nil || again.ID != row.ID || again.State != "building" {
 		t.Fatalf("idempotent start = %#v, err=%v", again, err)
 	}
+	watermark, checksum := int64(0), "sha256:test"
+	if err := idx.UpdateVersionProgress(ctx, row.ID, &watermark, &checksum); err != nil {
+		t.Fatal(err)
+	}
 	if err := idx.SetVersionState(ctx, row.ID, "building", "active", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -182,6 +186,12 @@ func TestPostgresIndexRollbackRestoresRetiredVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Where("id IN ?", []uuid.UUID{oldVersion.ID, newVersion.ID}).Delete(&IndexVersion{})
+	watermark, checksum := int64(0), "sha256:test"
+	for _, id := range []uuid.UUID{oldVersion.ID, newVersion.ID} {
+		if err := idx.UpdateVersionProgress(ctx, id, &watermark, &checksum); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := idx.ActivateVersion(ctx, oldVersion.ID); err != nil {
 		t.Fatal(err)
 	}

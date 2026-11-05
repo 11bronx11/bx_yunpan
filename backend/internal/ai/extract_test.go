@@ -11,7 +11,10 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/simplifiedchinese"
+	textunicode "golang.org/x/text/encoding/unicode"
+	"golang.org/x/text/encoding/unicode/utf32"
 )
 
 func TestExtractPDFRejectsRawBytes(t *testing.T) {
@@ -82,6 +85,26 @@ func TestExtractDOCXPreservesParagraphBoundaries(t *testing.T) {
 	}
 	if len(sections) != 1 || normalized != "第一段。\n\n第二段。" {
 		t.Fatalf("expected paragraph boundary, got %#v", sections)
+	}
+}
+
+func TestExtractDOCXPreservesWordsAcrossFormattingRuns(t *testing.T) {
+	var archive bytes.Buffer
+	writer := zip.NewWriter(&archive)
+	entry, err := writer.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const document = `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>中文</w:t></w:r><w:r><w:t>搜索</w:t></w:r><w:r><w:t xml:space="preserve"> Postgre</w:t></w:r><w:r><w:t>SQL</w:t><w:tab/><w:t>词组</w:t><w:br/><w:t>下一行</w:t></w:r></w:p></w:body></w:document>`
+	if _, err := entry.Write([]byte(document)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sections, err := extractDOCX(archive.Bytes())
+	if err != nil || len(sections) != 1 || strings.TrimSpace(sections[0].Text) != "中文搜索 PostgreSQL\t词组\n下一行" {
+		t.Fatalf("formatting runs broke source words: %#v, %v", sections, err)
 	}
 }
 
@@ -182,5 +205,46 @@ func TestExtractConvertsGB18030SourceText(t *testing.T) {
 func TestDecodeTextRejectsBinaryControls(t *testing.T) {
 	if _, err := decodeText([]byte{'a', 0, 'b'}); err == nil {
 		t.Fatal("expected binary control bytes to be rejected")
+	}
+}
+
+func TestDecodeTextPreservesChineseAcrossEncodings(t *testing.T) {
+	const source = "中文搜索 PostgreSQL\n智能云盘。"
+	for _, enc := range []encoding.Encoding{
+		textunicode.UTF8BOM,
+		textunicode.UTF16(textunicode.LittleEndian, textunicode.UseBOM),
+		textunicode.UTF16(textunicode.BigEndian, textunicode.UseBOM),
+		utf32.UTF32(utf32.LittleEndian, utf32.UseBOM),
+		utf32.UTF32(utf32.BigEndian, utf32.UseBOM),
+		simplifiedchinese.GB18030,
+	} {
+		data, err := enc.NewEncoder().Bytes([]byte(source))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, err := decodeText(data)
+		if err != nil || text != source {
+			t.Fatalf("encoding %v: text=%q err=%v", enc, text, err)
+		}
+	}
+	for _, data := range [][]byte{{0xff, 0xfe, 0}, {0xff, 0xfe, 0, 0xd8}, {0, 0, 0xfe, 0xff, 0, 0x11, 0, 0}} {
+		if _, err := decodeText(data); !errors.Is(err, errInvalidInput) {
+			t.Fatalf("invalid Unicode accepted: %x, %v", data, err)
+		}
+	}
+}
+
+func TestExtractJSONMatchesStrictParserPolicy(t *testing.T) {
+	legacy, err := simplifiedchinese.GB18030.NewEncoder().Bytes([]byte(`{"名称":"中文"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, data := range [][]byte{legacy, []byte(`{"名称":}`)} {
+		if _, err := extract(context.Background(), &fakeProvider{dimension: 4}, "application/json; charset=utf-8", data); !errors.Is(err, errInvalidInput) {
+			t.Fatalf("invalid or legacy-encoded JSON accepted: %v", err)
+		}
+	}
+	if _, err := extract(context.Background(), &fakeProvider{dimension: 4}, "application/json", []byte(`{"名称":"中文"}`)); err != nil {
+		t.Fatal(err)
 	}
 }

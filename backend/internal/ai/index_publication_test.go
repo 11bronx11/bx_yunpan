@@ -48,7 +48,7 @@ func publicationFixture(t *testing.T) (*gorm.DB, *Service, uuid.UUID) {
 	})
 	service := NewService(db, nil, objectstore.NewService(db), storage, config.AI{
 		Provider: "fake", Dimension: 1024, MaxObjectBytes: 1 << 20, RequestTimeout: time.Second,
-	})
+	}).WithParserProfileVersion("publication-parser-v1")
 	return db, service, objectID
 }
 
@@ -91,8 +91,8 @@ func TestIndexPublicationEmitsDurableSearchNotification(t *testing.T) {
 	if err := db.Table("ai_chunks").Where("document_version_id = ?", *document.ActiveVersionID).Take(&storedChunk).Error; err != nil {
 		t.Fatal(err)
 	}
-	if storedChunk.Kind != "text" || storedChunk.SourceKind != "native" || storedChunk.ParserID != "builtin" || storedChunk.ParserVersion != "builtin-v1" ||
-		storedChunk.ChunkerVersion != "document-chunker-v2" || storedChunk.TokenizerID != "mixed-script-estimate-v1" ||
+	if storedChunk.Kind != "text" || storedChunk.SourceKind != "native" || storedChunk.ParserID != "builtin" || storedChunk.ParserVersion != "publication-parser-v1" ||
+		storedChunk.ChunkerVersion != "document-chunker-v3" || storedChunk.TokenizerID != "mixed-script-estimate-v1" ||
 		storedChunk.EstimatedTokenCount <= 0 || !storedChunk.TokenCountIsEstimate {
 		t.Fatalf("chunk source metadata was not persisted: %#v", storedChunk)
 	}
@@ -129,5 +129,33 @@ func TestIndexPublicationRollsBackWhenSearchNotificationFails(t *testing.T) {
 	}
 	if document.ActiveVersionID != nil || chunks != 0 || document.Status == "indexed" {
 		t.Fatalf("notification failure committed publication: active=%v chunks=%d status=%s", document.ActiveVersionID, chunks, document.Status)
+	}
+}
+
+func TestChunkerUpgradeRebuildsLegacyGeneration(t *testing.T) {
+	db, service, objectID := publicationFixture(t)
+	if err := service.ProcessObject(context.Background(), objectID); err != nil {
+		t.Fatal(err)
+	}
+	var before Document
+	if err := db.Where("object_id = ?", objectID).First(&before).Error; err != nil {
+		t.Fatal(err)
+	}
+	// Model and configured parser profile stay the same. An old generation
+	// must still be rebuilt after the built-in chunker implementation changes.
+	for _, table := range []string{"ai_documents", "ai_document_versions"} {
+		if err := db.Table(table).Where("object_id = ?", objectID).Update("pipeline_version", "document-index-v5").Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := service.ProcessObject(context.Background(), objectID); err != nil {
+		t.Fatal(err)
+	}
+	var after Document
+	if err := db.Where("object_id = ?", objectID).First(&after).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after.ActiveVersionID == nil || before.ActiveVersionID == nil || *after.ActiveVersionID == *before.ActiveVersionID || after.PipelineVersion != service.pipelineVersion {
+		t.Fatalf("chunker upgrade reused a legacy generation: before=%#v after=%#v", before, after)
 	}
 }

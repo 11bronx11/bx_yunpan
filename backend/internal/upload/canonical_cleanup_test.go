@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/identity"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
+	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
 )
 
@@ -36,7 +38,7 @@ func TestCanonicalLegacyOrphanEntersGC(t *testing.T) {
 	if err := f.db.Model(&session).Updates(map[string]any{"status": StatusFailed, "reserved_bytes": 0}).Error; err != nil {
 		t.Fatal(err)
 	}
-	count, err := f.service.reconcileCanonicalOrphans(ctx, 100)
+	count, err := f.service.ReconcileCanonicalOrphans(ctx, 100)
 	if err != nil || count < 1 {
 		t.Fatalf("reconcile count=%d err=%v", count, err)
 	}
@@ -53,8 +55,67 @@ func TestCanonicalLegacyOrphanEntersGC(t *testing.T) {
 	if store.exists(object.Bucket, object.ObjectKey) {
 		t.Fatal("orphan bytes retained")
 	}
-	if count, err := f.service.reconcileCanonicalOrphans(ctx, 100); err != nil || count != 0 {
+	if count, err := f.service.ReconcileCanonicalOrphans(ctx, 100); err != nil || count != 0 {
 		t.Fatalf("repeat count=%d error=%v", count, err)
+	}
+}
+
+func TestConcurrentCanonicalOrphanScansEnqueueOneDelete(t *testing.T) {
+	f := newConcurrencyFixture(t)
+	store := newFakeUploadStorage()
+	f.service.storage = store
+	content := []byte("concurrent legacy orphan " + uuid.NewString())
+	session := newVerifyingSession(f.userID, f.rootID, "orphan-race.txt", content)
+	if err := f.db.Create(&session).Error; err != nil {
+		t.Fatal(err)
+	}
+	store.put(session.Bucket, session.ObjectKey, content)
+	canonicalKey, err := f.service.ensureCanonical(context.Background(), session, session.DeclaredSHA256, session.SizeBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.Model(&session).Updates(map[string]any{"status": StatusFailed, "reserved_bytes": 0}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	const schedulers = 8
+	start := make(chan struct{})
+	errs := make(chan error, schedulers)
+	var wait sync.WaitGroup
+	for range schedulers {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			_, err := NewRecoveryService(f.db, f.service.objects, f.service.quota).ReconcileCanonicalOrphans(context.Background(), 10)
+			errs <- err
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var object objectstore.Object
+	if err := f.db.Where("bucket = ? AND object_key = ?", session.Bucket, canonicalKey).First(&object).Error; err != nil {
+		t.Fatal(err)
+	}
+	if object.Status != "deleting" {
+		t.Fatalf("orphan status = %q, want deleting", object.Status)
+	}
+	var deletes, gcEvents int64
+	if err := f.db.Model(&storageops.Operation{}).Where("object_id = ? AND operation_type = ?", object.ID, storageops.ObjectDelete).Count(&deletes).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.Table("outbox_events").Where("aggregate_id = ? AND event_type = ?", object.ID, outbox.EventObjectGCRequested).Count(&gcEvents).Error; err != nil {
+		t.Fatal(err)
+	}
+	if deletes != 1 || gcEvents != 1 {
+		t.Fatalf("cleanup operations=%d gc events=%d, want one each", deletes, gcEvents)
 	}
 }
 

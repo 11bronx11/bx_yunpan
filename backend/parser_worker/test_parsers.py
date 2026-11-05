@@ -75,6 +75,33 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(result["sections"][0]["encoding"], "gb18030")
         self.assertIn("decoded as GB18030", result["warnings"][0])
 
+    def test_chinese_text_encodings_preserve_original_content(self):
+        text = "智能云盘支持中文搜索。\nPostgreSQL 与 Elasticsearch"
+        for encoding in ("utf-8-sig", "utf-16", "utf-32", "gb18030"):
+            with self.subTest(encoding=encoding):
+                data = text.encode(encoding)
+                result = parsers.parse_document(data, "text/plain; charset=binary")
+                self.assertEqual(result["sections"][0]["text"], text)
+                self.assertEqual(result["sections"][0]["source_end"], len(data))
+                self.assertEqual(result["quality"]["replacement_runes"], 0)
+                self.assertEqual(result["parser_version"], "text-decoder-v2")
+
+    def test_even_length_gbk_is_not_misread_as_utf16(self):
+        text = "中文搜索"
+        result = parsers.parse_document(text.encode("gbk"), "text/plain")
+        self.assertEqual(result["sections"][0]["text"], text)
+        self.assertEqual(result["sections"][0]["encoding"], "gb18030")
+
+    def test_invalid_text_is_rejected_instead_of_indexing_replacements(self):
+        for data in (b"\x81", b"hello\x00world", b"\xff\xfe\x00", b"hello" * 50 + b"\x01"):
+            with self.subTest(data=data):
+                with self.assertRaises(parsers.ParserFailure):
+                    parsers.parse_document(data, "text/plain")
+
+    def test_json_does_not_use_legacy_encoding_fallback(self):
+        with self.assertRaises(parsers.InvalidDocument):
+            parsers.parse_document('{"名称":"中文"}'.encode("gb18030"), "application/json; charset=utf-8")
+
     def test_xlsx_routes_to_per_sheet_rows(self):
         try:
             import openpyxl

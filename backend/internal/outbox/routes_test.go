@@ -47,6 +47,16 @@ func TestRoutesOmitDisabledAIConsumers(t *testing.T) {
 	}
 }
 
+func TestUploadOperationRecoveryRoutesOnlyToUploadQueue(t *testing.T) {
+	routes := Routes(EventUploadOperationRecover, false)
+	if len(routes) != 1 || routes[0].Queue != "upload" || routes[0].TaskType != TaskUploadOperationRecoverV1 {
+		t.Fatalf("upload operation recovery routes = %#v", routes)
+	}
+	if got := Routes(EventStorageOperationRecover, false); len(got) != 1 || got[0].Queue != "maintenance" {
+		t.Fatalf("legacy/object recovery route changed: %#v", got)
+	}
+}
+
 func TestTargetFromDeliveryRejectsMalformedDestinations(t *testing.T) {
 	if _, ok := targetFromDelivery(Delivery{Transport: "kafka", Destination: "topic"}); ok {
 		t.Fatal("retired transport unexpectedly accepted")

@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -17,7 +18,10 @@ import (
 	"unicode/utf8"
 
 	pdf "github.com/ledongthuc/pdf"
+	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/simplifiedchinese"
+	textunicode "golang.org/x/text/encoding/unicode"
+	"golang.org/x/text/encoding/unicode/utf32"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai/rag"
 )
@@ -60,9 +64,15 @@ func extractWithLimits(ctx context.Context, provider Provider, mimeType string, 
 		"text/x-c", "text/x-c++", "text/x-go", "text/x-java-source", "text/x-python",
 		"application/javascript", "text/javascript", "application/typescript", "text/typescript",
 		"application/sql", "application/xml", "text/xml", "application/x-sh":
-		text, err := decodeText(data)
+		text, err := decodeTextWithPolicy(data, mimeType != "application/json")
 		if err != nil {
-			return nil, fmt.Errorf("%w: text is not valid UTF-8 or GB18030", errInvalidInput)
+			return nil, fmt.Errorf("%w: invalid text encoding or control characters", errInvalidInput)
+		}
+		if strings.TrimSpace(text) == "" {
+			return nil, errQualityFailure
+		}
+		if mimeType == "application/json" && !json.Valid([]byte(text)) {
+			return nil, fmt.Errorf("%w: invalid JSON", errInvalidInput)
 		}
 		if mimeType == "text/csv" {
 			return []extractedSection{{Text: text, Kind: rag.KindTable}}, nil
@@ -104,11 +114,41 @@ func extractVisionSummary(ctx context.Context, provider Provider, mimeType strin
 }
 
 func decodeText(data []byte) (string, error) {
+	return decodeTextWithPolicy(data, true)
+}
+
+func decodeTextWithPolicy(data []byte, allowLegacy bool) (string, error) {
+	var bomEncoding encoding.Encoding
+	switch {
+	case bytes.HasPrefix(data, []byte{0xff, 0xfe, 0, 0}):
+		bomEncoding = utf32.UTF32(utf32.LittleEndian, utf32.ExpectBOM)
+	case bytes.HasPrefix(data, []byte{0, 0, 0xfe, 0xff}):
+		bomEncoding = utf32.UTF32(utf32.BigEndian, utf32.ExpectBOM)
+	case bytes.HasPrefix(data, []byte{0xff, 0xfe}):
+		bomEncoding = textunicode.UTF16(textunicode.LittleEndian, textunicode.ExpectBOM)
+	case bytes.HasPrefix(data, []byte{0xfe, 0xff}):
+		bomEncoding = textunicode.UTF16(textunicode.BigEndian, textunicode.ExpectBOM)
+	}
+	if bomEncoding != nil {
+		decoded, err := bomEncoding.NewDecoder().Bytes(data)
+		if err != nil || !isLikelyText(decoded) {
+			return "", errInvalidInput
+		}
+		encoded, err := bomEncoding.NewEncoder().Bytes(decoded)
+		if err != nil || !bytes.Equal(encoded, data) {
+			return "", errInvalidInput
+		}
+		return string(decoded), nil
+	}
+	data = bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
 	if utf8.Valid(data) {
 		if !isLikelyText(data) {
 			return "", errInvalidInput
 		}
 		return string(data), nil
+	}
+	if !allowLegacy {
+		return "", errInvalidInput
 	}
 	decoded, err := simplifiedchinese.GB18030.NewDecoder().Bytes(data)
 	if err != nil || !utf8.Valid(decoded) || !isLikelyText(decoded) {
@@ -322,7 +362,10 @@ func extractDOCX(data []byte) ([]extractedSection, error) {
 					return nil, fmt.Errorf("%w: decode DOCX text: %v", errInvalidInput, err)
 				}
 				text.WriteString(value)
-				text.WriteByte(' ')
+			case "tab":
+				text.WriteByte('\t')
+			case "br", "cr":
+				text.WriteByte('\n')
 			case "p":
 				// Keep an empty line between Word paragraphs so the chunker can
 				// preserve paragraph boundaries after XML whitespace is normalized.

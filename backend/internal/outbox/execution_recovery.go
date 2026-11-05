@@ -24,11 +24,34 @@ func deliveryTaskID(row Delivery) string {
 // task identity. Callers supply a transaction, so replay and ownership checks
 // commit together. Live, retrying, and terminal tasks are kept intact.
 func RecoverDelivery(tx *gorm.DB, eventType string, aggregateID uuid.UUID, now time.Time, staleAfter time.Duration) (active, repaired bool, err error) {
+	active, repaired, _, err = recoverDelivery(tx, eventType, aggregateID, now, staleAfter, false)
+	return
+}
+
+// RecoverDeliverySince isolates a revived object's new generation from old
+// terminal receipts. verified_at is persisted when that generation is born.
+func RecoverDeliverySince(tx *gorm.DB, eventType string, aggregateID uuid.UUID, now time.Time, staleAfter time.Duration, since time.Time) (active, repaired bool, err error) {
+	active, repaired, _, err = recoverDelivery(tx, eventType, aggregateID, now, staleAfter, false, since)
+	return
+}
+
+// RecoverDeliveryForRetryableWork reports a terminal dead-letter receipt
+// separately so a domain reconciler can create a new event identity when its
+// durable work row is still retryable. The original receipt remains intact.
+func RecoverDeliveryForRetryableWork(tx *gorm.DB, eventType string, aggregateID uuid.UUID, now time.Time, staleAfter time.Duration) (active, repaired, terminalDead bool, err error) {
+	return recoverDelivery(tx, eventType, aggregateID, now, staleAfter, true)
+}
+
+func recoverDelivery(tx *gorm.DB, eventType string, aggregateID uuid.UUID, now time.Time, staleAfter time.Duration, retryTerminal bool, since ...time.Time) (active, repaired, terminalDead bool, err error) {
 	if tx == nil || eventType == "" || aggregateID == uuid.Nil || staleAfter <= 0 {
-		return false, false, errors.New("outbox: invalid recovery lookup")
+		return false, false, false, errors.New("outbox: invalid recovery lookup")
 	}
 	var rows []Delivery
-	err = tx.Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: "d"}}).Table("outbox_deliveries AS d").Select("d.*").Joins("JOIN outbox_events e ON e.id=d.event_id").Where("e.aggregate_id=?", aggregateID).Order("d.event_id,d.transport,d.destination").Find(&rows).Error
+	query := tx.Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: "d"}}).Table("outbox_deliveries AS d").Select("d.*").Joins("JOIN outbox_events e ON e.id=d.event_id").Where("e.aggregate_id=?", aggregateID)
+	if len(since) > 0 && !since[0].IsZero() {
+		query = query.Where("e.created_at >= ?", since[0])
+	}
+	err = query.Order("d.published_at ASC NULLS FIRST,e.created_at ASC,d.event_id,d.transport,d.destination").Find(&rows).Error
 	if err != nil {
 		return
 	}
@@ -51,17 +74,18 @@ func RecoverDelivery(tx *gorm.DB, eventType string, aggregateID uuid.UUID, now t
 			active = true
 			continue
 		}
-		live, replay, e := recoverPublished(tx, row, now, staleAfter)
+		live, replay, dead, e := recoverPublished(tx, row, now, staleAfter)
 		if e != nil {
-			return false, false, e
+			return false, false, false, e
 		}
-		active = active || live
+		active = active || live || (dead && !retryTerminal)
 		repaired = repaired || replay
+		terminalDead = dead
 	}
 	return
 }
 
-func recoverPublished(tx *gorm.DB, row Delivery, now time.Time, staleAfter time.Duration) (active, repaired bool, err error) {
+func recoverPublished(tx *gorm.DB, row Delivery, now time.Time, staleAfter time.Duration) (active, repaired, terminalDead bool, err error) {
 	id := deliveryTaskID(row)
 	if err = tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 741823))", id).Error; err != nil {
 		return
@@ -69,45 +93,46 @@ func recoverPublished(tx *gorm.DB, row Delivery, now time.Time, staleAfter time.
 	var result taskqueue.Result
 	q := tx.Where("task_id=?", id).Find(&result)
 	if q.Error != nil {
-		return false, false, q.Error
+		return false, false, false, q.Error
 	}
 	if q.RowsAffected > 0 {
-		return result.Status == "dead", false, nil
+		return false, false, result.Status == "dead", nil
 	}
 	var execution taskqueue.Execution
 	q = tx.Where("task_id=?", id).Find(&execution)
 	if q.Error != nil {
-		return false, false, q.Error
+		return false, false, false, q.Error
 	}
 	due := row.PublishedAt != nil && !row.PublishedAt.Add(staleAfter).After(now)
 	updates := map[string]any{"status": "pending", "available_at": now, "lease_until": nil, "lease_token": nil, "last_error": "execution receipt missing; replay original task"}
 	if q.RowsAffected > 0 {
 		switch execution.Status {
 		case "running":
-			due = due && execution.LeaseUntil != nil && !execution.LeaseUntil.After(now)
+			due = due && ((execution.LeaseUntil != nil && !execution.LeaseUntil.After(now)) ||
+				(execution.LeaseUntil == nil && !execution.UpdatedAt.Add(staleAfter).After(now)))
 		case "retry":
 			due = due && !execution.AvailableAt.Add(staleAfter).After(now)
 		default:
-			return false, false, errors.New("outbox: finished execution without terminal receipt")
+			return false, false, false, errors.New("outbox: finished execution without terminal receipt")
 		}
 		updates["task_retry_count"] = execution.RetryCount
 		updates["task_max_retry"] = execution.MaxRetry
 		updates["task_timeout_ms"] = execution.TimeoutMS
 	}
 	if !due {
-		return true, false, nil
+		return true, false, false, nil
 	}
 	q = tx.Model(&Delivery{}).Where("event_id=? AND transport=? AND destination=? AND status='published'", row.EventID, row.Transport, row.Destination).Updates(updates)
 	if q.Error != nil {
-		return false, false, q.Error
+		return false, false, false, q.Error
 	}
 	if q.RowsAffected != 1 {
-		return true, false, nil
+		return true, false, false, nil
 	}
 	if err = tx.Model(&Event{}).Where("id=?", row.EventID).Updates(map[string]any{"status": "pending", "available_at": now}).Error; err != nil {
 		return
 	}
-	return true, true, nil
+	return true, true, false, nil
 }
 
 // RecoverPublishedBatch covers every enabled queue, including projections
@@ -146,7 +171,7 @@ func RecoverPublishedBatch(tx *gorm.DB, now time.Time, staleAfter time.Duration,
 		Joins("LEFT JOIN task_results r ON r.task_id=d.event_id::text || ':' || route.canonical_destination").
 		Joins("LEFT JOIN task_executions x ON x.task_id=d.event_id::text || ':' || route.canonical_destination").
 		Where("d.transport='rabbitmq' AND d.status='published' AND d.published_at<=? AND r.task_id IS NULL", now.Add(-staleAfter)).
-		Where("x.task_id IS NULL OR (x.status='running' AND x.lease_until<=?) OR (x.status='retry' AND x.available_at<=?)", now, now.Add(-staleAfter))
+		Where("x.task_id IS NULL OR (x.status='running' AND (x.lease_until<=? OR (x.lease_until IS NULL AND x.updated_at<=?))) OR (x.status='retry' AND x.available_at<=?)", now, now.Add(-staleAfter), now.Add(-staleAfter))
 	if err := query.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED", Table: clause.Table{Name: "d"}}).Order("d.published_at,d.event_id,d.destination").Limit(limit).Find(&rows).Error; err != nil {
 		return 0, err
 	}
@@ -159,7 +184,7 @@ func RecoverPublishedBatch(tx *gorm.DB, now time.Time, staleAfter time.Duration,
 		if _, ok := targetAllowedForEventWithSearch(event.EventType, aiEnabled, searchEnabled, row); !ok {
 			continue
 		}
-		_, replayed, err := recoverPublished(tx, row, now, staleAfter)
+		_, replayed, _, err := recoverPublished(tx, row, now, staleAfter)
 		if err != nil {
 			return count, err
 		}

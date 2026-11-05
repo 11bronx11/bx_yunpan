@@ -54,6 +54,14 @@ services:
       POSTGRES_MAX_IDLE_CONNS: "1"
       WORKER_CONCURRENCY: "2"
 
+  upload-worker:
+    deploy:
+      replicas: 1
+    environment:
+      POSTGRES_MAX_OPEN_CONNS: "4"
+      POSTGRES_MAX_IDLE_CONNS: "1"
+      WORKER_CONCURRENCY: "2"
+
   ai-query:
     deploy:
       replicas: 1

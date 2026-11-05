@@ -101,7 +101,7 @@ function snapshot(name) {
   const rows = docker('ps', '-q', '--filter', `label=com.docker.compose.project=${project}`).split('\n').filter(Boolean);
   writeFileSync(`${dir}/${name}-docker-stats.txt`, docker('stats', '--no-stream', '--format', '{{json .}}', ...rows) + '\n');
   writeFileSync(`${dir}/${name}-postgres.txt`, sql("SELECT count(*), state FROM pg_stat_activity GROUP BY state; SELECT pg_size_pretty(pg_database_size(current_database())); SELECT count(*), status FROM outbox_events GROUP BY status; SELECT count(*), state FROM storage_operations GROUP BY state;") + '\n');
-  for (const role of ['api','outbox-relay','object-worker','media-worker','maintenance-worker','search-indexer','ai-query','ai-indexer']) {
+  for (const role of ['api','outbox-relay','object-worker','media-worker','maintenance-worker','upload-worker','search-indexer','ai-query','ai-indexer']) {
     for (const id of containers(role)) {
       try { writeFileSync(`${dir}/${name}-${role}-${id.slice(0, 8)}.prom`, docker('exec', id, 'wget', '-qO-', `http://127.0.0.1:${role === 'api' ? 8081 : 8083}/metrics`)); } catch { /* Some AI roles expose gRPC health only. */ }
     }

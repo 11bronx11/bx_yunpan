@@ -19,7 +19,7 @@ scrape_configs:
   - job_name: bx-yunpan-workers
     metrics_path: /metrics
     dns_sd_configs:
-      - names: ["outbox-relay", "object-worker", "media-worker", "maintenance-worker", "search-indexer"]
+      - names: ["outbox-relay", "object-worker", "media-worker", "maintenance-worker", "upload-worker", "search-indexer"]
         type: A
         port: 8083
     relabel_configs:

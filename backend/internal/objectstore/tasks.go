@@ -3,6 +3,9 @@ package objectstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 	"github.com/google/uuid"
@@ -17,6 +20,10 @@ func GCHandler(service *Service, storage *minio.Client) taskqueue.HandlerFunc {
 		if err := json.Unmarshal(task.Payload(), &payload); err != nil {
 			return taskqueue.SkipRetry
 		}
-		return service.GarbageCollect(ctx, storage, payload.ObjectID)
+		err := service.GarbageCollect(ctx, storage, payload.ObjectID)
+		if errors.Is(err, storageops.ErrExhausted) {
+			return errors.Join(taskqueue.SkipRetry, err)
+		}
+		return err
 	}
 }

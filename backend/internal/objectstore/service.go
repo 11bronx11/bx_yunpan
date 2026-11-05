@@ -80,32 +80,38 @@ func (s *Service) GarbageCollect(ctx context.Context, storage GCStorage, objectI
 	return s.ReconcileObjectDeleteOperation(ctx, storage, operation.ID)
 }
 
-// ReconcileObjectDeletes completes object.delete operations claimed after a
+// ReconcileObjectDeletes completes object/variant delete operations claimed after a
 // worker crash. It rechecks references immediately before the final database
 // transition, so a stale operation cannot delete a newly referenced object.
 func (s *Service) ReconcileObjectDeletes(ctx context.Context, storage GCStorage, limit int) (int, error) {
-	operations, err := storageops.ClaimTypes(ctx, s.db, limit, 5*time.Minute, storageops.ObjectDelete)
-	if err != nil {
-		return 0, err
-	}
 	completed := 0
-	for _, operation := range operations {
+	var failures error
+	for range limit {
+		if ctx.Err() != nil {
+			return completed, errors.Join(failures, ctx.Err())
+		}
+		operations, err := storageops.ClaimTypes(ctx, s.db, 1, 5*time.Minute, storageops.ObjectDelete, storageops.VariantDelete)
+		if err != nil {
+			return completed, errors.Join(failures, err)
+		}
+		if len(operations) == 0 {
+			break
+		}
+		operation := operations[0]
 		if err := s.reconcileObjectDelete(ctx, storage, operation); err != nil {
-			if operation.LeaseToken != nil {
-				_ = storageops.MarkFailedOwned(s.db, operation.ID, *operation.LeaseToken, err, time.Second)
-			}
-			return completed, err
+			failures = errors.Join(failures, storageops.RecordError(ctx, s.db, operation, err))
+			continue
 		}
 		completed++
 	}
-	return completed, nil
+	return completed, failures
 }
 
 // ReconcileObjectDeleteOperation is the single-operation form used by the
 // broker-loss recovery event. Claiming is lease-fenced and therefore safe to
 // invoke repeatedly from multiple maintenance workers.
 func (s *Service) ReconcileObjectDeleteOperation(ctx context.Context, storage GCStorage, operationID uuid.UUID) error {
-	operation, err := storageops.Get(s.db, operationID)
+	operation, err := storageops.Get(s.db.WithContext(ctx), operationID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil
 	}
@@ -115,19 +121,33 @@ func (s *Service) ReconcileObjectDeleteOperation(ctx context.Context, storage GC
 	if operation.State == storageops.StateSucceeded {
 		return nil
 	}
+	if operation.State == storageops.StateDead {
+		return operation.LastErrorValue()
+	}
 	claimed, token, err := storageops.TryStartWithToken(s.db, operation.ID, 5*time.Minute)
 	if err != nil || !claimed {
 		return err
 	}
 	operation.LeaseToken = &token
 	if err := s.reconcileObjectDelete(ctx, storage, operation); err != nil {
-		_ = storageops.MarkFailedOwned(s.db, operation.ID, token, err, time.Second)
-		return err
+		return storageops.RecordError(ctx, s.db, operation, err)
 	}
 	return nil
 }
 
 func (s *Service) reconcileObjectDelete(ctx context.Context, storage GCStorage, operation storageops.Operation) error {
+	return storageops.RunOwned(ctx, s.db, operation, 5*time.Minute, func(ctx context.Context) error {
+		if operation.OperationType == storageops.VariantDelete {
+			return s.performVariantDelete(ctx, storage, operation)
+		}
+		if operation.OperationType != storageops.ObjectDelete {
+			return storageops.ErrInvalidOperation
+		}
+		return s.performObjectDelete(ctx, storage, operation)
+	})
+}
+
+func (s *Service) performObjectDelete(ctx context.Context, storage GCStorage, operation storageops.Operation) error {
 	if operation.ObjectID == nil {
 		return errors.New("object delete operation has no object")
 	}
@@ -144,6 +164,28 @@ func (s *Service) reconcileObjectDelete(ctx context.Context, storage GCStorage, 
 	}
 	if references > 0 || object.ReferenceCount > 0 || object.Status != "deleting" || object.ObjectKey != operation.SourceKey || object.Bucket != operation.SourceBucket {
 		return storageops.MarkSucceededOwned(s.db, operation.ID, operationLeaseToken(operation))
+	}
+	// A failed verification may schedule GC while its copy is still returning.
+	// Deleting before that copy ends would allow it to recreate retired bytes.
+	var copying int64
+	if err := s.db.WithContext(ctx).Model(&storageops.Operation{}).
+		Where("operation_type = ? AND target_bucket = ? AND target_key = ? AND state = ?", storageops.CanonicalEnsure, operation.SourceBucket, operation.SourceKey, storageops.StateRunning).
+		Count(&copying).Error; err != nil {
+		return err
+	}
+	if copying > 0 {
+		return errors.New("canonical copy still running; defer deletion")
+	}
+	// Thumbnail writers register their cleanup intent under the object's row
+	// lock before writing bytes. Wait until they finish or recovery owns cleanup.
+	var writing int64
+	if err := s.db.WithContext(ctx).Model(&storageops.Operation{}).
+		Where("object_id = ? AND operation_type = ? AND state = ?", object.ID, storageops.VariantDelete, storageops.StateRunning).
+		Count(&writing).Error; err != nil {
+		return err
+	}
+	if writing > 0 {
+		return errors.New("thumbnail write or cleanup still running; defer deletion")
 	}
 	var variants []objectVariant
 	if err := s.db.Where("object_id = ?", object.ID).

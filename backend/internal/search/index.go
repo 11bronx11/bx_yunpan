@@ -6,6 +6,7 @@ package search
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -233,6 +234,9 @@ func (p *PostgresIndex) StartVersion(ctx context.Context, backend, projectionTyp
 	if err := p.db.WithContext(ctx).Where("backend = ? AND projection_type = ? AND target_version = ?", backend, projectionType, targetVersion).First(&row).Error; err != nil {
 		return IndexVersion{}, err
 	}
+	if row.IndexEpoch != epoch {
+		return IndexVersion{}, ErrIndexVersionConflict
+	}
 	return row, nil
 }
 
@@ -246,11 +250,11 @@ func (p *PostgresIndex) SetVersionState(ctx context.Context, id uuid.UUID, from,
 	if !allowedIndexVersionTransition(from, to) {
 		return ErrIndexVersionConflict
 	}
+	if to == "active" {
+		return p.ActivateVersion(ctx, id)
+	}
 	now := time.Now().UTC()
 	updates := map[string]any{"state": to, "last_error": lastError, "updated_at": now}
-	if to == "active" {
-		updates["activated_at"] = now
-	}
 	result := p.db.WithContext(ctx).Model(&IndexVersion{}).Where("id = ? AND state = ?", id, from).Updates(updates)
 	if result.Error != nil {
 		return result.Error
@@ -268,7 +272,7 @@ func (p *PostgresIndex) UpdateVersionProgress(ctx context.Context, id uuid.UUID,
 	if p == nil || p.db == nil || id == uuid.Nil {
 		return ErrInvalidIndexVersion
 	}
-	result := p.db.WithContext(ctx).Model(&IndexVersion{}).Where("id = ? AND state = 'building'", id).Updates(map[string]any{"snapshot_watermark": watermark, "checksum": checksum, "updated_at": time.Now().UTC()})
+	result := p.db.WithContext(ctx).Model(&IndexVersion{}).Where("id = ? AND state = 'building'", id).Updates(map[string]any{"snapshot_watermark": watermark, "checksum": checksum, "last_error": nil, "updated_at": time.Now().UTC()})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -287,7 +291,7 @@ func (p *PostgresIndex) UpdateVersionCursor(ctx context.Context, id uuid.UUID, c
 	}
 	result := p.db.WithContext(ctx).Model(&IndexVersion{}).
 		Where("id = ? AND state = 'building'", id).
-		Updates(map[string]any{"snapshot_cursor": cursor, "snapshot_watermark": watermark, "checksum": checksum, "updated_at": time.Now().UTC()})
+		Updates(map[string]any{"snapshot_cursor": cursor, "snapshot_watermark": watermark, "checksum": checksum, "last_error": nil, "updated_at": time.Now().UTC()})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -309,7 +313,7 @@ func (p *PostgresIndex) ActivateVersion(ctx context.Context, id uuid.UUID) error
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&next, "id = ?", id).Error; err != nil {
 			return err
 		}
-		if next.State != "building" {
+		if next.State != "building" || next.SnapshotWatermark == nil || next.Checksum == nil || !strings.HasPrefix(*next.Checksum, "sha256:") || next.LastError != nil {
 			return ErrIndexVersionConflict
 		}
 		now := time.Now().UTC()

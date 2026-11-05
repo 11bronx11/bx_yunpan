@@ -18,6 +18,7 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dbmetrics"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dependencies"
 	platformworker "github.com/11bronx11/bx_yunpan/backend/internal/platform/worker"
 	"github.com/11bronx11/bx_yunpan/backend/internal/recovery"
@@ -46,6 +47,8 @@ func RunWorker(ctx context.Context, cfg config.Config, logger *slog.Logger) erro
 	metricsRegistry := prometheus.NewRegistry()
 	metrics := outbox.NewMetrics(metricsRegistry)
 	workerMetrics := platformworker.NewMetrics(metricsRegistry, platformworker.RoleCombined, platformworker.QueuesForRole(platformworker.RoleCombined, cfg.Worker.Queues))
+	dbmetrics.RegisterPool(metricsRegistry, deps.SQL, "worker")
+	metricsRegistry.MustRegister(dbmetrics.NewStorageCollector(deps.GORM), dbmetrics.NewRecoveryCollector(deps.GORM))
 	dispatcher := outbox.NewDispatcher(deps.GORM, queueClient, logger, cfg.Outbox).
 		WithPublishTimeout(cfg.TaskQueue.PublishTimeout).
 		WithLeaderLock(deps.RedisCoordination, cfg.Locking).
@@ -71,10 +74,10 @@ func RunWorker(ctx context.Context, cfg config.Config, logger *slog.Logger) erro
 		if err := json.Unmarshal(task.Payload(), &payload); err != nil || payload.OperationID == uuid.Nil {
 			return taskqueue.SkipRetry
 		}
-		if payload.OperationType == storageops.ObjectDelete {
-			return objects.ReconcileObjectDeleteOperation(ctx, deps.Storage, payload.OperationID)
+		if payload.OperationType == storageops.ObjectDelete || payload.OperationType == storageops.VariantDelete {
+			return storageRecoveryResult(objects.ReconcileObjectDeleteOperation(ctx, deps.Storage, payload.OperationID))
 		}
-		return uploads.ReconcileStorageOperation(ctx, payload.OperationID)
+		return storageRecoveryResult(uploads.ReconcileStorageOperation(ctx, payload.OperationID))
 	}
 	// AI 索引与重建索引已迁到 cmd/aisvc，这里只保留缩略图、对象校验、GC 与清理。
 	handlers := workerHandlersWithRecovery(
@@ -91,7 +94,9 @@ func runRecoveryReconciler(ctx context.Context, reconciler *recovery.Reconciler,
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		report, err := reconciler.RunOnce(ctx, batch)
+		scan, stop := context.WithTimeout(ctx, 30*time.Second)
+		report, err := reconciler.RunOnce(scan, batch)
+		stop()
 		if err != nil && !errors.Is(err, context.Canceled) {
 			logger.ErrorContext(ctx, "reconcile broker-lost work", "error", err, "repaired", report.Repaired)
 		} else if report.Repaired > 0 {
@@ -145,11 +150,41 @@ func runUploadCleanup(ctx context.Context, uploads *upload.Service, interval tim
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		expired, err := uploads.Expire(ctx, batch)
+		scan, stop := context.WithTimeout(ctx, 30*time.Second)
+		retired, retireErr := uploads.RetireStoppedSessions(scan, batch)
+		stop()
+		if retireErr != nil && !errors.Is(retireErr, context.Canceled) {
+			logger.ErrorContext(ctx, "retire stopped uploads", "error", retireErr, "retired", retired)
+		} else if retired > 0 {
+			logger.ErrorContext(ctx, "uploads stopped after retry exhaustion", "retired", retired)
+		}
+		scan, stop = context.WithTimeout(ctx, 30*time.Second)
+		expired, err := uploads.Expire(scan, batch)
+		stop()
 		if err != nil && !errors.Is(err, context.Canceled) {
 			logger.ErrorContext(ctx, "expire uploads", "error", err)
 		} else if expired > 0 {
 			logger.InfoContext(ctx, "expired uploads", "count", expired)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func runCanonicalOrphanReconciler(ctx context.Context, uploads *upload.Service, interval time.Duration, batch int, logger *slog.Logger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		scan, stop := context.WithTimeout(ctx, 30*time.Second)
+		count, err := uploads.ReconcileCanonicalOrphans(scan, batch)
+		stop()
+		if err != nil && !errors.Is(err, context.Canceled) {
+			logger.ErrorContext(ctx, "reconcile orphan canonical objects", "error", err, "repaired", count)
+		} else if count > 0 {
+			logger.InfoContext(ctx, "reconciled orphan canonical objects", "repaired", count)
 		}
 		select {
 		case <-ctx.Done():
@@ -183,5 +218,6 @@ func workerHandlersWithRecovery(verify, ready, gc, recoverOperation taskqueue.Ha
 		recoverOperation = acknowledge
 	}
 	handlers[outbox.EventStorageOperationRecover] = recoverOperation
+	handlers[outbox.TaskUploadOperationRecoverV1] = recoverOperation
 	return handlers
 }

@@ -4,6 +4,28 @@ evaluation_interval: 1m
 tests:
   - interval: 1m
     input_series:
+      - series: 'yunpan_storage_backlog{operation="object.delete",state="dead"}'
+        values: '1 1 1'
+      - series: 'yunpan_recovery_backlog{event_type="media.thumbnail_requested.v1",state="stopped"}'
+        values: '1 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: YunpanAutomaticWorkStopped
+        exp_alerts:
+          - exp_labels:
+              operation: object.delete
+              state: dead
+              severity: warning
+            exp_annotations:
+              summary: Automatic work stopped after retry exhaustion and needs manual repair
+          - exp_labels:
+              event_type: media.thumbnail_requested.v1
+              state: stopped
+              severity: warning
+            exp_annotations:
+              summary: Automatic work stopped after retry exhaustion and needs manual repair
+  - interval: 1m
+    input_series:
       - series: 'yunpan_storage_oldest_age_seconds{operation="multipart.create",state="failed"}'
         values: '700+0x6 stale _ _'
       - series: 'yunpan_outbox_backlog_scrape_success'

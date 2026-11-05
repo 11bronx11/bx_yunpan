@@ -74,29 +74,33 @@ func (s *Service) registerCanonicalCleanup(ctx context.Context, tx *gorm.DB, ses
 
 // Recover copies left by earlier releases or interrupted terminal-state
 // handling. Inventory-only leftovers without an operation need a bucket audit.
-func (s *Service) reconcileCanonicalOrphans(ctx context.Context, limit int) (int, error) {
+func (s *Service) ReconcileCanonicalOrphans(ctx context.Context, limit int) (int, error) {
 	if limit <= 0 {
 		return 0, nil
 	}
 	var sessions []Session
-	err := s.db.WithContext(ctx).Where("status IN ?", []string{StatusFailed, StatusAborted, StatusExpired}).Where(`EXISTS (
+	err := s.maintenancePage(ctx, "canonical_orphans", s.db.Model(&Session{}).Where("status IN ?", []string{StatusFailed, StatusAborted, StatusExpired}).Where(`EXISTS (
 		SELECT 1 FROM storage_operations op WHERE op.upload_session_id = upload_sessions.id
 		AND op.operation_type = 'canonical.ensure' AND op.state = 'succeeded'
 		AND NOT EXISTS (SELECT 1 FROM file_objects o WHERE o.bucket = op.target_bucket AND o.object_key = op.target_key)
 		AND NOT EXISTS (SELECT 1 FROM file_objects o WHERE o.sha256 = upload_sessions.declared_sha256 AND o.size_bytes = upload_sessions.size_bytes AND o.status <> 'deleted')
-	)`).Order("updated_at ASC").Limit(limit).Find(&sessions).Error
+	)`), limit, &sessions)
 	if err != nil {
 		return 0, err
 	}
-	for i, session := range sessions {
+	repaired := 0
+	var failures error
+	for _, session := range sessions {
 		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&session, "id = ?", session.ID).Error; err != nil {
 				return err
 			}
 			return s.registerCanonicalCleanup(ctx, tx, session)
 		}); err != nil {
-			return i, err
+			failures = errors.Join(failures, err)
+		} else {
+			repaired++
 		}
 	}
-	return len(sessions), nil
+	return repaired, failures
 }

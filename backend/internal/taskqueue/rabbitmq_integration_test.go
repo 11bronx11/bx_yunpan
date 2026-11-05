@@ -135,8 +135,8 @@ func TestRabbitMQTransport(t *testing.T) {
 	task := func(id, q string) Task {
 		return Task{ID: id, Kind: "test", Queue: q, Body: []byte(`{"ok":true}`), MaxRetry: 2, Timeout: time.Second}
 	}
-	t.Run("confirmed_persistent_all_five_queues", func(t *testing.T) {
-		for i := 0; i < 100; i++ {
+	t.Run("confirmed_persistent_all_queues", func(t *testing.T) {
+		for i := 0; i < 20*len(queueNames); i++ {
 			q := queueNames[i%len(queueNames)]
 			if e := b.Publish(context.Background(), task(fmt.Sprint(i), q)); e != nil {
 				t.Fatal(e)
@@ -324,6 +324,23 @@ func TestRabbitMQTransport(t *testing.T) {
 		if len(seen) != 20 {
 			t.Fatal("confirmed task lost across restart")
 		}
+		// AMQP can accept connections before retry queue leaders and their
+		// at-least-once DLX workers have recovered. Verify that path before
+		// tearing down the vhost; deleting it during restoration can crash
+		// RabbitMQ 4.1's DLX supervisor and poison subsequent isolated tests.
+		probe := task("restart-retry-probe", "object")
+		for {
+			if err := b.publish(context.Background(), retryQueue("object", retryDelays[0]), probe, "restart probe"); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("retry topology did not recover after restart")
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if d := waitDelivery(t, ch, "object"); d.MessageId != probe.ID {
+			t.Fatalf("retry recovery probe=%s", d.MessageId)
+		}
 	})
 }
 func TestRabbitMQStability(t *testing.T) {
@@ -340,14 +357,14 @@ func TestRabbitMQStability(t *testing.T) {
 	var mu sync.Mutex
 	seen := map[string]int{}
 	var count int
-	stop := startConsumer(t, b, map[string]int{"object": 2, "media": 4, "maintenance": 1, "ai": 4, "search": 2}, map[string]HandlerFunc{"soak": func(_ context.Context, t *Task) error { mu.Lock(); seen[t.ID]++; mu.Unlock(); return nil }})
+	stop := startConsumer(t, b, map[string]int{"object": 2, "media": 4, "maintenance": 1, "upload": 2, "ai": 4, "search": 2}, map[string]HandlerFunc{"soak": func(_ context.Context, t *Task) error { mu.Lock(); seen[t.ID]++; mu.Unlock(); return nil }})
 	defer stop()
 	start := time.Now()
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for time.Since(start) < d {
 		<-ticker.C
-		msg := Task{ID: fmt.Sprint(count), Kind: "soak", Queue: queueNames[count%5], Body: []byte(`{}`), MaxRetry: 1}
+		msg := Task{ID: fmt.Sprint(count), Kind: "soak", Queue: queueNames[count%len(queueNames)], Body: []byte(`{}`), MaxRetry: 1}
 		if e := b.Publish(context.Background(), msg); e != nil {
 			t.Fatal(e)
 		}
@@ -371,7 +388,7 @@ func TestRabbitMQStability(t *testing.T) {
 	for _, n := range seen {
 		duplicates += n - 1
 	}
-	t.Logf("duration=%s confirmed=%d unique_consumed=%d duplicates=%d queues=5 concurrency=8", time.Since(start), count, len(seen), duplicates)
+	t.Logf("duration=%s confirmed=%d unique_consumed=%d duplicates=%d queues=%d concurrency=8", time.Since(start), count, len(seen), duplicates, len(queueNames))
 }
 
 func TestRabbitMQCrashConsumerHelper(t *testing.T) {

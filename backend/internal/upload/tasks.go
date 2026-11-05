@@ -3,8 +3,10 @@ package upload
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
 	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
@@ -24,9 +26,12 @@ func VerifyHandler(service *Service) taskqueue.HandlerFunc {
 		}
 		retried, retryOK := taskqueue.GetRetryCount(ctx)
 		maxRetry, maxRetryOK := taskqueue.GetMaxRetry(ctx)
-		if retryOK && maxRetryOK && retried >= maxRetry {
+		if errors.Is(err, storageops.ErrExhausted) || (retryOK && maxRetryOK && retried >= maxRetry) {
 			if failErr := service.FailVerification(ctx, payload.UploadID, verificationFailureCode(err)); failErr != nil {
 				return failErr
+			}
+			if errors.Is(err, storageops.ErrExhausted) {
+				return errors.Join(taskqueue.SkipRetry, err)
 			}
 		}
 		return err

@@ -20,6 +20,7 @@ const (
 	EventAIIndexedV1               = "ai.indexed.v1"
 	EventAIReprocessRequestedV1    = "ai.reprocess_requested.v1"
 	EventStorageOperationRecoverV1 = "storage.operation_recover.v1"
+	EventUploadOperationRecoverV1  = "upload.operation_recover.v1"
 	EventMediaThumbnailRequestedV1 = "media.thumbnail_requested.v1"
 )
 
@@ -50,6 +51,7 @@ var definitions = map[string]Definition{
 	EventAIIndexedV1:               {EventAIIndexedV1, MessageKindDomainEvent, 1, "file_object", func() any { return &AIIndexedV1{} }},
 	EventAIReprocessRequestedV1:    {EventAIReprocessRequestedV1, MessageKindCommand, 1, "ai_task", func() any { return &AIReprocessRequestedV1{} }},
 	EventStorageOperationRecoverV1: {EventStorageOperationRecoverV1, MessageKindCommand, 1, "storage_operation", func() any { return &StorageOperationRecoverV1{} }},
+	EventUploadOperationRecoverV1:  {EventUploadOperationRecoverV1, MessageKindCommand, 1, "storage_operation", func() any { return &UploadOperationRecoverV1{} }},
 	EventMediaThumbnailRequestedV1: {EventMediaThumbnailRequestedV1, MessageKindCommand, 1, "file_object", func() any { return &MediaThumbnailRequestedV1{} }},
 }
 

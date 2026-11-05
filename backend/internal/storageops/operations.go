@@ -7,6 +7,7 @@ package storageops
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -22,13 +23,19 @@ const (
 	CanonicalEnsure   = "canonical.ensure"
 	StagingDelete     = "staging.delete"
 	ObjectDelete      = "object.delete"
+	VariantDelete     = "variant.delete"
 	StatePending      = "pending"
 	StateRunning      = "running"
 	StateSucceeded    = "succeeded"
 	StateFailed       = "failed"
+	StateDead         = "dead"
+	// This budget belongs to the durable operation, not a broker message.
+	// Rebuilding a lost or exhausted message must never reset it.
+	MaxAttempts = 12
 )
 
 var ErrInvalidOperation = errors.New("invalid storage operation")
+var ErrExhausted = errors.New("storage operation retry budget exhausted")
 
 type Operation struct {
 	ID              uuid.UUID `gorm:"type:uuid;primaryKey"`
@@ -53,10 +60,17 @@ type Operation struct {
 }
 
 func (o Operation) LastErrorValue() error {
-	if o.LastError == nil || strings.TrimSpace(*o.LastError) == "" {
+	if o.State == StateDead {
+		return errors.Join(ErrExhausted, errorMessage(o.LastError))
+	}
+	return errorMessage(o.LastError)
+}
+
+func errorMessage(message *string) error {
+	if message == nil || strings.TrimSpace(*message) == "" {
 		return errors.New("storage operation failed")
 	}
-	return errors.New(*o.LastError)
+	return errors.New(*message)
 }
 
 func (Operation) TableName() string { return "storage_operations" }
@@ -174,12 +188,19 @@ func markFailed(db *gorm.DB, id, token uuid.UUID, cause error, retryAfter time.D
 	if token != uuid.Nil {
 		query = query.Where("state = ? AND lease_token = ?", StateRunning, token)
 	}
-	result := query.Updates(map[string]any{
-		"state": StateFailed, "available_at": now.Add(retryAfter), "updated_at": now,
+	var updated Operation
+	result := query.Model(&updated).Clauses(clause.Returning{}).Updates(map[string]any{
+		"state":        gorm.Expr("CASE WHEN attempt >= ? THEN ? ELSE ? END", MaxAttempts, StateDead, StateFailed),
+		"completed_at": gorm.Expr("CASE WHEN attempt >= ? THEN ?::timestamptz ELSE NULL END", MaxAttempts, now),
+		"available_at": gorm.Expr("?::timestamptz + GREATEST(? * interval '1 millisecond', CASE WHEN attempt <= 1 THEN interval '1 second' WHEN attempt = 2 THEN interval '5 seconds' WHEN attempt = 3 THEN interval '30 seconds' WHEN attempt = 4 THEN interval '1 minute' ELSE interval '5 minutes' END)", now, retryAfter.Milliseconds()), "updated_at": now,
 		"lease_until": nil, "lease_token": nil, "last_error": message,
 	})
 	if result.Error != nil {
 		return result.Error
+	}
+	if result.RowsAffected == 1 && updated.State == StateDead {
+		logStopped(updated)
+		return ErrExhausted
 	}
 	if result.RowsAffected == 1 || token == uuid.Nil {
 		return nil
@@ -187,9 +208,6 @@ func markFailed(db *gorm.DB, id, token uuid.UUID, cause error, retryAfter time.D
 	var current Operation
 	if err := db.Where("id = ?", id).First(&current).Error; err != nil {
 		return err
-	}
-	if current.State == StateFailed {
-		return nil
 	}
 	return errors.New("storage operation lease lost")
 }
@@ -220,9 +238,12 @@ func TryStartWithToken(db *gorm.DB, id uuid.UUID, lease time.Duration) (bool, uu
 	if lease <= 0 {
 		lease = 5 * time.Minute
 	}
+	if err := stopExhausted(db.Where("id = ?", id), 1); err != nil {
+		return false, uuid.Nil, err
+	}
 	now := time.Now().UTC()
 	token := uuid.Must(uuid.NewV7())
-	result := db.Model(&Operation{}).Where("id = ? AND ((state IN ? AND available_at <= ?) OR (state = ? AND lease_until <= ?))", id, []string{StatePending, StateFailed}, now, StateRunning, now).
+	result := db.Model(&Operation{}).Where("attempt < ? AND id = ? AND ((state IN ? AND available_at <= ?) OR (state = ? AND (lease_until IS NULL OR lease_until <= ?)))", MaxAttempts, id, []string{StatePending, StateFailed}, now, StateRunning, now).
 		Updates(map[string]any{"state": StateRunning, "lease_until": now.Add(lease), "lease_token": token, "attempt": gorm.Expr("attempt + 1"), "updated_at": now})
 	return result.RowsAffected == 1, token, result.Error
 }
@@ -230,7 +251,7 @@ func TryStartWithToken(db *gorm.DB, id uuid.UUID, lease time.Duration) (bool, uu
 // Claim atomically leases retryable operations. A lease that expired while a
 // process was down is eligible again; no Redis lock is required for safety.
 func Claim(ctx context.Context, db *gorm.DB, limit int, lease time.Duration) ([]Operation, error) {
-	return ClaimTypes(ctx, db, limit, lease, MultipartCreate, MultipartComplete, MultipartAbort, CanonicalEnsure, StagingDelete, ObjectDelete)
+	return ClaimTypes(ctx, db, limit, lease, MultipartCreate, MultipartComplete, MultipartAbort, CanonicalEnsure, StagingDelete, ObjectDelete, VariantDelete)
 }
 
 func ClaimTypes(ctx context.Context, db *gorm.DB, limit int, lease time.Duration, operationTypes ...string) ([]Operation, error) {
@@ -245,8 +266,12 @@ func ClaimTypes(ctx context.Context, db *gorm.DB, limit int, lease time.Duration
 	}
 	var operations []Operation
 	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := stopExhausted(tx.Where("operation_type IN ?", operationTypes), limit); err != nil {
+			return err
+		}
 		now := time.Now().UTC()
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			Where("attempt < ?", MaxAttempts).
 			Where("operation_type IN ? AND state IN ? AND available_at <= ? AND (lease_until IS NULL OR lease_until <= ?)", operationTypes, []string{StatePending, StateFailed, StateRunning}, now, now).
 			Order("available_at ASC, created_at ASC").Limit(limit).Find(&operations).Error; err != nil {
 			return err
@@ -267,4 +292,32 @@ func ClaimTypes(ctx context.Context, db *gorm.DB, limit int, lease time.Duration
 		return nil
 	})
 	return operations, err
+}
+
+// StopExhausted also retires a final attempt whose owner crashed. Live leases
+// are never stopped, so a slow owner can still commit its successful result.
+func StopExhausted(ctx context.Context, db *gorm.DB, limit int) error {
+	return stopExhausted(db.WithContext(ctx), limit)
+}
+
+func stopExhausted(db *gorm.DB, limit int) error {
+	var rows []Operation
+	eligible := db.Session(&gorm.Session{}).Model(&Operation{}).Select("id").
+		Where("attempt >= ? AND (state IN ? OR (state = ? AND (lease_until IS NULL OR lease_until <= clock_timestamp())))", MaxAttempts, []string{StatePending, StateFailed}, StateRunning).
+		Order("updated_at, id").Limit(limit).Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
+	if err := db.Session(&gorm.Session{NewDB: true}).Model(&rows).Where("id IN (?)", eligible).Clauses(clause.Returning{}).Updates(map[string]any{
+		"state": StateDead, "lease_until": nil, "lease_token": nil,
+		"completed_at": gorm.Expr("clock_timestamp()"), "updated_at": gorm.Expr("clock_timestamp()"),
+		"last_error": gorm.Expr("COALESCE(last_error, ?)", ErrExhausted.Error()),
+	}).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		logStopped(row)
+	}
+	return nil
+}
+
+func logStopped(row Operation) {
+	slog.Error("storage operation stopped; manual repair required", "operation_id", row.ID, "operation_type", row.OperationType, "attempt", row.Attempt, "error", row.LastErrorValue())
 }

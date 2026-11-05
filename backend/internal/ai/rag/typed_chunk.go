@@ -9,7 +9,7 @@ import (
 const (
 	DefaultTokenBudget = 600
 	DefaultOverlap     = 60
-	DefaultChunker     = "document-chunker-v2"
+	DefaultChunker     = "document-chunker-v3"
 	EstimateTokenizer  = "mixed-script-estimate-v1"
 )
 
@@ -169,13 +169,14 @@ func pageNumber(page *int) int {
 }
 
 func normalizeChunkOptions(options ChunkOptions) ChunkOptions {
+	defaultBudget := options.TokenBudget <= 0
 	if options.TokenBudget <= 0 {
 		options.TokenBudget = DefaultTokenBudget
 	}
 	if options.Overlap < 0 {
 		options.Overlap = 0
 	}
-	if options.Overlap == 0 {
+	if options.Overlap == 0 && defaultBudget {
 		options.Overlap = DefaultOverlap
 	}
 	if options.Overlap >= options.TokenBudget {
@@ -208,7 +209,7 @@ func EstimateTokens(text string) int {
 		}
 	}
 	for _, r := range text {
-		if r < utf8.RuneSelf && (unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-') {
+		if asciiTokenRune(r) {
 			asciiRun++
 			continue
 		}
@@ -223,9 +224,9 @@ func EstimateTokens(text string) int {
 }
 
 var (
-	typedTextSeparators = []string{"\n\n", "\n", "。", "！", "？", "!", "?", "；", ";", ".", " "}
+	typedTextSeparators = []string{"\n\n", "\n", "。", "！", "？", "!", "?", "；", ";", "，", "、", "：", ",", ":", ".", " "}
 	typedCodeSeparators = []string{"\n", "\t", ",", ";", " "}
-	typedListSeparators = []string{"\n", "。", "；", ";", " "}
+	typedListSeparators = []string{"\n", "。", "！", "？", "；", ";", "，", "、", "：", " "}
 )
 
 func splitTextByTokens(text string, budget, overlap int, separators []string) []string {
@@ -233,115 +234,114 @@ func splitTextByTokens(text string, budget, overlap int, separators []string) []
 	if text == "" {
 		return nil
 	}
-	if EstimateTokens(text) <= budget {
-		return []string{text}
-	}
-	for index, separator := range separators {
-		parts := splitAfter(text, separator)
-		if len(parts) < 2 {
-			continue
+	budget = maxInt(1, budget)
+	overlap = minInt(maxInt(0, overlap), budget-1)
+	runes := []rune(text)
+	result := make([]string, 0)
+	for start := 0; start < len(runes); {
+		end := fittingTokenEnd(runes, start, budget)
+		if end < len(runes) {
+			minimum := fittingTokenEnd(runes, start, maxInt(1, budget/2))
+			end = preferredSplitEnd(runes, start, minimum, end, separators)
 		}
-		atoms := make([]string, 0, len(parts))
-		for _, part := range parts {
-			part = strings.TrimSpace(part)
-			if part == "" {
+		if piece := strings.TrimSpace(string(runes[start:end])); piece != "" {
+			result = append(result, piece)
+		}
+		if end == len(runes) {
+			break
+		}
+		// Overlap is a slice of the same source. Rejoining independent strings
+		// with a space used to turn e.g. 共和国 into 共 和国 at a hard split.
+		next := overlapTokenStart(runes, start, end, overlap)
+		if next <= start {
+			next = end
+		}
+		start = next
+	}
+	return result
+}
+
+func asciiTokenRune(r rune) bool {
+	return r < utf8.RuneSelf && (unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-')
+}
+
+// Incremental counting avoids repeatedly estimating every prefix of a long
+// punctuation-free paragraph. It uses exactly the EstimateTokens rules.
+func fittingTokenEnd(runes []rune, start, budget int) int {
+	count, asciiRun := 0, 0
+	for end := start; end < len(runes); end++ {
+		r := runes[end]
+		cost := 0
+		if asciiTokenRune(r) {
+			if asciiRun%4 == 0 {
+				cost = 1
+			}
+			asciiRun++
+		} else {
+			asciiRun = 0
+			if !unicode.IsSpace(r) {
+				cost = 1
+			}
+		}
+		if count+cost > budget {
+			return end
+		}
+		count += cost
+	}
+	return len(runes)
+}
+
+func preferredSplitEnd(runes []rune, start, minimum, end int, separators []string) int {
+	for _, separator := range separators {
+		pattern := []rune(separator)
+		for cut := end; cut >= minimum && cut > start; cut-- {
+			if cut-len(pattern) < start || string(runes[cut-len(pattern):cut]) != separator {
 				continue
 			}
-			if EstimateTokens(part) <= budget {
-				atoms = append(atoms, part)
-			} else {
-				atoms = append(atoms, splitTextByTokens(part, budget, overlap, separators[index+1:])...)
+			// A decimal point is not an English sentence boundary.
+			if separator == "." && cut >= 2 && cut < len(runes) && unicode.IsDigit(runes[cut-2]) && unicode.IsDigit(runes[cut]) {
+				continue
+			}
+			return cut
+		}
+	}
+	return end
+}
+
+func overlapTokenStart(runes []rune, start, end, budget int) int {
+	if budget <= 0 {
+		return end
+	}
+	count, asciiRun := 0, 0
+	next := end
+	for next > start {
+		r := runes[next-1]
+		cost := 0
+		if asciiTokenRune(r) {
+			if asciiRun%4 == 0 {
+				cost = 1
+			}
+			asciiRun++
+		} else {
+			asciiRun = 0
+			if !unicode.IsSpace(r) {
+				cost = 1
 			}
 		}
-		if len(atoms) > 1 {
-			return mergeTokenAtoms(atoms, budget, overlap)
-		}
-	}
-	return hardTokenSplit(text, budget, overlap)
-}
-
-func mergeTokenAtoms(atoms []string, budget, overlap int) []string {
-	result := make([]string, 0, len(atoms))
-	current := ""
-	for _, atom := range atoms {
-		candidate := atom
-		if current != "" {
-			candidate = current + " " + atom
-		}
-		if current == "" || EstimateTokens(candidate) <= budget {
-			current = candidate
-			continue
-		}
-		result = append(result, current)
-		current = appendOverlap(current, atom, budget, overlap)
-	}
-	if current != "" {
-		result = append(result, current)
-	}
-	return result
-}
-
-func hardTokenSplit(text string, budget, overlap int) []string {
-	result := make([]string, 0)
-	remaining := strings.TrimSpace(text)
-	for remaining != "" {
-		if EstimateTokens(remaining) <= budget {
-			result = append(result, remaining)
+		if count+cost > budget {
 			break
 		}
-		runes := []rune(remaining)
-		end := 0
-		for end < len(runes) {
-			next := string(runes[:end+1])
-			if EstimateTokens(next) > budget && end > 0 {
-				break
-			}
-			end++
-		}
-		if end == 0 {
-			end = 1
-		}
-		piece := strings.TrimSpace(string(runes[:end]))
-		if piece == "" {
-			piece = string(runes[:end])
-		}
-		result = append(result, piece)
-		remaining = strings.TrimSpace(string(runes[end:]))
-		if remaining != "" && overlap > 0 {
-			if shared := tokenTail(piece, overlap); shared != "" {
-				remaining = shared + " " + remaining
-			}
+		count += cost
+		next--
+	}
+	// Prefer a complete clause or word within the available overlap. Without
+	// such a boundary, keep the contiguous suffix, including Chinese runes.
+	for i := next; i < end-1; i++ {
+		if overlapBoundary(runes[i]) || strings.ContainsRune("，、：:", runes[i]) {
+			return i + 1
 		}
 	}
-	return result
-}
-
-func appendOverlap(previous, next string, budget, overlap int) string {
-	if overlap <= 0 {
-		return next
-	}
-	shared := tokenTail(previous, overlap)
-	for shared != "" && EstimateTokens(shared+" "+next) > budget {
-		runes := []rune(shared)
-		shared = strings.TrimSpace(string(runes[minInt(len(runes), maxInt(1, len(runes)/8)):]))
-	}
-	if shared == "" {
-		return next
-	}
-	return shared + " " + next
-}
-
-func tokenTail(text string, budget int) string {
-	runes := []rune(strings.TrimSpace(text))
-	start := len(runes)
-	for start > 0 {
-		candidate := string(runes[start-1:])
-		if EstimateTokens(candidate) > budget {
-			break
-		}
-		start--
-	}
-	return strings.TrimSpace(string(runes[start:]))
+	return next
 }
 
 func addHeading(heading, text string, budget int) string {

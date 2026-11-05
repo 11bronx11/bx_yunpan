@@ -112,7 +112,7 @@ func TestProjectorExternalCheckpointRecoversAfterPublishFailure(t *testing.T) {
 		t.Fatalf("recovered checkpoint = %#v, err=%v", checkpoint, err)
 	}
 	var count int64
-	if err := db.Model(&outbox.Consumption{}).Where("event_id = ? AND consumer_name = ?", eventID, ConsumerName).Count(&count).Error; err != nil || count != 1 {
+	if err := db.Model(&outbox.Consumption{}).Where("event_id = ? AND consumer_name = ?", eventID, projector.consumerName()).Count(&count).Error; err != nil || count != 1 {
 		t.Fatalf("consumption count = %d, err=%v", count, err)
 	}
 	fake.mu.Lock()
@@ -140,7 +140,7 @@ func TestProjectorCheckpointIndexedCrashWindowOnlyAcknowledges(t *testing.T) {
 		_ = db.Where("event_id = ?", eventID).Delete(&ProjectionCheckpoint{}).Error
 		_ = db.Where("id = ?", eventID).Delete(&outbox.Event{}).Error
 	}()
-	if err := db.Create(&ProjectionCheckpoint{EventID: eventID, ConsumerName: ConsumerName, State: "indexed", Attempt: 1, UpdatedAt: time.Now().UTC()}).Error; err != nil {
+	if err := db.Create(&ProjectionCheckpoint{EventID: eventID, ConsumerName: NewProjector(db, "v-test").WithExternalIndex(&flakyProjectionIndex{}).consumerName(), State: "indexed", Attempt: 1, UpdatedAt: time.Now().UTC()}).Error; err != nil {
 		t.Fatal(err)
 	}
 	fake := &flakyProjectionIndex{}
@@ -196,7 +196,7 @@ func TestProjectorConcurrentDuplicateDeliveryIsIdempotent(t *testing.T) {
 		t.Fatalf("concurrent handlers = %v, %v", first, second)
 	}
 	var count int64
-	if err := db.Model(&outbox.Consumption{}).Where("event_id = ? AND consumer_name = ?", eventID, ConsumerName).Count(&count).Error; err != nil || count != 1 {
+	if err := db.Model(&outbox.Consumption{}).Where("event_id = ? AND consumer_name = ?", eventID, projector.consumerName()).Count(&count).Error; err != nil || count != 1 {
 		t.Fatalf("completion marker count = %d, err=%v", count, err)
 	}
 	checkpoint, err := projector.Checkpoint(context.Background(), eventID)

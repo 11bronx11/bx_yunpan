@@ -115,7 +115,7 @@ func TestRecoveryBatchFiveQueuesAndFeatureSwitches(t *testing.T) {
 }
 
 func TestRecoveryExecutionBoundariesAndBudget(t *testing.T) {
-	for _, state := range []string{"missing", "running", "expired", "waiting", "retry_due", "dead", "succeeded"} {
+	for _, state := range []string{"missing", "running", "expired", "null_lease", "waiting", "retry_due", "dead", "succeeded"} {
 		t.Run(state, func(t *testing.T) {
 			db, id := newDeliveryFixture(t)
 			d := newDispatcher(db, &recordingPublisher{}, slog.Default(), config.Outbox{BatchSize: 1, TaskTimeout: time.Minute})
@@ -149,6 +149,9 @@ func TestRecoveryExecutionBoundariesAndBudget(t *testing.T) {
 				}
 				token := uuid.New()
 				e := taskqueue.Execution{TaskID: taskID, TaskType: TaskObjectVerifyV1, Queue: "object", PayloadSHA256: "test", Status: status, LeaseToken: &token, LeaseUntil: &lease, AvailableAt: available, RetryCount: 5, MaxRetry: 8, TimeoutMS: 120000, UpdatedAt: old}
+				if state == "null_lease" {
+					e.LeaseUntil = nil
+				}
 				if err := db.Create(&e).Error; err != nil {
 					t.Fatal(err)
 				}
@@ -161,7 +164,7 @@ func TestRecoveryExecutionBoundariesAndBudget(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			want := state == "missing" || state == "expired" || state == "retry_due"
+			want := state == "missing" || state == "expired" || state == "null_lease" || state == "retry_due"
 			if replayed != want {
 				t.Fatalf("replayed=%v want=%v", replayed, want)
 			}

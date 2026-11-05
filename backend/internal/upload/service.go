@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -95,6 +96,8 @@ type Service struct {
 	objects   *objectstore.Service
 	quota     Quota
 	config    config.Upload
+	scanMu    sync.Mutex
+	scanAfter map[string]uuid.UUID
 }
 
 type CreateInput struct {
@@ -121,6 +124,13 @@ type ConfirmedPart struct {
 
 func NewService(db *gorm.DB, storage *minio.Client, presigner *storageurl.Presigner, bucket string, driveService *drive.Service, objects *objectstore.Service, quota Quota, cfg config.Upload) *Service {
 	return &Service{db: db, storage: minioUploadStorage{client: storage}, presigner: presigner, core: minio.Core{Client: storage}, bucket: bucket, drive: driveService, objects: objects, quota: quota, config: cfg}
+}
+
+// NewRecoveryService constructs the database-only subset used by periodic
+// session expiry and canonical-orphan cleanup. It has no provider clients and
+// must not be used for upload operations that touch object storage.
+func NewRecoveryService(db *gorm.DB, objects *objectstore.Service, quota Quota) *Service {
+	return &Service{db: db, objects: objects, quota: quota}
 }
 
 func (s *Service) Create(ctx context.Context, userID uuid.UUID, input CreateInput) (CreateResult, error) {
@@ -431,23 +441,24 @@ func (s *Service) Abort(ctx context.Context, userID, sessionID uuid.UUID) error 
 }
 
 func (s *Service) Expire(ctx context.Context, limit int) (int, error) {
-	var ids []uuid.UUID
-	if err := s.db.WithContext(ctx).Model(&Session{}).
-		Where("status IN ? AND expires_at <= ?", []string{StatusInitializing, StatusCreated, StatusUploading}, time.Now().UTC()).
-		Order("expires_at ASC").Limit(limit).Pluck("id", &ids).Error; err != nil {
+	var sessions []Session
+	if err := s.maintenancePage(ctx, "expire", s.db.Model(&Session{}).
+		Where("status IN ? AND expires_at <= ?", []string{StatusInitializing, StatusCreated, StatusUploading}, time.Now().UTC()), limit, &sessions); err != nil {
 		return 0, err
 	}
 	expired := 0
-	for _, sessionID := range ids {
-		changed, err := s.expireOne(ctx, sessionID)
+	var failures error
+	for _, session := range sessions {
+		changed, err := s.expireOne(ctx, session.ID)
 		if err != nil {
-			return expired, err
+			failures = errors.Join(failures, err)
+			continue
 		}
 		if changed {
 			expired++
 		}
 	}
-	return expired, nil
+	return expired, failures
 }
 
 func (s *Service) expireOne(ctx context.Context, sessionID uuid.UUID) (bool, error) {
@@ -694,8 +705,7 @@ func (s *Service) executeCanonicalEnsure(ctx context.Context, operation storageo
 		if claimed {
 			operation.LeaseToken = &leaseToken
 			if err := s.reconcileOperation(ctx, operation); err != nil {
-				_ = storageops.MarkFailedOwned(s.db, operation.ID, leaseToken, err, time.Second)
-				return err
+				return storageops.RecordError(ctx, s.db, operation, err)
 			}
 			return nil
 		}
@@ -704,6 +714,8 @@ func (s *Service) executeCanonicalEnsure(ctx context.Context, operation storageo
 			return err
 		}
 		switch current.State {
+		case storageops.StateDead:
+			return current.LastErrorValue()
 		case storageops.StateSucceeded:
 			return nil
 		case storageops.StateFailed:
@@ -742,8 +754,16 @@ func (s *Service) scheduleStagingDelete(ctx context.Context, session Session) er
 	if operation.ID == uuid.Nil {
 		return nil
 	}
+	if s.storage == nil {
+		// Database-only maintenance has already recorded this work; the upload
+		// worker performs the provider call through its recovery event.
+		return nil
+	}
 	if operation.State == storageops.StateSucceeded {
 		return nil
+	}
+	if operation.State == storageops.StateDead {
+		return operation.LastErrorValue()
 	}
 	claimed, leaseToken, claimErr := storageops.TryStartWithToken(s.db, operation.ID, 5*time.Minute)
 	if claimErr != nil {
@@ -760,8 +780,8 @@ func (s *Service) scheduleStagingDelete(ctx context.Context, session Session) er
 		return errors.New("staging delete operation is already running")
 	}
 	if err := s.storage.RemoveObject(ctx, session.Bucket, session.ObjectKey, minio.RemoveObjectOptions{}); err != nil {
-		_ = storageops.MarkFailedOwned(s.db, operation.ID, leaseToken, err, time.Second)
-		return err
+		operation.LeaseToken = &leaseToken
+		return storageops.RecordError(ctx, s.db, operation, err)
 	}
 	return storageops.MarkSucceededOwned(s.db, operation.ID, leaseToken)
 }
@@ -781,40 +801,49 @@ func enqueueStagingDelete(tx *gorm.DB, session Session) (storageops.Operation, e
 // safe to run from several worker replicas because Claim uses row locks and a
 // lease in PostgreSQL.
 func (s *Service) ReconcileStorageOperations(ctx context.Context, limit int) (int, error) {
-	operations, err := storageops.ClaimTypes(ctx, s.db, limit, 5*time.Minute,
-		storageops.MultipartCreate, storageops.MultipartComplete, storageops.MultipartAbort,
-		storageops.CanonicalEnsure, storageops.StagingDelete)
-	if err != nil {
-		return 0, err
-	}
 	completed := 0
-	for _, operation := range operations {
+	var failures error
+	for range limit {
+		if ctx.Err() != nil {
+			return completed, errors.Join(failures, ctx.Err())
+		}
+		operations, err := storageops.ClaimTypes(ctx, s.db, 1, 5*time.Minute,
+			storageops.MultipartCreate, storageops.MultipartComplete, storageops.MultipartAbort,
+			storageops.CanonicalEnsure, storageops.StagingDelete)
+		if err != nil {
+			return completed, errors.Join(failures, err)
+		}
+		if len(operations) == 0 {
+			break
+		}
+		operation := operations[0]
 		if err := s.reconcileOperation(ctx, operation); err != nil {
-			if operation.LeaseToken != nil {
-				_ = storageops.MarkFailedOwned(s.db, operation.ID, *operation.LeaseToken, err, time.Second)
-			}
-			return completed, err
+			failures = errors.Join(failures, storageops.RecordError(ctx, s.db, operation, err))
+			continue
 		}
 		completed++
 	}
 	converged, err := s.reconcileSucceededStorageOperations(ctx, limit-completed)
 	if err != nil {
-		return completed, err
+		return completed, errors.Join(failures, err)
 	}
-	orphans, err := s.reconcileCanonicalOrphans(ctx, limit-completed-converged)
-	return completed + converged + orphans, err
+	orphans, err := s.ReconcileCanonicalOrphans(ctx, limit-completed-converged)
+	return completed + converged + orphans, errors.Join(failures, err)
 }
 
 // ReconcileStorageOperation handles a single recovery nudge. The operation
 // row is re-read and claimed again so a published recovery event is harmless
 // when another worker already completed the work.
 func (s *Service) ReconcileStorageOperation(ctx context.Context, operationID uuid.UUID) error {
-	operation, err := storageops.Get(s.db, operationID)
+	operation, err := storageops.Get(s.db.WithContext(ctx), operationID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	if operation.State == storageops.StateDead {
+		return operation.LastErrorValue()
 	}
 	if operation.State == storageops.StateSucceeded {
 		if operation.OperationType == storageops.MultipartCreate || operation.OperationType == storageops.MultipartComplete {
@@ -828,8 +857,7 @@ func (s *Service) ReconcileStorageOperation(ctx context.Context, operationID uui
 	}
 	operation.LeaseToken = &token
 	if err := s.reconcileOperation(ctx, operation); err != nil {
-		_ = storageops.MarkFailedOwned(s.db, operation.ID, token, err, time.Second)
-		return err
+		return storageops.RecordError(ctx, s.db, operation, err)
 	}
 	return nil
 }
@@ -907,6 +935,12 @@ func (s *Service) convergeSucceededOperation(ctx context.Context, operation stor
 }
 
 func (s *Service) reconcileOperation(ctx context.Context, operation storageops.Operation) error {
+	return storageops.RunOwned(ctx, s.db, operation, 5*time.Minute, func(ctx context.Context) error {
+		return s.performOperation(ctx, operation)
+	})
+}
+
+func (s *Service) performOperation(ctx context.Context, operation storageops.Operation) error {
 	switch operation.OperationType {
 	case storageops.MultipartCreate:
 		return s.reconcileMultipartCreate(ctx, operation)
@@ -917,7 +951,10 @@ func (s *Service) reconcileOperation(ctx context.Context, operation storageops.O
 			return storageops.MarkSucceededOwned(s.db, operation.ID, operationLeaseToken(operation))
 		}
 		if err := s.core.AbortMultipartUpload(ctx, operation.SourceBucket, operation.SourceKey, operation.StorageUploadID); err != nil {
-			return err
+			// Abort is idempotent even if another attempt already removed it.
+			if minio.ToErrorResponse(err).Code != "NoSuchUpload" {
+				return err
+			}
 		}
 		if err := storageops.MarkSucceededOwned(s.db, operation.ID, operationLeaseToken(operation)); err != nil {
 			return err
@@ -1063,8 +1100,8 @@ func enqueueUploadOperation(tx *gorm.DB, input storageops.Input) (storageops.Ope
 	}
 	key := "upload.operation:" + op.ID.String()
 	_, err = outbox.EnsureRecovery(tx, key, "upload_operation_created", "storage_operation", op.ID, 1,
-		eventcontract.EnvelopeInput{EventType: eventcontract.EventStorageOperationRecoverV1, AggregateID: op.ID, AggregateVersion: 1, Producer: "core-api",
-			Payload: eventcontract.StorageOperationRecoverV1{OperationID: op.ID, OperationType: op.OperationType, RecoveryKey: key}})
+		eventcontract.EnvelopeInput{EventType: eventcontract.EventUploadOperationRecoverV1, AggregateID: op.ID, AggregateVersion: 1, Producer: "core-api",
+			Payload: eventcontract.UploadOperationRecoverV1{OperationID: op.ID, OperationType: op.OperationType, RecoveryKey: key}})
 	return op, err
 }
 

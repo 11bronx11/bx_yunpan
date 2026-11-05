@@ -23,7 +23,7 @@ fi
 if (($#)); then
   services=("$@")
 else
-  services=(api worker outbox-relay object-worker media-worker maintenance-worker web migrate search-indexer elasticsearch qdrant)
+	services=(api worker outbox-relay object-worker media-worker maintenance-worker upload-worker web migrate search-indexer elasticsearch qdrant)
   if [[ "$ai_enabled" == true ]]; then
     services+=(aisvc ai-query ai-indexer etcd)
     parser_remote_enabled=$(awk -F= '$1 == "PARSER_REMOTE_ENABLED" {print $2}' "$env_file" | tail -1)

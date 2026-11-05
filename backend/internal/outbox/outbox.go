@@ -30,6 +30,7 @@ const (
 	// 只会被一个消费者处理，所以在投递侧扇出成两个任务。
 	EventAIIndexRequested        = eventcontract.EventAIIndexRequestedV1
 	EventStorageOperationRecover = eventcontract.EventStorageOperationRecoverV1
+	EventUploadOperationRecover  = eventcontract.EventUploadOperationRecoverV1
 	EventMediaThumbnailRequested = eventcontract.EventMediaThumbnailRequestedV1
 	TaskSearchProjectV1          = "search.project.v1"
 )
@@ -44,6 +45,7 @@ func EventTypes() []string {
 		EventAIReprocessRequested,
 		EventAIIndexRequested,
 		EventStorageOperationRecover,
+		EventUploadOperationRecover,
 		EventMediaThumbnailRequested,
 	}
 }
@@ -103,6 +105,7 @@ type Recovery struct {
 	TargetVersion *int64    `gorm:"type:bigint"`
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	StoppedAt     *time.Time
 }
 
 func (Recovery) TableName() string { return "outbox_recoveries" }

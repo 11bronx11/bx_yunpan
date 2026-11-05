@@ -2,6 +2,7 @@ package recovery
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
+	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
+	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 )
 
 func recoveryDB(t *testing.T) *gorm.DB {
@@ -134,7 +137,7 @@ func TestRunOnceRebuildsEveryPersistentWorkClassIdempotently(t *testing.T) {
 	if recoveryCount < 5 {
 		t.Fatalf("recovery rows = %d", recoveryCount)
 	}
-	if err := db.Table("outbox_deliveries d").Joins("JOIN outbox_events e ON e.id = d.event_id").Where("e.producer = 'maintenance-recovery'").Count(&deliveryCount).Error; err != nil {
+	if err := db.Table("outbox_deliveries d").Joins("JOIN outbox_events e ON e.id = d.event_id").Where("e.producer = ?", "maintenance-recovery").Count(&deliveryCount).Error; err != nil {
 		t.Fatal(err)
 	}
 	if deliveryCount < recoveryCount {
@@ -217,6 +220,209 @@ func TestRecoverStorageOperationsHonorsAvailabilityAndStaleLeases(t *testing.T) 
 		}
 		if count != 0 {
 			t.Fatalf("%s was recovered unexpectedly", name)
+		}
+	}
+}
+
+func TestUploadRecoveryUsesNewKeyWhenLegacyMaintenanceReceiptExists(t *testing.T) {
+	db := recoveryDB(t)
+	operationID := uuid.New()
+	now := time.Now().UTC()
+	operation := storageops.Operation{
+		ID: operationID, OperationType: storageops.MultipartAbort,
+		IdempotencyKey: "split-recovery:" + operationID.String(), State: storageops.StatePending,
+		AvailableAt: now.Add(-time.Minute), CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&operation).Error; err != nil {
+		t.Fatal(err)
+	}
+	legacyKey := "storage.operation:" + operationID.String() + ":" + storageops.MultipartAbort
+	legacyInput := eventcontract.EnvelopeInput{
+		EventType: eventcontract.EventStorageOperationRecoverV1, AggregateID: operationID, AggregateVersion: 1,
+		Producer: "maintenance-recovery", Payload: eventcontract.StorageOperationRecoverV1{
+			OperationID: operationID, OperationType: storageops.MultipartAbort, RecoveryKey: legacyKey,
+		},
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		_, err := outbox.EnsureRecovery(tx, legacyKey, "legacy_upload_recovery", "storage_operation", operationID, 1, legacyInput)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM outbox_recoveries WHERE resource_id = ?", operationID).Error
+		_ = db.Exec("DELETE FROM outbox_events WHERE aggregate_id = ?", operationID).Error
+		_ = db.Delete(&storageops.Operation{}, "id = ?", operationID).Error
+	})
+
+	r := New(db, false).WithClock(func() time.Time { return now })
+	report := Report{ByKind: map[string]int{}}
+	if err := r.recoverStorageOperations(context.Background(), 10, &report); err != nil {
+		t.Fatal(err)
+	}
+	newKey := "upload.operation_recovery:" + operationID.String() + ":" + storageops.MultipartAbort
+	var recovery outbox.Recovery
+	if err := db.Where("recovery_key = ?", newKey).First(&recovery).Error; err != nil {
+		t.Fatalf("new upload recovery record missing: %v", err)
+	}
+	var delivery outbox.Delivery
+	if err := db.Where("event_id = ? AND destination = ?", recovery.EventID, outbox.TaskUploadOperationRecoverV1+"@upload").First(&delivery).Error; err != nil {
+		t.Fatalf("upload queue delivery missing: %v", err)
+	}
+	if report.Repaired != 1 {
+		t.Fatalf("repaired = %d, want 1", report.Repaired)
+	}
+}
+
+func TestRetryableUploadOperationGetsNewEventAfterDeadTask(t *testing.T) {
+	db := recoveryDB(t)
+	operationID, eventID := uuid.New(), uuid.New()
+	now := time.Now().UTC()
+	destination := outbox.TaskUploadOperationRecoverV1 + "@upload"
+	operation := storageops.Operation{
+		ID: operationID, OperationType: storageops.MultipartAbort, IdempotencyKey: "dead-task:" + operationID.String(),
+		State: storageops.StateFailed, AvailableAt: now.Add(-time.Minute), CreatedAt: now.Add(-time.Hour), UpdatedAt: now,
+	}
+	if err := db.Create(&operation).Error; err != nil {
+		t.Fatal(err)
+	}
+	input := eventcontract.EnvelopeInput{
+		EventID: eventID, EventType: eventcontract.EventUploadOperationRecoverV1, AggregateID: operationID,
+		AggregateVersion: 1, Producer: "core-api", Payload: eventcontract.UploadOperationRecoverV1{
+			OperationID: operationID, OperationType: storageops.MultipartAbort,
+			RecoveryKey: "storage.operation:" + operationID.String() + ":" + storageops.MultipartAbort,
+		},
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error { return outbox.AddTyped(context.Background(), tx, input) }); err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-time.Hour)
+	if err := db.Model(&outbox.Event{}).Where("id = ?", eventID).Updates(map[string]any{"status": "published", "published_at": old}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&outbox.Delivery{}).Where("event_id = ?", eventID).Updates(map[string]any{"status": "published", "published_at": old}).Error; err != nil {
+		t.Fatal(err)
+	}
+	taskID := eventID.String() + ":" + destination
+	if err := db.Create(&taskqueue.Result{TaskID: taskID, Status: "dead", FinishedAt: old}).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM task_results WHERE task_id = ?", taskID).Error
+		_ = db.Exec("DELETE FROM outbox_deliveries WHERE event_id IN (SELECT id FROM outbox_events WHERE aggregate_id = ?)", operationID).Error
+		_ = db.Exec("DELETE FROM outbox_recoveries WHERE resource_id = ?", operationID).Error
+		_ = db.Exec("DELETE FROM outbox_events WHERE aggregate_id = ?", operationID).Error
+		_ = db.Delete(&storageops.Operation{}, "id = ?", operationID).Error
+	})
+
+	r := New(db, false).WithClock(func() time.Time { return now })
+	for scan := 0; scan < 2; scan++ {
+		report := Report{ByKind: map[string]int{}}
+		if err := r.recoverStorageOperations(context.Background(), 10, &report); err != nil {
+			t.Fatal(err)
+		}
+		if scan == 0 && report.Repaired != 1 {
+			t.Fatalf("first scan repaired %d operations, want 1", report.Repaired)
+		}
+		if scan == 1 && report.Repaired != 0 {
+			t.Fatalf("repeat scan repaired %d operations, want 0", report.Repaired)
+		}
+	}
+
+	newKey := "upload.operation_recovery:" + operationID.String() + ":" + storageops.MultipartAbort + ":after:" + eventID.String()
+	var recovery outbox.Recovery
+	if err := db.Where("recovery_key = ?", newKey).First(&recovery).Error; err != nil {
+		t.Fatalf("new retry recovery record missing: %v", err)
+	}
+	var retriedEvent outbox.Event
+	if err := db.First(&retriedEvent, "id = ?", recovery.EventID).Error; err != nil {
+		t.Fatalf("new retry event missing: %v", err)
+	}
+	var payload eventcontract.UploadOperationRecoverV1
+	if err := json.Unmarshal(retriedEvent.Payload, &payload); err != nil {
+		t.Fatalf("decode retry event payload: %v", err)
+	}
+	if payload.RecoveryKey != newKey {
+		t.Fatalf("retry payload recovery key = %q, want %q", payload.RecoveryKey, newKey)
+	}
+	var events int64
+	if err := db.Model(&outbox.Event{}).Where("aggregate_id = ? AND event_type = ?", operationID, eventcontract.EventUploadOperationRecoverV1).Count(&events).Error; err != nil {
+		t.Fatal(err)
+	}
+	if events != 2 {
+		t.Fatalf("recovery events = %d, want original plus one retry", events)
+	}
+}
+
+func TestSucceededMultipartOperationsProduceUploadRecoveryDeliveries(t *testing.T) {
+	db := recoveryDB(t)
+	userID, folderID := uuid.New(), uuid.New()
+	username := "recovery-convergence-" + userID.String()
+	if err := db.Exec(`INSERT INTO users (id, username, username_normalized, password_hash) VALUES (?, ?, ?, 'test')`, userID, username, username).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`INSERT INTO folders (id, owner_id, name, name_normalized) VALUES (?, ?, '/', '/')`, folderID, userID).Error; err != nil {
+		t.Fatal(err)
+	}
+	type scenario struct {
+		name        string
+		status      string
+		operation   string
+		uploadID    string
+		sessionID   uuid.UUID
+		operationID uuid.UUID
+	}
+	scenarios := []scenario{
+		{name: "create", status: "initializing", operation: storageops.MultipartCreate, sessionID: uuid.New(), operationID: uuid.New()},
+		{name: "complete", status: "completing", operation: storageops.MultipartComplete, uploadID: "provider-upload-id", sessionID: uuid.New(), operationID: uuid.New()},
+	}
+	cleanup := func() {
+		operationIDs := []uuid.UUID{scenarios[0].operationID, scenarios[1].operationID}
+		sessionIDs := []uuid.UUID{scenarios[0].sessionID, scenarios[1].sessionID}
+		_ = db.Exec(`DELETE FROM outbox_deliveries WHERE event_id IN (SELECT id FROM outbox_events WHERE aggregate_id IN ?)`, operationIDs).Error
+		_ = db.Exec(`DELETE FROM outbox_recoveries WHERE resource_id IN ?`, sessionIDs).Error
+		_ = db.Exec(`DELETE FROM outbox_events WHERE aggregate_id IN ?`, operationIDs).Error
+		_ = db.Exec(`DELETE FROM storage_operations WHERE id IN ?`, operationIDs).Error
+		_ = db.Exec(`DELETE FROM upload_sessions WHERE id IN ?`, sessionIDs).Error
+		_ = db.Exec(`DELETE FROM folders WHERE id = ?`, folderID).Error
+		_ = db.Exec(`DELETE FROM users WHERE id = ?`, userID).Error
+	}
+	t.Cleanup(cleanup)
+
+	for _, item := range scenarios {
+		if err := db.Exec(`INSERT INTO upload_sessions
+			(id, user_id, folder_id, filename, filename_normalized, declared_sha256, mime_type, size_bytes, reserved_bytes, bucket, object_key, storage_upload_id, part_size, part_count, status, idempotency_key, expires_at, version)
+			VALUES (?, ?, ?, ?, ?, repeat('a', 64), 'text/plain', 10, 10, 'test', ?, ?, 10, 1, ?, ?, now() + interval '1 hour', 1)`,
+			item.sessionID, userID, folderID, item.name+".txt", item.name+".txt", "staging/"+item.sessionID.String(), item.uploadID, item.status, "idem-"+item.sessionID.String()).Error; err != nil {
+			t.Fatal(err)
+		}
+		operation := storageops.Operation{
+			ID: item.operationID, OperationType: item.operation, IdempotencyKey: "succeeded-" + item.operationID.String(),
+			UploadSessionID: &item.sessionID, StorageUploadID: item.uploadID,
+			State: storageops.StateSucceeded, AvailableAt: time.Now().UTC(), CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		}
+		if err := db.Create(&operation).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	r := New(db, false).WithClock(func() time.Time { return time.Now().UTC() })
+	report := Report{ByKind: map[string]int{}}
+	if err := r.recoverStorageOperations(context.Background(), 10, &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Repaired != len(scenarios) {
+		t.Fatalf("repaired = %d, want %d", report.Repaired, len(scenarios))
+	}
+	for _, item := range scenarios {
+		key := "upload.operation_recovery:" + item.operationID.String() + ":" + item.operation
+		var recovery outbox.Recovery
+		if err := db.Where("recovery_key = ?", key).First(&recovery).Error; err != nil {
+			t.Fatalf("%s recovery row missing: %v", item.name, err)
+		}
+		var delivery outbox.Delivery
+		if err := db.Where("event_id = ? AND destination = ?", recovery.EventID, outbox.TaskUploadOperationRecoverV1+"@upload").First(&delivery).Error; err != nil {
+			t.Fatalf("%s upload delivery missing: %v", item.name, err)
 		}
 	}
 }

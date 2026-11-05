@@ -56,37 +56,10 @@ func Open(ctx context.Context, cfg config.Config) (*Set, error) {
 		closeRedis()
 		return nil, fmt.Errorf("create object storage presigner: %w", err)
 	}
-	databaseLogger := gormlogger.New(log.New(os.Stdout, "", log.LstdFlags), gormlogger.Config{
-		SlowThreshold: 500 * time.Millisecond, LogLevel: gormlogger.Warn, ParameterizedQueries: true,
-	})
-	primaryDSN := cfg.Postgres.PrimaryDSN
-	if primaryDSN == "" {
-		primaryDSN = cfg.Postgres.DSN
-	}
-	gormDB, err := gorm.Open(postgres.Open(primaryDSN), &gorm.Config{TranslateError: true, Logger: databaseLogger})
+	gormDB, sqlDB, err := openPostgres(ctx, cfg)
 	if err != nil {
 		closeRedis()
-		return nil, fmt.Errorf("create gorm database: %w", err)
-	}
-	// 数据库自动埋点：每条 SQL 一个 span，挂在当前请求或任务的 span 下。
-	// 未启用 tracing 时 otel.Tracer 是 no-op，开销接近于零。
-	if err := gormDB.Use(otelgorm.NewPlugin()); err != nil {
-		closeRedis()
-		return nil, fmt.Errorf("install gorm tracing plugin: %w", err)
-	}
-	sqlDB, err := gormDB.DB()
-	if err != nil {
-		closeRedis()
-		return nil, fmt.Errorf("get sql database: %w", err)
-	}
-	sqlDB.SetMaxOpenConns(cfg.Postgres.MaxOpenConns)
-	sqlDB.SetMaxIdleConns(cfg.Postgres.MaxIdleConns)
-	sqlDB.SetConnMaxLifetime(cfg.Postgres.ConnMaxLifetime)
-	sqlDB.SetConnMaxIdleTime(cfg.Postgres.ConnMaxIdleTime)
-	if err := sqlDB.PingContext(ctx); err != nil {
-		_ = sqlDB.Close()
-		closeRedis()
-		return nil, fmt.Errorf("ping postgres: %w", err)
+		return nil, err
 	}
 
 	return &Set{
@@ -102,6 +75,37 @@ func Open(ctx context.Context, cfg config.Config) (*Set, error) {
 	}, nil
 }
 
+func openPostgres(ctx context.Context, cfg config.Config) (*gorm.DB, *sql.DB, error) {
+	databaseLogger := gormlogger.New(log.New(os.Stdout, "", log.LstdFlags), gormlogger.Config{
+		SlowThreshold: 500 * time.Millisecond, LogLevel: gormlogger.Warn, ParameterizedQueries: true,
+	})
+	primaryDSN := cfg.Postgres.PrimaryDSN
+	if primaryDSN == "" {
+		primaryDSN = cfg.Postgres.DSN
+	}
+	gormDB, err := gorm.Open(postgres.Open(primaryDSN), &gorm.Config{TranslateError: true, Logger: databaseLogger})
+	if err != nil {
+		return nil, nil, fmt.Errorf("create gorm database: %w", err)
+	}
+	// Database SQL spans follow the active request or task trace when tracing is enabled.
+	if err := gormDB.Use(otelgorm.NewPlugin()); err != nil {
+		return nil, nil, fmt.Errorf("install gorm tracing plugin: %w", err)
+	}
+	sqlDB, err := gormDB.DB()
+	if err != nil {
+		return nil, nil, fmt.Errorf("get sql database: %w", err)
+	}
+	sqlDB.SetMaxOpenConns(cfg.Postgres.MaxOpenConns)
+	sqlDB.SetMaxIdleConns(cfg.Postgres.MaxIdleConns)
+	sqlDB.SetConnMaxLifetime(cfg.Postgres.ConnMaxLifetime)
+	sqlDB.SetConnMaxIdleTime(cfg.Postgres.ConnMaxIdleTime)
+	if err := sqlDB.PingContext(ctx); err != nil {
+		_ = sqlDB.Close()
+		return nil, nil, fmt.Errorf("ping postgres: %w", err)
+	}
+	return gormDB, sqlDB, nil
+}
+
 func (s *Set) Close() {
 	if s.Tasks != nil {
 		_ = s.Tasks.Close()
@@ -112,7 +116,9 @@ func (s *Set) Close() {
 	if s.RedisCache != nil {
 		_ = s.RedisCache.Close()
 	}
-	_ = s.SQL.Close()
+	if s.SQL != nil {
+		_ = s.SQL.Close()
+	}
 }
 
 func (s *Set) Probes() []health.Probe {

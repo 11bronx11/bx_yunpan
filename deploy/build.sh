@@ -78,7 +78,7 @@ if ((${#targets[@]} == 0)); then
 fi
 for target in "${targets[@]}"; do
   case "$target" in
-		migrate|migrate-asynq|api|worker|aisvc|parser-svc|outbox-relay|object-worker|media-worker|maintenance-worker|search-indexer|web) ;;
+		migrate|migrate-asynq|api|worker|aisvc|parser-svc|outbox-relay|object-worker|media-worker|maintenance-worker|upload-worker|search-indexer|web) ;;
     *) echo "Unsupported build target: $target" >&2; exit 2 ;;
   esac
 done

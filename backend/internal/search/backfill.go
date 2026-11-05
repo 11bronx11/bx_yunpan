@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // BackfillOptions controls one resumable epoch build.  A new target version is
@@ -20,6 +22,7 @@ type BackfillOptions struct {
 	IndexEpoch    int64
 	BatchSize     int
 	Activate      bool
+	Dimension     int64
 }
 
 type BackfillReport struct {
@@ -77,7 +80,7 @@ func (p *Projector) Backfill(ctx context.Context, options BackfillOptions) (Back
 	worker.target = options.TargetVersion
 	worker.indexEpoch = options.IndexEpoch
 	if preparer, ok := worker.external.(EpochPreparer); ok {
-		if err := preparer.PrepareEpoch(ctx, worker.target, 1024); err != nil {
+		if err := preparer.PrepareEpoch(ctx, worker.target, options.Dimension); err != nil {
 			return BackfillReport{}, err
 		}
 	}
@@ -156,10 +159,8 @@ func (p *Projector) Backfill(ctx context.Context, options BackfillOptions) (Back
 		return BackfillReport{}, err
 	}
 	if options.Activate {
-		for _, version := range versions.all {
-			if err := worker.index.ActivateVersion(ctx, version.ID); err != nil {
-				return BackfillReport{}, err
-			}
+		if err := worker.ActivateTarget(ctx, worker.target); err != nil {
+			return BackfillReport{}, err
 		}
 	}
 	return BackfillReport{TargetVersion: options.TargetVersion, IndexEpoch: options.IndexEpoch, FileCursor: fileCursor, ContentCursor: contentCursor, FileCount: int(fileCount), ContentCount: int(contentCount), FileChecksum: fileChecksum, ContentChecksum: contentChecksum, Activated: options.Activate, StartedAt: started, FinishedAt: time.Now().UTC()}, nil
@@ -180,21 +181,43 @@ func (p *Projector) ensureBackfillVersions(ctx context.Context) (backfillVersion
 		}
 	}
 	result := backfillVersions{canonical: make(map[string]IndexVersion, 2)}
-	for _, projectionType := range []string{ProjectionFile, ProjectionContent} {
-		var selected IndexVersion
-		for _, backend := range backends {
-			version, err := p.index.StartVersion(ctx, backend, projectionType, p.target, p.indexEpoch)
-			if err != nil {
-				return backfillVersions{}, err
+	err := p.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing []IndexVersion
+		if err := tx.Where("target_version = ?", p.target).Find(&existing).Error; err != nil {
+			return err
+		}
+		if len(existing) > 0 {
+			expected := make(map[string]bool)
+			for _, backend := range backends {
+				expected[backend] = true
 			}
-			result.all = append(result.all, version)
-			if backend == BackendPostgres {
-				selected = version
+			if len(existing) != 2*len(expected) {
+				return ErrIndexVersionConflict
+			}
+			for _, version := range existing {
+				if !expected[version.Backend] {
+					return ErrIndexVersionConflict
+				}
 			}
 		}
-		result.canonical[projectionType] = selected
-	}
-	return result, nil
+		index := NewPostgresIndex(tx)
+		for _, projectionType := range []string{ProjectionFile, ProjectionContent} {
+			var selected IndexVersion
+			for _, backend := range backends {
+				version, err := index.StartVersion(ctx, backend, projectionType, p.target, p.indexEpoch)
+				if err != nil {
+					return err
+				}
+				result.all = append(result.all, version)
+				if backend == BackendPostgres {
+					selected = version
+				}
+			}
+			result.canonical[projectionType] = selected
+		}
+		return nil
+	})
+	return result, err
 }
 
 func (p *Projector) persistBackfillProgress(ctx context.Context, id uuid.UUID, cursor uuid.UUID, count int64) error {
@@ -240,8 +263,128 @@ func (p *Projector) finishBackfillProgress(ctx context.Context, versions backfil
 func (p *Projector) failBackfillVersions(ctx context.Context, versions []IndexVersion, cause error) {
 	message := limitErrorText(cause)
 	for _, version := range versions {
-		_ = p.index.SetVersionState(ctx, version.ID, "building", "failed", &message)
+		// A timeout or temporary outage must retain the resumable cursor.
+		// The final checksum is written only after both scans finish.
+		updates := map[string]any{"last_error": message, "updated_at": time.Now().UTC()}
+		if errors.Is(cause, ErrPermanent) {
+			updates["state"] = "failed"
+		}
+		_ = p.db.WithContext(ctx).Model(&IndexVersion{}).Where("id = ? AND state = 'building'", version.ID).Updates(updates).Error
 	}
+}
+
+// ActivateTarget changes the complete backend/projection set in one SQL
+// transaction. This is control-plane metadata; query processes still select
+// their target through SEARCH_INDEX_EPOCH.
+func (p *Projector) ActivateTarget(ctx context.Context, target string) error {
+	if p == nil || p.db == nil || target == "" {
+		return ErrInvalidIndexVersion
+	}
+	return p.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var versions []IndexVersion
+		if err := tx.Where("target_version = ?", target).Order("backend, projection_type").Find(&versions).Error; err != nil {
+			return err
+		}
+		if len(versions) == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		epoch, err := completeTarget(versions)
+		if err != nil {
+			return err
+		}
+		worker := *p
+		worker.target, worker.indexEpoch = target, epoch
+		var unfinished int64
+		if err := tx.Model(&ProjectionCheckpoint{}).Where("consumer_name = ? AND state IN ?", worker.consumerName(), []string{"pending", "publishing", "failed"}).Count(&unfinished).Error; err != nil {
+			return err
+		}
+		if unfinished > 0 {
+			return fmt.Errorf("%w: unfinished external publications", ErrIndexVersionConflict)
+		}
+		index := NewPostgresIndex(tx)
+		for _, version := range versions {
+			if version.State == "active" {
+				continue
+			}
+			if err := index.ActivateVersion(ctx, version.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func completeTarget(versions []IndexVersion) (int64, error) {
+	if len(versions) == 0 {
+		return 0, gorm.ErrRecordNotFound
+	}
+	members := make(map[string]int)
+	epoch := versions[0].IndexEpoch
+	for _, version := range versions {
+		if version.IndexEpoch != epoch {
+			return 0, ErrIndexVersionConflict
+		}
+		members[version.Backend]++
+	}
+	if members[BackendPostgres] != 2 {
+		return 0, ErrIndexVersionConflict
+	}
+	for _, count := range members {
+		if count != 2 {
+			return 0, ErrIndexVersionConflict
+		}
+	}
+	return epoch, nil
+}
+
+// RollbackTarget changes metadata for the complete target atomically. The
+// operator must first catch up its data and separately switch query config.
+func (p *Projector) RollbackTarget(ctx context.Context, target string) error {
+	if p == nil || p.db == nil || target == "" {
+		return ErrInvalidIndexVersion
+	}
+	return p.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var versions []IndexVersion
+		if err := tx.Where("target_version = ?", target).Order("backend, projection_type").Find(&versions).Error; err != nil {
+			return err
+		}
+		if _, err := completeTarget(versions); err != nil {
+			return err
+		}
+		index := NewPostgresIndex(tx)
+		for _, version := range versions {
+			if err := index.RollbackVersion(ctx, version.Backend, version.ProjectionType, target); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+type ProjectionStatus struct {
+	TargetVersion string
+	ConsumerName  string
+	Checkpoints   map[string]int64
+}
+
+// Status reports publication attempts for the selected generation/writer set.
+// Empty checkpoints do not prove that the broker or source has been drained.
+func (p *Projector) Status(ctx context.Context) (ProjectionStatus, error) {
+	if p == nil || p.db == nil {
+		return ProjectionStatus{}, ErrInvalidIndexVersion
+	}
+	var rows []struct {
+		State string
+		Count int64
+	}
+	if err := p.db.WithContext(ctx).Model(&ProjectionCheckpoint{}).Select("state, count(*) AS count").Where("consumer_name = ?", p.consumerName()).Group("state").Scan(&rows).Error; err != nil {
+		return ProjectionStatus{}, err
+	}
+	status := ProjectionStatus{TargetVersion: p.target, ConsumerName: p.consumerName(), Checkpoints: map[string]int64{}}
+	for _, row := range rows {
+		status.Checkpoints[row.State] = row.Count
+	}
+	return status, nil
 }
 
 // ProjectionChecksum hashes stable IDs and version-bearing fields from the
@@ -253,30 +396,45 @@ func (p *Projector) ProjectionChecksum(ctx context.Context, projectionType strin
 	}
 	h := sha256.New()
 	if projectionType == ProjectionFile {
-		var rows []fileRow
-		if err := p.db.WithContext(ctx).Where("backend = ? AND target_version = ?", BackendPostgres, p.target).Order("id ASC").Find(&rows).Error; err != nil {
+		rows, err := p.db.WithContext(ctx).Model(&fileRow{}).Where("backend = ? AND target_version = ?", BackendPostgres, p.target).Order("id ASC").Rows()
+		if err != nil {
 			return "", err
 		}
-		for _, row := range rows {
-			writeChecksum(h, row.ID, row.ObjectID, row.FileVersion, row.ACLVersion, row.IndexEpoch, row.Tombstone, row.Name)
+		defer rows.Close()
+		for rows.Next() {
+			var row fileRow
+			if err := p.db.ScanRows(rows, &row); err != nil {
+				return "", err
+			}
+			writeChecksum(h, row.ID, row.ObjectID, row.OwnerID, row.FolderID, row.FileVersion, row.ACLVersion, row.IndexEpoch, row.Tombstone, row.Name, row.MIMEType)
+		}
+		if err := rows.Err(); err != nil {
+			return "", err
 		}
 	} else {
-		var rows []contentRow
-		if err := p.db.WithContext(ctx).Where("backend = ? AND target_version = ?", BackendPostgres, p.target).Order("id ASC").Find(&rows).Error; err != nil {
+		rows, err := p.db.WithContext(ctx).Model(&contentRow{}).Where("backend = ? AND target_version = ?", BackendPostgres, p.target).Order("id ASC").Rows()
+		if err != nil {
 			return "", err
 		}
-		for _, row := range rows {
-			writeChecksum(h, row.ID, row.ObjectID, row.DocumentVersionID, int64(row.Ordinal), row.IndexEpoch, row.State == "tombstoned", row.Content)
+		defer rows.Close()
+		for rows.Next() {
+			var row contentRow
+			if err := p.db.ScanRows(rows, &row); err != nil {
+				return "", err
+			}
+			writeChecksum(h, row.ID, row.ObjectID, row.DocumentVersionID, int64(row.Ordinal), row.IndexEpoch, row.State == "tombstoned", row.Content, row.PipelineVersion, row.ModelVersion, row.VectorRef)
+		}
+		if err := rows.Err(); err != nil {
+			return "", err
 		}
 	}
 	return fmt.Sprintf("sha256:%x", h.Sum(nil)), nil
 }
 
 func writeChecksum(h hash.Hash, id, objectID uuid.UUID, values ...any) {
-	_, _ = fmt.Fprintf(h, "%s|%s|", id, objectID)
-	for _, value := range values {
-		_, _ = fmt.Fprintf(h, "%v|", value)
-	}
+	// JSON frames strings and nils unambiguously; separators inside source
+	// content must not make two different rows hash as the same byte stream.
+	_ = json.NewEncoder(h).Encode([]any{id, objectID, values})
 }
 
 // IndexVersions returns control-plane rows for an operator status report.

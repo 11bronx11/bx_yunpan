@@ -396,6 +396,74 @@ func TestExpireReleasesQuotaAndMarksSession(t *testing.T) {
 	}
 }
 
+func TestConcurrentExpiryScansReleaseQuotaAndEnqueueAbortOnce(t *testing.T) {
+	fixture := newConcurrencyFixture(t)
+	session := testActiveSession(fixture, time.Now().Add(-time.Minute))
+	if err := fixture.db.Create(&session).Error; err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := fixture.db.Model(&identity.User{}).Where("id = ?", fixture.userID).Update("reserved_bytes", session.ReservedBytes).Error; err != nil {
+		t.Fatalf("reserve quota: %v", err)
+	}
+
+	const schedulers = 8
+	start := make(chan struct{})
+	counts := make(chan int, schedulers)
+	errs := make(chan error, schedulers)
+	var wait sync.WaitGroup
+	for range schedulers {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			count, err := NewRecoveryService(fixture.db, fixture.service.objects, fixture.service.quota).Expire(context.Background(), 10)
+			counts <- count
+			errs <- err
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(counts)
+	close(errs)
+	changed := 0
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("expire session: %v", err)
+		}
+	}
+	for count := range counts {
+		changed += count
+	}
+	if changed != 1 {
+		t.Fatalf("sessions expired across concurrent scans = %d, want 1", changed)
+	}
+
+	var aborts int64
+	if err := fixture.db.Model(&storageops.Operation{}).Where("upload_session_id = ? AND operation_type = ?", session.ID, storageops.MultipartAbort).Count(&aborts).Error; err != nil {
+		t.Fatal(err)
+	}
+	if aborts != 1 {
+		t.Fatalf("multipart abort operations = %d, want 1", aborts)
+	}
+	if calls := fixture.storage.abortCount(); calls != 0 {
+		t.Fatalf("maintenance scan executed %d provider aborts, want 0", calls)
+	}
+	var deliveries int64
+	if err := fixture.db.Table("outbox_deliveries d").
+		Joins("JOIN outbox_events e ON e.id = d.event_id").
+		Joins("JOIN storage_operations op ON op.id = e.aggregate_id").
+		Where("op.upload_session_id = ? AND d.destination = ?", session.ID, outbox.TaskUploadOperationRecoverV1+"@upload").Count(&deliveries).Error; err != nil {
+		t.Fatal(err)
+	}
+	if deliveries != 1 {
+		t.Fatalf("upload recovery deliveries = %d, want 1", deliveries)
+	}
+	var user identity.User
+	if err := fixture.db.First(&user, "id = ?", fixture.userID).Error; err != nil || user.ReservedBytes != 0 {
+		t.Fatalf("reserved bytes = %d, err = %v", user.ReservedBytes, err)
+	}
+}
+
 func TestVerifyRetainsCanonicalObjectWhenTransactionFailsForRetry(t *testing.T) {
 	fixture := newConcurrencyFixture(t)
 	storage := newFakeUploadStorage()

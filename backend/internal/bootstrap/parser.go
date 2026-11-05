@@ -31,20 +31,21 @@ const parserPipelineBaseVersion = "document-index-v5"
 
 func indexPipelineVersion(cfg config.Config) string {
 	spec := struct {
-		BaseVersion          string
-		Provider             string
-		EmbeddingModel       string
-		ChatModel            string
-		VisionModel          string
-		Dimension            int
-		MaxObjectBytes       int64
-		RemoteParser         bool
-		ParserProfileVersion string
-		ChunkerVersion       string
-		TokenizerID          string
-		ChunkTokenBudget     int
-		ChunkOverlapTokens   int
-		MaxChunks            int
+		BaseVersion           string
+		Provider              string
+		EmbeddingModel        string
+		ChatModel             string
+		VisionModel           string
+		Dimension             int
+		MaxObjectBytes        int64
+		RemoteParser          bool
+		ParserProfileVersion  string
+		ChunkerVersion        string
+		ChunkerImplementation string
+		TokenizerID           string
+		ChunkTokenBudget      int
+		ChunkOverlapTokens    int
+		MaxChunks             int
 	}{
 		BaseVersion: parserPipelineBaseVersion, Provider: cfg.AI.Provider,
 		EmbeddingModel: cfg.AI.EmbeddingModel, ChatModel: cfg.AI.ChatModel,
@@ -52,7 +53,8 @@ func indexPipelineVersion(cfg config.Config) string {
 		MaxObjectBytes: cfg.AI.MaxObjectBytes, RemoteParser: cfg.Parser.RemoteEnabled,
 		ParserProfileVersion: cfg.Parser.ProfileVersion,
 		ChunkerVersion:       cfg.Parser.ChunkerVersion, TokenizerID: cfg.Parser.TokenizerID,
-		ChunkTokenBudget: cfg.Parser.ChunkTokenBudget, ChunkOverlapTokens: cfg.Parser.ChunkOverlapTokens,
+		ChunkerImplementation: rag.DefaultChunker,
+		ChunkTokenBudget:      cfg.Parser.ChunkTokenBudget, ChunkOverlapTokens: cfg.Parser.ChunkOverlapTokens,
 		MaxChunks: cfg.Parser.MaxChunks,
 	}
 	serialized, _ := json.Marshal(spec)

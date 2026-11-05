@@ -89,6 +89,11 @@ func TestExpiredLeaseCannotOverwriteReplacementWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Delete(&Operation{}, "id = ?", op.ID).Error })
+	if err := db.Model(&Operation{}).Where("id = ?", op.ID).Updates(map[string]any{
+		"state": StateRunning, "lease_until": nil,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
 	first, token1, err := TryStartWithToken(db, op.ID, time.Minute)
 	if err != nil || !first {
 		t.Fatalf("first claim = %t, err = %v", first, err)

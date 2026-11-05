@@ -11,6 +11,7 @@ const (
 	RoleObject      Role = "object-worker"
 	RoleMedia       Role = "media-worker"
 	RoleMaintenance Role = "maintenance-worker"
+	RoleUpload      Role = "upload-worker"
 	RoleSearch      Role = "search-indexer"
 )
 
@@ -18,6 +19,7 @@ const (
 	QueueObject      = "object"
 	QueueMedia       = "media"
 	QueueMaintenance = "maintenance"
+	QueueUpload      = "upload"
 	QueueSearch      = "search"
 )
 
@@ -39,6 +41,8 @@ func QueuesForRole(role Role, configured map[string]int) map[string]int {
 		queue = QueueMedia
 	case RoleMaintenance:
 		queue = QueueMaintenance
+	case RoleUpload:
+		queue = QueueUpload
 	case RoleSearch:
 		queue = QueueSearch
 	default:

@@ -37,8 +37,16 @@ func NewStorageCollector(db *gorm.DB) *BacklogCollector {
 	return newBacklogCollector(db, "storage", "operation", `
 		SELECT operation_type AS kind, state, COUNT(*) AS count,
 		       GREATEST(0, EXTRACT(EPOCH FROM (now() - MIN(created_at)))) AS age
-		FROM storage_operations WHERE state IN ('pending', 'running', 'failed')
+		FROM storage_operations WHERE state IN ('pending', 'running', 'failed', 'dead')
 		GROUP BY operation_type, state`)
+}
+
+func NewRecoveryCollector(db *gorm.DB) *BacklogCollector {
+	return newBacklogCollector(db, "recovery", "event_type", `
+		SELECT e.event_type AS kind, 'stopped' AS state, COUNT(DISTINCT e.aggregate_id) AS count,
+		       GREATEST(0, EXTRACT(EPOCH FROM (now() - MIN(r.stopped_at)))) AS age
+		FROM outbox_recoveries r JOIN outbox_events e ON e.id = r.event_id
+		WHERE r.stopped_at IS NOT NULL GROUP BY e.event_type`)
 }
 
 func newBacklogCollector(db *gorm.DB, name, kind, query string) *BacklogCollector {

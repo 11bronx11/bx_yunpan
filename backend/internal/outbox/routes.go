@@ -7,11 +7,12 @@ import (
 )
 
 const (
-	TaskObjectVerifyV1   = "object.verify.v1"
-	TaskMediaThumbnailV1 = "media.thumbnail.v1"
-	TaskObjectGCV1       = "object.gc.v1"
-	TaskAIIndexV1        = "ai.index.v1"
-	TaskAIReprocessV1    = "ai.reprocess.v1"
+	TaskObjectVerifyV1           = "object.verify.v1"
+	TaskMediaThumbnailV1         = "media.thumbnail.v1"
+	TaskObjectGCV1               = "object.gc.v1"
+	TaskUploadOperationRecoverV1 = "upload.operation_recover.v1"
+	TaskAIIndexV1                = "ai.index.v1"
+	TaskAIReprocessV1            = "ai.reprocess.v1"
 )
 
 // DeliveryTarget is the transport-owned routing decision for one outbox row.
@@ -79,6 +80,8 @@ func Routes(eventType string, aiEnabled bool) []DeliveryTarget {
 		return nil
 	case EventStorageOperationRecover:
 		return []DeliveryTarget{target("rabbitmq", EventStorageOperationRecover, "maintenance")}
+	case EventUploadOperationRecover:
+		return []DeliveryTarget{target("rabbitmq", TaskUploadOperationRecoverV1, "upload")}
 	case EventMediaThumbnailRequested:
 		return []DeliveryTarget{target("rabbitmq", EventMediaThumbnailRequested, "media")}
 	default:
@@ -109,6 +112,8 @@ func canonicalTaskType(taskType, queue string) (string, string) {
 		return TaskMediaThumbnailV1, queue
 	case taskType == EventObjectGCRequested && queue == "maintenance":
 		return TaskObjectGCV1, queue
+	case taskType == EventUploadOperationRecover && queue == "upload":
+		return TaskUploadOperationRecoverV1, queue
 	case taskType == EventAIIndexRequested && queue == "ai":
 		return TaskAIIndexV1, queue
 	case taskType == EventAIReprocessRequested && queue == "ai":

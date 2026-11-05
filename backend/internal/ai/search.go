@@ -329,15 +329,16 @@ func (s *Service) queryCandidates(ctx context.Context, ownerID uuid.UUID, input 
 	case "fulltext":
 		query = prefix + `SELECT ` + selectFields + `,
 			d.id AS document_id, c.id AS chunk_id, c.page_number, c.section, c.content,
-			ts_rank_cd(c.content_tsv, plainto_tsquery('simple', @query)) AS score
+			ts_rank_cd(c.content_search_tsv, plainto_tsquery('simple', ai_search_terms(@query, true)), 32)
+				+ CASE WHEN strpos(lower(normalize(c.content, NFKC)), lower(normalize(@query, NFKC))) > 0 THEN 1.0 ELSE 0.0 END AS score
 		FROM file_entries e
 		JOIN file_objects o ON o.id = e.object_id AND o.status = 'ready'
 		JOIN ai_documents d ON d.object_id = e.object_id
 		JOIN ai_document_versions v ON (v.id = d.active_version_id OR (d.active_version_id IS NULL AND v.document_id = d.id)) AND v.status = 'indexed'
 		JOIN ai_chunks c ON c.document_id = d.id AND (c.document_version_id = v.id OR (c.document_version_id IS NULL AND c.document_id = d.id AND (d.active_version_id IS NULL OR d.updated_at > v.updated_at)))
 			WHERE e.owner_id = @owner AND e.deleted_at IS NULL AND ` + fileFilter + ` AND ` + folderFilter + ` AND ` + mimeFilter + `
-			AND c.content_tsv @@ plainto_tsquery('simple', @query)
-		ORDER BY score DESC LIMIT @candidate_limit`
+			AND c.content_search_tsv @@ plainto_tsquery('simple', ai_search_terms(@query, true))
+		ORDER BY score DESC, e.id, c.ordinal LIMIT @candidate_limit`
 	case "semantic":
 		query = prefix + `SELECT ` + selectFields + `,
 			d.id AS document_id, c.id AS chunk_id, c.page_number, c.section, c.content,
@@ -442,8 +443,19 @@ func (s *Service) queryExternalCandidates(ctx context.Context, ownerID uuid.UUID
 	if len(fileIDs) > 0 {
 		fileFilter = "e.id = ANY(CAST(@file_ids AS uuid[]))"
 	}
-	query := prefix + `SELECT e.id AS file_id, e.owner_id, e.folder_id, e.object_id, e.name, o.size_bytes, o.mime_type, e.version, e.created_at, e.updated_at, d.id AS document_id, v.id AS document_version_id, c.id AS chunk_id, c.page_number, c.section, c.content FROM file_entries e JOIN file_objects o ON o.id = e.object_id AND o.status = 'ready' JOIN ai_documents d ON d.object_id = e.object_id JOIN ai_document_versions v ON v.id = d.active_version_id AND v.status = 'indexed' JOIN ai_chunks c ON c.document_id = d.id AND c.document_version_id = v.id WHERE e.owner_id = @owner AND e.deleted_at IS NULL AND ` + fileFilter + ` AND ` + folderFilter + ` AND c.id = ANY(CAST(@chunk_ids AS uuid[]))`
+	mimeFilter, modelFilter := "TRUE", "TRUE"
+	if len(input.MimeTypes) > 0 {
+		mimeFilter = "o.mime_type = ANY(@mime_types)"
+	}
+	if mode == "semantic" {
+		modelFilter = "v.model_version = @model_version AND v.pipeline_version = @pipeline_version"
+	}
+	query := prefix + `SELECT e.id AS file_id, e.owner_id, e.folder_id, e.object_id, e.name, o.size_bytes, o.mime_type, e.version, e.created_at, e.updated_at, d.id AS document_id, v.id AS document_version_id, c.id AS chunk_id, c.page_number, c.section, c.content FROM file_entries e JOIN file_objects o ON o.id = e.object_id AND o.status = 'ready' JOIN ai_documents d ON d.object_id = e.object_id JOIN ai_document_versions v ON v.id = d.active_version_id AND v.status = 'indexed' JOIN ai_chunks c ON c.document_id = d.id AND c.document_version_id = v.id WHERE e.owner_id = @owner AND e.deleted_at IS NULL AND ` + fileFilter + ` AND ` + folderFilter + ` AND ` + mimeFilter + ` AND ` + modelFilter + ` AND c.id = ANY(CAST(@chunk_ids AS uuid[]))`
 	args := []any{sql.Named("owner", ownerID), sql.Named("chunk_ids", pq.Array(chunkIDs)), sql.Named("file_ids", pq.Array(fileIDs))}
+	args = append(args, sql.Named("mime_types", pq.Array(input.MimeTypes)))
+	if mode == "semantic" {
+		args = append(args, sql.Named("model_version", s.provider.ModelVersion()), sql.Named("pipeline_version", s.pipelineVersion))
+	}
 	if input.FolderID != nil {
 		args = append(args, sql.Named("folder", *input.FolderID))
 	}
@@ -462,6 +474,15 @@ func (s *Service) queryExternalCandidates(ctx context.Context, ownerID uuid.UUID
 		row.Score = scoreByChunk[*row.ChunkID]
 		result = append(result, row)
 	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].Score == result[j].Score {
+			if result[i].FileID == result[j].FileID {
+				return result[i].ChunkID.String() < result[j].ChunkID.String()
+			}
+			return result[i].FileID.String() < result[j].FileID.String()
+		}
+		return result[i].Score > result[j].Score
+	})
 	return result, nil
 }
 

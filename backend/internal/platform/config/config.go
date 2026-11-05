@@ -338,6 +338,7 @@ func Load() (Config, error) {
 				"media":       envInt("WORKER_QUEUE_MEDIA", 4),
 				"object":      envInt("WORKER_QUEUE_OBJECT", 2),
 				"maintenance": envInt("WORKER_QUEUE_MAINTENANCE", 1),
+				"upload":      envInt("WORKER_QUEUE_UPLOAD", 2),
 			},
 		},
 		Auth: Auth{
@@ -447,7 +448,7 @@ func Load() (Config, error) {
 			ChunkTokenBudget:   envInt("PARSER_CHUNK_TOKEN_BUDGET", 600),
 			ChunkOverlapTokens: envInt("PARSER_CHUNK_OVERLAP_TOKENS", 60),
 			MaxChunks:          envInt("PARSER_MAX_CHUNKS", 256),
-			ChunkerVersion:     env("PARSER_CHUNKER_VERSION", "document-chunker-v2"),
+			ChunkerVersion:     env("PARSER_CHUNKER_VERSION", "document-chunker-v3"),
 			TokenizerID:        env("PARSER_TOKENIZER_ID", "mixed-script-estimate-v1"),
 		},
 		Tracing: Tracing{

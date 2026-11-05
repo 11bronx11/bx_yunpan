@@ -142,6 +142,14 @@ type StorageOperationRecoverV1 struct {
 	RecoveryKey   string    `json:"recovery_key"`
 }
 
+// UploadOperationRecoverV1 nudges the upload worker to resume a durable
+// multipart or upload-owned storage operation.
+type UploadOperationRecoverV1 struct {
+	OperationID   uuid.UUID `json:"operation_id"`
+	OperationType string    `json:"operation_type"`
+	RecoveryKey   string    `json:"recovery_key"`
+}
+
 type MediaThumbnailRequestedV1 struct {
 	ObjectID uuid.UUID `json:"object_id"`
 }
@@ -312,6 +320,10 @@ func (p StorageOperationRecoverV1) Validate() error {
 		return errors.New("recovery_key is required")
 	}
 	return nil
+}
+
+func (p UploadOperationRecoverV1) Validate() error {
+	return (StorageOperationRecoverV1)(p).Validate()
 }
 
 func (p MediaThumbnailRequestedV1) Validate() error { return requireUUID("object_id", p.ObjectID) }

@@ -1,6 +1,13 @@
 groups:
   - name: high-concurrency
     rules:
+      - alert: YunpanAutomaticWorkStopped
+        expr: yunpan_storage_backlog{state="dead"} > 0 or yunpan_recovery_backlog{state="stopped"} > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Automatic work stopped after retry exhaustion and needs manual repair
       - alert: YunpanDurableBacklogStalled
         expr: yunpan_outbox_oldest_age_seconds > 300 or yunpan_storage_oldest_age_seconds > 600
         for: 5m
@@ -9,7 +16,7 @@ groups:
         annotations:
           summary: Durable work is not draining within the initial recovery budget
       - alert: YunpanBacklogObservationFailed
-        expr: yunpan_outbox_backlog_scrape_success == 0 or yunpan_storage_backlog_scrape_success == 0
+        expr: yunpan_outbox_backlog_scrape_success == 0 or yunpan_storage_backlog_scrape_success == 0 or yunpan_recovery_backlog_scrape_success == 0
         for: 1m
         labels:
           severity: warning

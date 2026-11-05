@@ -43,6 +43,12 @@ func TestBacklogCollectorTracksDurableWorkAndQueryFailure(t *testing.T) {
 	if got := gaugeSum(t, registry, "yunpan_storage_oldest_age_seconds"); got < 59 {
 		t.Fatalf("oldest age=%v", got)
 	}
+	if err := tx.Exec("UPDATE storage_operations SET state = 'dead' WHERE id = ?", id).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := gaugeSum(t, registry, "yunpan_storage_backlog"); got != baseline+1 {
+		t.Fatalf("terminal work disappeared from observation: %v", got)
+	}
 	if err := tx.Exec("UPDATE storage_operations SET state = 'succeeded' WHERE id = ?", id).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +72,17 @@ func TestBacklogCollectorTracksDurableWorkAndQueryFailure(t *testing.T) {
 	}
 	if got := gaugeSum(t, outboxRegistry, "yunpan_outbox_oldest_age_seconds"); got < 599 {
 		t.Fatalf("retry reset original event age: %v", got)
+	}
+	recoveryRegistry := prometheus.NewRegistry()
+	recoveryRegistry.MustRegister(NewRecoveryCollector(tx))
+	for range 2 {
+		if err := tx.Exec(`INSERT INTO outbox_recoveries(recovery_key,event_id,reason,resource_type,resource_id,stopped_at)
+			VALUES (?,?,'test','upload_session',?,?)`, uuid.NewString(), id, id, time.Now().Add(-time.Minute)).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := gaugeSum(t, recoveryRegistry, "yunpan_recovery_backlog"); got != 1 {
+		t.Fatalf("stopped recovery aggregates=%v, want 1", got)
 	}
 	if err := tx.Rollback().Error; err != nil {
 		t.Fatal(err)

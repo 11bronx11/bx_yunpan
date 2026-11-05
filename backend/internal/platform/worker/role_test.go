@@ -3,7 +3,7 @@ package worker
 import "testing"
 
 func TestQueuesForRoleOwnsOnlyItsQueue(t *testing.T) {
-	configured := map[string]int{QueueAI: 4, QueueObject: 2, QueueMedia: 3, QueueMaintenance: 1}
+	configured := map[string]int{QueueAI: 4, QueueObject: 2, QueueMedia: 3, QueueMaintenance: 1, QueueUpload: 2}
 	for _, test := range []struct {
 		role   Role
 		queue  string
@@ -12,6 +12,7 @@ func TestQueuesForRoleOwnsOnlyItsQueue(t *testing.T) {
 		{RoleObject, QueueObject, 2},
 		{RoleMedia, QueueMedia, 3},
 		{RoleMaintenance, QueueMaintenance, 1},
+		{RoleUpload, QueueUpload, 2},
 	} {
 		queues := QueuesForRole(test.role, configured)
 		if len(queues) != 1 || queues[test.queue] != test.weight {

@@ -69,6 +69,7 @@ x-app-environment: &app-environment
   WORKER_QUEUE_MEDIA: ${WORKER_QUEUE_MEDIA:-4}
   WORKER_QUEUE_OBJECT: ${WORKER_QUEUE_OBJECT:-2}
   WORKER_QUEUE_MAINTENANCE: ${WORKER_QUEUE_MAINTENANCE:-1}
+  WORKER_QUEUE_UPLOAD: ${WORKER_QUEUE_UPLOAD:-2}
   AUTH_ISSUER: ${AUTH_ISSUER:-bx-yunpan}
   SHARE_SECRET: ${SHARE_SECRET:-bx-yunpan-development-share-secret}
   AUTH_ACCESS_TTL: ${AUTH_ACCESS_TTL:-15m}
@@ -122,7 +123,7 @@ x-app-environment: &app-environment
   PARSER_CHUNK_TOKEN_BUDGET: ${PARSER_CHUNK_TOKEN_BUDGET:-600}
   PARSER_CHUNK_OVERLAP_TOKENS: ${PARSER_CHUNK_OVERLAP_TOKENS:-60}
   PARSER_MAX_CHUNKS: ${PARSER_MAX_CHUNKS:-256}
-  PARSER_CHUNKER_VERSION: ${PARSER_CHUNKER_VERSION:-document-chunker-v2}
+  PARSER_CHUNKER_VERSION: ${PARSER_CHUNKER_VERSION:-document-chunker-v3}
   PARSER_TOKENIZER_ID: ${PARSER_TOKENIZER_ID:-mixed-script-estimate-v1}
   # 链路追踪：默认关闭，开启前先起 observability profile（含 otel-collector 与 jaeger）。
   OTEL_TRACES_ENABLED: ${OTEL_TRACES_ENABLED:-false}
@@ -177,7 +178,7 @@ x-parser-environment: &parser-environment
   PARSER_CHUNK_TOKEN_BUDGET: ${PARSER_CHUNK_TOKEN_BUDGET:-600}
   PARSER_CHUNK_OVERLAP_TOKENS: ${PARSER_CHUNK_OVERLAP_TOKENS:-60}
   PARSER_MAX_CHUNKS: ${PARSER_MAX_CHUNKS:-256}
-  PARSER_CHUNKER_VERSION: ${PARSER_CHUNKER_VERSION:-document-chunker-v2}
+  PARSER_CHUNKER_VERSION: ${PARSER_CHUNKER_VERSION:-document-chunker-v3}
   PARSER_TOKENIZER_ID: ${PARSER_TOKENIZER_ID:-mixed-script-estimate-v1}
   OTEL_TRACES_ENABLED: ${OTEL_TRACES_ENABLED:-false}
   OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-otel-collector:4317}
@@ -544,6 +545,29 @@ services:
         GO_BUILD_PARALLELISM: ${GO_BUILD_PARALLELISM:-1}
         GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
         TARGET: maintenance-worker
+    environment: *app-environment
+    expose: ["8083"]
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+      minio-init: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+  upload-worker:
+    profiles: ["distributed"]
+    image: bx-yunpan-upload-worker:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args:
+        DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
+        GO_VERSION: ${GO_VERSION:-1.25.13}
+        GO_PROXY: ${GO_PROXY:-https://proxy.golang.org,direct}
+        GO_BUILD_PARALLELISM: ${GO_BUILD_PARALLELISM:-1}
+        GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
+        TARGET: upload-worker
     environment: *app-environment
     expose: ["8083"]
     depends_on:

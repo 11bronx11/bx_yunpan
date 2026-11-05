@@ -71,7 +71,7 @@ def parse_document(
     file_type = detect_file_type(data, media_type)
     if file_type == "text":
         sections, warnings = parse_text(data, media_type)
-        return build_result(data, "text-decoder", "text-decoder-v1", sections, warnings)
+        return build_result(data, "text-decoder", "text-decoder-v2", sections, warnings)
     if file_type == "csv":
         sections, warnings = parse_csv(data)
         return build_result(data, "python-csv", "stdlib-v1", sections, warnings)
@@ -133,7 +133,7 @@ def detect_file_type(data: bytes, media_type: str = "") -> str:
     if media_type.startswith("image/"):
         raise InvalidDocument("ai.parse.invalid_content")
 
-    text = _decode_text(data, strict=False)[0]
+    text = _decode_text(data, strict=False, allow_gb18030=True)[0]
     if "\x00" not in text and media_type == "text/csv":
         return "csv"
     if "\x00" not in text and _looks_like_csv(text):
@@ -144,7 +144,8 @@ def detect_file_type(data: bytes, media_type: str = "") -> str:
 
 
 def parse_text(data: bytes, media_type: str) -> tuple[list[dict[str, Any]], list[str]]:
-    text, warnings, encoding = _decode_text(data, strict=media_type == "application/json")
+    media_type = media_type.partition(";")[0].strip().lower()
+    text, warnings, encoding = _decode_text(data, strict=True, allow_gb18030=media_type != "application/json")
     if not text.strip():
         raise QualityFailure("ai.parse.quality_failed")
     if len(text.encode("utf-8")) > MAX_EXTRACTED_TEXT_BYTES:
@@ -513,16 +514,26 @@ def _check_zip_limits(archive: zipfile.ZipFile) -> None:
 
 def _decode_text(data: bytes, *, strict: bool, allow_gb18030: bool = False) -> tuple[str, list[str], str]:
     warnings: list[str] = []
-    for encoding, label in (("utf-8-sig", "utf-8"), ("utf-16", "utf-16")):
-        try:
-            return data.decode(encoding), warnings, label
-        except UnicodeError:
-            pass
-    if allow_gb18030:
+    # UTF-16 without a BOM can turn arbitrary even-length GBK bytes into valid
+    # but unrelated Unicode. Only use UTF-16/32 when the signature proves it.
+    if data.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+        unicode_encoding = "utf-32"
+    elif data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        unicode_encoding = "utf-16"
+    else:
+        unicode_encoding = "utf-8-sig"
+    try:
+        text = data.decode(unicode_encoding)
+        if _valid_decoded_text(text):
+            return text, warnings, "utf-8" if unicode_encoding == "utf-8-sig" else unicode_encoding
+    except UnicodeError:
+        pass
+    if allow_gb18030 and unicode_encoding == "utf-8-sig":
         try:
             text = data.decode("gb18030")
-            warnings.append("input was decoded as GB18030")
-            return text, warnings, "gb18030"
+            if text.encode("gb18030") == data and _valid_decoded_text(text):
+                warnings.append("input was decoded as GB18030")
+                return text, warnings, "gb18030"
         except UnicodeError:
             pass
     if strict:
@@ -530,6 +541,12 @@ def _decode_text(data: bytes, *, strict: bool, allow_gb18030: bool = False) -> t
     text = data.decode("utf-8", errors="replace")
     warnings.append("input was decoded with UTF-8 replacement characters")
     return text, warnings, "utf-8-replacement"
+
+
+def _valid_decoded_text(text: str) -> bool:
+    # Match the built-in Go decoder: reject every forbidden C0 control,
+    # rather than allowing corruption when it occupies under 5% of a file.
+    return all(ord(char) >= 0x20 or char in {"\n", "\r", "\t"} for char in text)
 
 
 def _is_mostly_text(text: str) -> bool:

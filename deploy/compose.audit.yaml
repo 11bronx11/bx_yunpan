@@ -31,6 +31,10 @@ services:
     environment:
       LOG_LEVEL: warn
     mem_limit: 256m
+  upload-worker:
+    environment:
+      LOG_LEVEL: warn
+    mem_limit: 256m
   search-indexer:
     environment:
       LOG_LEVEL: warn

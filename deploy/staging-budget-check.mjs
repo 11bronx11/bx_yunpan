@@ -21,8 +21,8 @@ const integer = (value, minimum = 1) => {
 const postgresSetting = (key) => integer(config.services.postgres.command
   .find((entry) => entry.startsWith(`${key}=`))?.split('=')[1]);
 const roles = ['api', 'worker', 'outbox-relay', 'object-worker', 'media-worker',
-  'maintenance-worker', 'ai-query', 'ai-indexer', 'search-indexer'];
-const consumers = new Set(['object-worker', 'media-worker', 'maintenance-worker', 'ai-indexer', 'search-indexer']);
+  'maintenance-worker', 'upload-worker', 'ai-query', 'ai-indexer', 'search-indexer'];
+const consumers = new Set(['object-worker', 'media-worker', 'maintenance-worker', 'upload-worker', 'ai-indexer', 'search-indexer']);
 const dispatcherRoles = new Set(['worker', 'outbox-relay']);
 const rows = [];
 for (const role of roles) {

@@ -2,11 +2,16 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
+	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
 	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
+	"github.com/google/uuid"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 )
@@ -45,5 +50,33 @@ func TestDomainEventsAreAcknowledged(t *testing.T) {
 		if err := handlers[eventType](context.Background(), taskqueue.NewTask(eventType, nil)); err != nil {
 			t.Errorf("acknowledge %s: %v", eventType, err)
 		}
+	}
+}
+
+func TestMaintenanceRecoveryDefersLegacyUploadOperations(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	handler := maintenanceRecoveryHandler(nil, nil, logger)
+	payload, err := json.Marshal(eventcontract.StorageOperationRecoverV1{
+		OperationID: uuid.New(), OperationType: storageops.MultipartAbort, RecoveryKey: "legacy-upload-recovery",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler(context.Background(), taskqueue.NewTask(outbox.EventStorageOperationRecover, payload)); err != nil {
+		t.Fatalf("legacy upload task should be acknowledged for maintenance scan recovery: %v", err)
+	}
+}
+
+func TestMaintenanceRecoveryRejectsUnknownOperations(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	handler := maintenanceRecoveryHandler(nil, nil, logger)
+	payload, err := json.Marshal(eventcontract.StorageOperationRecoverV1{
+		OperationID: uuid.New(), OperationType: "unknown.operation", RecoveryKey: "unknown-recovery",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler(context.Background(), taskqueue.NewTask(outbox.EventStorageOperationRecover, payload)); !errors.Is(err, taskqueue.SkipRetry) {
+		t.Fatalf("unknown operation error = %v, want SkipRetry", err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -19,7 +20,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/storageurl"
@@ -55,56 +55,85 @@ type Service struct {
 	readURLTTL time.Duration
 }
 
+// image.DecodeConfig can turn an underlying storage read error into ErrFormat
+// while detecting the magic bytes. Keep that error so an outage is retryable.
+type imageReader struct {
+	io.Reader
+	failure error
+}
+
+func (r *imageReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		r.failure = err
+	}
+	return n, err
+}
+
 func NewService(db *gorm.DB, objects *objectstore.Service, storage *minio.Client, presigner *storageurl.Presigner, bucket string, readURLTTL time.Duration) *Service {
 	return &Service{db: db, objects: objects, storage: storage, presigner: presigner, bucket: bucket, readURLTTL: readURLTTL}
 }
 
 func (s *Service) Process(ctx context.Context, objectID uuid.UUID) error {
 	object, err := s.objects.Get(objectID)
-	if err != nil || !strings.HasPrefix(object.MimeType, "image/") {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(object.MimeType, "image/") {
 		return nil
 	}
 	var existing Variant
 	if err := s.db.Where("object_id = ? AND variant_type = 'thumbnail' AND pipeline_version = ? AND status = 'ready'", objectID, thumbnailPipeline).First(&existing).Error; err == nil {
 		return nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
 	}
 	reader, err := s.storage.GetObject(ctx, object.Bucket, object.ObjectKey, minio.GetObjectOptions{})
 	if err != nil {
 		return err
 	}
 	defer func() { _ = reader.Close() }()
-	imageConfig, _, err := image.DecodeConfig(reader)
-	if err != nil || !validSourceDimensions(imageConfig.Width, imageConfig.Height) {
-		return nil
+	tracked := &imageReader{Reader: reader}
+	imageConfig, _, err := image.DecodeConfig(tracked)
+	if tracked.failure != nil {
+		return tracked.failure
+	}
+	if errors.Is(err, image.ErrFormat) {
+		return fmt.Errorf("unsupported thumbnail image: %w", taskqueue.SkipRetry)
+	}
+	if err != nil {
+		return err
+	}
+	if !validSourceDimensions(imageConfig.Width, imageConfig.Height) {
+		return fmt.Errorf("thumbnail image dimensions exceed limit: %w", taskqueue.SkipRetry)
 	}
 	if _, err := reader.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	source, _, err := image.Decode(reader)
+	source, _, err := image.Decode(tracked)
+	if tracked.failure != nil {
+		return tracked.failure
+	}
 	if err != nil {
-		return nil
+		return fmt.Errorf("decode thumbnail image: %w", err)
 	}
 	thumbnail := fit(source, 512, 512)
 	var encoded bytes.Buffer
 	if err := jpeg.Encode(&encoded, thumbnail, &jpeg.Options{Quality: 82}); err != nil {
 		return err
 	}
-	key := fmt.Sprintf("variants/%s/thumbnail/%s/%x.jpg", objectID, thumbnailPipeline, sha256.Sum256([]byte(object.ObjectKey)))
-	if _, err := s.storage.PutObject(ctx, s.bucket, key, bytes.NewReader(encoded.Bytes()), int64(encoded.Len()), minio.PutObjectOptions{ContentType: "image/jpeg"}); err != nil {
-		return err
-	}
+	// A unique attempt key lets recovery delete an abandoned write without
+	// removing the bytes committed by a concurrent thumbnail worker.
+	key := fmt.Sprintf("variants/%s/thumbnail/%s/%x/%s.jpg", objectID, thumbnailPipeline, sha256.Sum256([]byte(object.ObjectKey)), uuid.New())
 	bounds := thumbnail.Bounds()
 	variant := Variant{
 		ID: uuid.Must(uuid.NewV7()), ObjectID: objectID, VariantType: "thumbnail", ObjectKey: key,
 		MimeType: "image/jpeg", Width: bounds.Dx(), Height: bounds.Dy(), PipelineVersion: thumbnailPipeline, Status: "ready",
 	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var current objectstore.Object
-		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ? AND status = 'ready' AND object_key = ?", objectID, object.ObjectKey).First(&current).Error; err != nil {
-			return err
-		}
-		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&variant).Error
-	})
+	return s.writeVariant(ctx, object, variant, encoded.Bytes())
 }
 
 func validSourceDimensions(width, height int) bool {

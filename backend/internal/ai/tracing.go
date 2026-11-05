@@ -231,9 +231,14 @@ func (s *Service) recall(ctx context.Context, ownerID uuid.UUID, input SearchInp
 		}
 	} else if s.retrieval != nil && s.searchConfig.ReadBackend == "es_qdrant" && (mode == "fulltext" || mode == "semantic") {
 		candidates, err = s.queryExternalCandidates(ctx, ownerID, input, mode, vector)
-		if err != nil && s.searchConfig.ExternalFallback {
+		files := make(map[uuid.UUID]struct{}, len(candidates))
+		for _, candidate := range candidates {
+			files[candidate.FileID] = struct{}{}
+		}
+		if s.searchConfig.ExternalFallback && (err != nil || len(files) < input.Limit) {
 			// External indexes are derived and may lag or be unavailable. A
-			// request-level PostgreSQL retry preserves the existing contract.
+			// global candidate pool can also be exhausted by another owner or
+			// retired chunks. Retry underfilled file results through PostgreSQL.
 			candidates, err = s.queryCandidates(ctx, ownerID, input, mode, vector)
 		} else if err != nil {
 			// Keep the public AI error contract stable when the derived read plane

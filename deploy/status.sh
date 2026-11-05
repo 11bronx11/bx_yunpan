@@ -142,7 +142,7 @@ curl -fsS -o /dev/null -w "web -> storage: HTTP %{http_code}\n" "http://${probe_
 "$deploy_dir/config-check.sh"
 
 # Probe the role metrics endpoints when the distributed profile is active.
-for role in outbox-relay object-worker media-worker maintenance-worker; do
+for role in outbox-relay object-worker media-worker maintenance-worker upload-worker; do
   mapfile -t role_ids < <("${compose[@]}" ps -q "$role")
   for container_id in "${role_ids[@]}"; do
     if docker exec "$container_id" wget -q -O - http://127.0.0.1:8083/metrics >/dev/null; then

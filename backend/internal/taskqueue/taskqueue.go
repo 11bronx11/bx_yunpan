@@ -78,7 +78,7 @@ type Broker struct {
 	ExecutionStore  *Store
 }
 
-var queueNames = []string{"object", "media", "maintenance", "ai", "search"}
+var queueNames = []string{"object", "media", "maintenance", "upload", "ai", "search"}
 var retryDelays = []time.Duration{time.Second, 5 * time.Second, 30 * time.Second, time.Minute, 5 * time.Minute}
 
 func QueueNames() []string { return append([]string(nil), queueNames...) }

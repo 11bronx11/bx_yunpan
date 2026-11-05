@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/textsearch"
 	"github.com/google/uuid"
 )
 
@@ -30,6 +31,9 @@ func esUpdate(doc map[string]any) map[string]any {
 
 func esContentDocument(value ContentProjection) map[string]any {
 	doc := map[string]any{"chunk_id": value.ChunkID, "object_id": value.ObjectID, "document_version_id": value.DocumentVersionID, "ordinal": value.Ordinal, "content": value.Content, "pipeline_version": value.PipelineVersion, "model_version": value.ModelVersion, "index_epoch": value.IndexEpoch, "tombstone": value.Tombstone}
+	doc["content_normalized"] = textsearch.Normalize(value.Content)
+	doc["content_search"] = textsearch.IndexText(value.Content)
+	doc["lexical_version"] = textsearch.Version
 	if vector, err := parseVectorRef(value.VectorRef); err == nil && len(vector) > 0 {
 		doc["embedding"] = vector
 	}

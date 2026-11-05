@@ -23,7 +23,7 @@ Usage: ./deploy/up.sh [--no-build] [--observability] [--distributed-workers] [--
 
   --no-build           Start existing images without building them.
   --observability      Also start Prometheus, Grafana, and OpenTelemetry Collector.
-  --distributed-workers Start independent relay/object/media/maintenance roles.
+  --distributed-workers Start independent relay/object/media/upload/maintenance roles; maintenance includes periodic recovery and cleanup.
   --ai-split           Start separate ai-query and ai-indexer roles.
   --redis-split        Use separate Coordination and Cache Redis services.
   --search-indexer     Start the opt-in PostgreSQL search projection consumer.
@@ -254,7 +254,7 @@ if [[ "$build" == true ]]; then
   fi
   build_targets=(migrate api web)
   if [[ "$distributed_workers" == true ]]; then
-    build_targets+=(outbox-relay object-worker media-worker maintenance-worker)
+    build_targets+=(outbox-relay object-worker media-worker maintenance-worker upload-worker)
   else
     build_targets+=(worker)
   fi
@@ -329,7 +329,7 @@ if [[ -n "$api_replicas" ]]; then
 fi
 args+=("${scale_args[@]}")
 if [[ "$distributed_workers" == true ]]; then
-  distributed_services=(migrate api web outbox-relay object-worker media-worker maintenance-worker)
+  distributed_services=(migrate api web outbox-relay object-worker media-worker maintenance-worker upload-worker)
   if [[ "$ai_enabled" == true ]]; then
     if [[ "$ai_split" == true ]]; then
       distributed_services+=(ai-query ai-indexer)
@@ -384,8 +384,8 @@ if [[ "$distributed_workers" == true ]]; then
 else
   # Switching back to the compatibility worker must also remove the
   # independent consumers, otherwise both generations would process a queue.
-  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile distributed stop outbox-relay object-worker media-worker maintenance-worker >/dev/null
-  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile distributed rm -f outbox-relay object-worker media-worker maintenance-worker >/dev/null
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile distributed stop outbox-relay object-worker media-worker maintenance-worker upload-worker >/dev/null
+  docker compose --env-file "$env_file" -f "$compose_file" --profile app --profile distributed rm -f outbox-relay object-worker media-worker maintenance-worker upload-worker >/dev/null
 fi
 
 if [[ "$ai_split" == true ]]; then

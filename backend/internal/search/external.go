@@ -60,7 +60,7 @@ func (e *ElasticsearchIndex) PrepareEpoch(ctx context.Context, target string, di
 		"file_entry_id": map[string]any{"type": "keyword"}, "owner_id": map[string]any{"type": "keyword"}, "folder_id": map[string]any{"type": "keyword"}, "object_id": map[string]any{"type": "keyword"}, "file_version": map[string]any{"type": "long"}, "acl_version": map[string]any{"type": "long"}, "name": map[string]any{"type": "text"}, "mime_type": map[string]any{"type": "keyword"}, "index_epoch": map[string]any{"type": "long"}, "tombstone": map[string]any{"type": "boolean"},
 	}}}
 	chunkMapping := map[string]any{"mappings": map[string]any{"properties": map[string]any{
-		"chunk_id": map[string]any{"type": "keyword"}, "object_id": map[string]any{"type": "keyword"}, "document_version_id": map[string]any{"type": "keyword"}, "ordinal": map[string]any{"type": "integer"}, "content": map[string]any{"type": "text"}, "pipeline_version": map[string]any{"type": "keyword"}, "model_version": map[string]any{"type": "keyword"}, "index_epoch": map[string]any{"type": "long"}, "tombstone": map[string]any{"type": "boolean"}, "embedding": map[string]any{"type": "dense_vector", "dims": dimension, "index": true, "similarity": "cosine"},
+		"chunk_id": map[string]any{"type": "keyword"}, "object_id": map[string]any{"type": "keyword"}, "document_version_id": map[string]any{"type": "keyword"}, "ordinal": map[string]any{"type": "integer"}, "content": map[string]any{"type": "text"}, "content_normalized": map[string]any{"type": "text"}, "content_search": map[string]any{"type": "text", "analyzer": "whitespace"}, "lexical_version": map[string]any{"type": "keyword"}, "pipeline_version": map[string]any{"type": "keyword"}, "model_version": map[string]any{"type": "keyword"}, "index_epoch": map[string]any{"type": "long"}, "tombstone": map[string]any{"type": "boolean"}, "embedding": map[string]any{"type": "dense_vector", "dims": dimension, "index": true, "similarity": "cosine"},
 	}}}
 	// Keep index creation order deterministic for operators and resumable
 	// backfill evidence; map iteration would otherwise make the request trace
@@ -165,9 +165,12 @@ func (e *ElasticsearchIndex) TombstoneFile(ctx context.Context, backend string, 
 
 func (e *ElasticsearchIndex) SearchText(ctx context.Context, request RetrievalRequest) ([]RetrievalCandidate, error) {
 	limit := boundedLimit(request.Limit)
-	body := map[string]any{"size": limit, "track_total_hits": false, "timeout": timeoutString(request.Timeout), "query": map[string]any{"bool": map[string]any{"must": map[string]any{"multi_match": map[string]any{"query": request.Query, "fields": []string{"content^2", "name"}}}, "filter": esVisibleFilter(request)}}}
+	body := map[string]any{"size": limit, "track_total_hits": false, "timeout": timeoutString(request.Timeout), "query": map[string]any{"bool": map[string]any{"must": esTextQuery(request.Query), "filter": esVisibleFilter(request)}}}
 	var response esSearchResponse
 	if err := e.do(ctx, http.MethodPost, "/chunks_"+safeIndexPart(request.TargetVersion)+"/_search", body, &response); err != nil {
+		return nil, err
+	}
+	if err := response.complete(); err != nil {
 		return nil, err
 	}
 	result := make([]RetrievalCandidate, 0, len(response.Hits.Hits))
@@ -195,6 +198,9 @@ func (e *ElasticsearchIndex) SearchVector(ctx context.Context, request Retrieval
 	body := map[string]any{"knn": map[string]any{"field": "embedding", "query_vector": vector, "k": limit, "num_candidates": numCandidates, "filter": esVisibleFilter(request)}, "size": limit, "track_total_hits": false, "timeout": timeoutString(request.Timeout)}
 	var response esSearchResponse
 	if err := e.do(ctx, http.MethodPost, "/chunks_"+safeIndexPart(request.TargetVersion)+"/_search", body, &response); err != nil {
+		return nil, err
+	}
+	if err := response.complete(); err != nil {
 		return nil, err
 	}
 	result := make([]RetrievalCandidate, 0, len(response.Hits.Hits))
@@ -488,12 +494,23 @@ func (m *externalIndex) each(ctx context.Context, fn func(Index) error) error {
 }
 
 type esSearchResponse struct {
-	Hits struct {
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Failed int `json:"failed"`
+	} `json:"_shards"`
+	Hits *struct {
 		Hits []struct {
 			Score  float64        `json:"_score"`
 			Source map[string]any `json:"_source"`
 		} `json:"hits"`
 	} `json:"hits"`
+}
+
+func (r esSearchResponse) complete() error {
+	if r.TimedOut || r.Shards.Failed > 0 || r.Hits == nil {
+		return fmt.Errorf("%w: incomplete elasticsearch search response", ErrUnavailable)
+	}
+	return nil
 }
 
 func (e *ElasticsearchIndex) do(ctx context.Context, method, path string, body any, result any) error {

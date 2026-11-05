@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	pipelineVersion    = "document-index-v5"
+	pipelineVersion    = "document-index-v5-" + rag.DefaultChunker
 	embeddingBatchSize = 10
 )
 
@@ -306,7 +306,11 @@ func chunksForIndex(parsed ParseResult) ([]chunkInput, error) {
 	if len(parsed.Chunks) != 0 {
 		return parsed.Chunks, nil
 	}
-	return makeChunks(parsed.Sections), nil
+	chunked := rag.MakeTypedChunks(parsed.Sections, rag.ChunkOptions{})
+	if chunked.Truncated {
+		return nil, &ParseError{Code: "ai.parse.chunk_limit", Permanent: true, Err: errors.New("legacy parser response exceeded chunk limit")}
+	}
+	return chunked.Chunks, nil
 }
 
 func isVisionImageType(mediaType string) bool {
