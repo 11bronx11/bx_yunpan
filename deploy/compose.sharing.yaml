@@ -1,0 +1,11 @@
+# Apply after compose.fullchain.yaml. Other role images and all volumes stay
+# on the existing fullchain configuration.
+services:
+  api:
+    image: bx-yunpan-api:${SHARING_IMAGE_TAG:-sharing-20261106-r2}
+  outbox-relay:
+    image: bx-yunpan-outbox-relay:${SHARING_IMAGE_TAG:-sharing-20261106-r2}
+  search-indexer:
+    image: bx-yunpan-search-indexer:${SHARING_IMAGE_TAG:-sharing-20261106-r2}
+  web:
+    image: bx-yunpan-web:${SHARING_IMAGE_TAG:-sharing-20261106-r2}

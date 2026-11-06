@@ -1,6 +1,6 @@
 import React from 'react';
 import { Badge, Button, Dropdown } from 'antd';
-import { CloudOutlined, CommentOutlined, LogoutOutlined, MenuOutlined, RobotOutlined, SwapOutlined } from '@ant-design/icons';
+import { CloudOutlined, CommentOutlined, LogoutOutlined, LinkOutlined, MenuOutlined, RobotOutlined, SwapOutlined } from '@ant-design/icons';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import styled from '@emotion/styled';
 import { useAuth } from '../contexts/AuthContext';
@@ -20,7 +20,7 @@ const NavBar = () => {
   const { activeCount } = useTransfers();
   const location = useLocation();
   const navigate = useNavigate();
-  const links = [{ to: '/drive', text: '我的云盘', icon: <CloudOutlined /> }, { to: '/transfers', text: '传输', icon: <Badge count={activeCount} size="small" offset={[7, -3]}><SwapOutlined /></Badge> }, { to: '/ai', text: 'AI 检索', icon: <RobotOutlined /> }, { to: '/ask', text: 'AI 问答', icon: <CommentOutlined /> }];
+  const links = [{ to: '/drive', text: '我的云盘', icon: <CloudOutlined /> }, { to: '/transfers', text: '传输', icon: <Badge count={activeCount} size="small" offset={[7, -3]}><SwapOutlined /></Badge> }, { to: '/shares', text: '我的分享', icon: <LinkOutlined /> }, { to: '/ai', text: 'AI 检索', icon: <RobotOutlined /> }, { to: '/ask', text: 'AI 问答', icon: <CommentOutlined /> }];
   const accountMenu = {
     items: [
       { key: 'username', label: user?.username || '当前用户', disabled: true },

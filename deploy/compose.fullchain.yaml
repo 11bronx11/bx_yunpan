@@ -1,0 +1,39 @@
+# Use with compose.yaml, compose.staging.yaml, a dedicated --project-name,
+# and a private test env file. No production volumes or fixed API ports.
+services:
+  api:
+    image: bx-yunpan-api:${FULLCHAIN_API_IMAGE_TAG:-${APP_IMAGE_TAG:-local}}
+    ports: ["127.0.0.1::8081"]
+    environment:
+      # Expanded worker replicas plus relay listeners must fit max_connections=100.
+      POSTGRES_MAX_OPEN_CONNS: "10"
+      POSTGRES_MAX_IDLE_CONNS: "4"
+    # Each concurrent Argon2 password verification uses 64MiB.
+    mem_limit: 512m
+  postgres:
+    mem_limit: 512m
+  elasticsearch:
+    ports: ["127.0.0.1:29200:9200"]
+    mem_limit: 1g
+    environment:
+      # Absolute reserves suit this small test VM; default percentage
+      # watermarks refuse all shard allocation on its already-used disk.
+      cluster.routing.allocation.disk.watermark.low: 768mb
+      cluster.routing.allocation.disk.watermark.high: 512mb
+      cluster.routing.allocation.disk.watermark.flood_stage: 256mb
+  qdrant:
+    ports: ["127.0.0.1:29333:6333"]
+    mem_limit: 384m
+  parser-svc:
+    mem_limit: 512m
+  otel-collector:
+    ports: !override ["127.0.0.1:24317:4317", "127.0.0.1:24318:4318", "127.0.0.1:24133:13133"]
+    mem_limit: 128m
+  prometheus:
+    ports: !override ["127.0.0.1:24909:9090"]
+    mem_limit: 192m
+  grafana:
+    ports: !override ["127.0.0.1:24001:3000"]
+    mem_limit: 256m
+  jaeger:
+    mem_limit: 192m

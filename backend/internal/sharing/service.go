@@ -17,6 +17,7 @@ import (
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/drive"
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
+	"github.com/11bronx11/bx_yunpan/backend/internal/identity"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/ownerepoch"
@@ -25,9 +26,10 @@ import (
 )
 
 var (
-	ErrNotFound     = errors.New("share not found")
-	ErrConflict     = errors.New("share conflict")
-	ErrInvalidInput = errors.New("invalid share input")
+	ErrNotFound      = errors.New("share not found")
+	ErrConflict      = errors.New("share conflict")
+	ErrInvalidInput  = errors.New("invalid share input")
+	ErrQuotaExceeded = errors.New("share import quota exceeded")
 )
 
 type Share struct {
@@ -78,9 +80,6 @@ func (s *Service) Create(ownerID, fileID uuid.UUID, expiresAt *time.Time) (Share
 }
 
 func (s *Service) CreateWithContext(ctx context.Context, ownerID, fileID uuid.UUID, expiresAt *time.Time) (Share, string, error) {
-	if _, err := s.drive.File(ownerID, fileID); err != nil {
-		return Share{}, "", ErrNotFound
-	}
 	if expiresAt != nil && !expiresAt.After(time.Now().UTC()) {
 		return Share{}, "", ErrInvalidInput
 	}
@@ -94,6 +93,11 @@ func (s *Service) CreateWithContext(ctx context.Context, ownerID, fileID uuid.UU
 		KeyHash: s.keyHash(key), ExpiresAt: expiresAt, Version: 1,
 	}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Serialize against source deletion; a cached FileView cannot authorize
+		// creation after the source has been removed.
+		if err := lockSource(tx, ownerID, fileID); err != nil {
+			return err
+		}
 		if err := tx.Create(&share).Error; err != nil {
 			return err
 		}
@@ -120,7 +124,7 @@ func (s *Service) List(ownerID uuid.UUID) ([]Share, error) {
 func (s *Service) Get(ownerID, shareID uuid.UUID) (Share, error) {
 	var share Share
 	if err := s.db.Where("id = ? AND owner_id = ?", shareID, ownerID).First(&share).Error; err != nil {
-		return Share{}, ErrNotFound
+		return Share{}, lookupError(err)
 	}
 	return share, nil
 }
@@ -132,8 +136,11 @@ func (s *Service) Revoke(ownerID, shareID uuid.UUID) error {
 func (s *Service) RevokeWithContext(ctx context.Context, ownerID, shareID uuid.UUID) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var share Share
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ? AND revoked_at IS NULL", shareID, ownerID).First(&share).Error; err != nil {
-			return ErrNotFound
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ?", shareID, ownerID).First(&share).Error; err != nil {
+			return lookupError(err)
+		}
+		if share.RevokedAt != nil {
+			return nil
 		}
 		now := time.Now().UTC()
 		if err := tx.Model(&share).Updates(map[string]any{"revoked_at": now, "version": gorm.Expr("version + 1"), "updated_at": now}).Error; err != nil {
@@ -156,7 +163,7 @@ func (s *Service) Resolve(key string) (Share, drive.FileView, string, time.Time,
 	}
 	var share Share
 	if err := s.db.Where("key_hash = ?", s.keyHash(key)).First(&share).Error; err != nil {
-		return Share{}, drive.FileView{}, "", time.Time{}, ErrNotFound
+		return Share{}, drive.FileView{}, "", time.Time{}, lookupError(err)
 	}
 	if err := validateShare(share); err != nil {
 		return Share{}, drive.FileView{}, "", time.Time{}, err
@@ -166,6 +173,9 @@ func (s *Service) Resolve(key string) (Share, drive.FileView, string, time.Time,
 		return Share{}, drive.FileView{}, "", time.Time{}, ErrNotFound
 	}
 	expiresAt := time.Now().UTC().Add(s.accessTTL)
+	if share.ExpiresAt != nil && share.ExpiresAt.Before(expiresAt) {
+		expiresAt = *share.ExpiresAt
+	}
 	token, err := s.signAccess(share.ID, expiresAt)
 	return share, file, token, expiresAt, err
 }
@@ -180,7 +190,7 @@ func (s *Service) Access(raw string) (Share, drive.FileView, error) {
 	}
 	var share Share
 	if err := s.db.First(&share, "id = ?", shareID).Error; err != nil {
-		return Share{}, drive.FileView{}, ErrNotFound
+		return Share{}, drive.FileView{}, lookupError(err)
 	}
 	if err := validateShare(share); err != nil {
 		return Share{}, drive.FileView{}, err
@@ -195,7 +205,10 @@ func (s *Service) Access(raw string) (Share, drive.FileView, error) {
 // Import 需要 ctx：事务里写 Outbox 时要注入当前 span context。
 func (s *Service) Import(ctx context.Context, userID, shareID, targetFolderID uuid.UUID, idempotencyKey, accessToken string) (drive.FileView, error) {
 	share, source, err := s.Access(accessToken)
-	if err != nil || share.ID != shareID || len(idempotencyKey) == 0 || len(idempotencyKey) > 128 {
+	if err != nil {
+		return drive.FileView{}, err
+	}
+	if share.ID != shareID || len(idempotencyKey) == 0 || len(idempotencyKey) > 128 {
 		return drive.FileView{}, ErrNotFound
 	}
 	if _, err := s.drive.Folder(userID, targetFolderID); err != nil {
@@ -225,19 +238,22 @@ func (s *Service) Import(ctx context.Context, userID, shareID, targetFolderID uu
 		}
 		var current Share
 		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&current, "id = ?", shareID).Error; err != nil {
-			return ErrNotFound
+			return lookupError(err)
 		}
 		if err := validateShare(current); err != nil {
 			return err
 		}
 		var sourceEntry drive.FileEntry
 		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ? AND owner_id = ? AND deleted_at IS NULL", share.FileEntryID, share.OwnerID).First(&sourceEntry).Error; err != nil {
-			return ErrNotFound
+			return lookupError(err)
 		}
 		if err := s.quota.AddLogicalUsage(tx, userID, object.SizeBytes); err != nil {
-			return ErrConflict
+			if errors.Is(err, identity.ErrConflict) {
+				return ErrQuotaExceeded
+			}
+			return err
 		}
-		entry, err := s.drive.CreateFile(tx, userID, targetFolderID, object.ID, source.Name)
+		entry, err := s.drive.CreateFile(tx, userID, targetFolderID, object.ID, sourceEntry.Name)
 		if err != nil {
 			return err
 		}
@@ -282,7 +298,7 @@ type accessClaims struct {
 }
 
 func (s *Service) signAccess(shareID uuid.UUID, expiresAt time.Time) (string, error) {
-	payload, err := json.Marshal(accessClaims{ShareID: shareID, ExpiresAt: expiresAt.Unix()})
+	payload, err := json.Marshal(accessClaims{ShareID: shareID, ExpiresAt: expiresAt.Add(time.Second - time.Nanosecond).Unix()})
 	if err != nil {
 		return "", err
 	}

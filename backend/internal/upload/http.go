@@ -87,7 +87,7 @@ func (h *HTTP) get(c *gin.Context) {
 		h.writeError(c, ErrNotFound)
 		return
 	}
-	session, err := h.service.Get(userID, uploadID)
+	session, err := h.service.GetContext(c.Request.Context(), userID, uploadID)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -214,7 +214,7 @@ func sessionResponse(session Session) gin.H {
 			"completed_at": part.CompletedAt,
 		})
 	}
-	return gin.H{
+	response := gin.H{
 		"id":                  session.ID,
 		"status":              session.Status,
 		"folder_id":           session.FolderID,
@@ -230,4 +230,11 @@ func sessionResponse(session Session) gin.H {
 		"expires_at":          session.ExpiresAt,
 		"created_at":          session.CreatedAt,
 	}
+	switch session.Status {
+	case StatusInitializing:
+		response["poll_after_ms"] = 1000
+	case StatusCompleting, StatusVerifying:
+		response["poll_after_ms"] = 2000
+	}
+	return response
 }

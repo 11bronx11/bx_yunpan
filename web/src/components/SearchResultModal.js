@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { App, Button, Input, Modal, Tag, Tooltip } from 'antd';
+import { App, Button, Input, Modal, Tag } from 'antd';
 import {
   DeleteOutlined,
   DownloadOutlined,
@@ -9,7 +9,7 @@ import {
 } from '@ant-design/icons';
 import styled from '@emotion/styled';
 import { deleteFile, getBreadcrumb, getDownloadURL, getRoot, renameFile } from '../services/drive';
-import { createShare } from '../services/share';
+import ShareModal from './ShareModal';
 import { FileTypeBadge, fileTypeLabel, StatusTag } from './design/ProductUI';
 import MoveFileModal from './MoveFileModal';
 import { startDownload } from '../utils/download';
@@ -60,10 +60,13 @@ const SearchResultModal = ({ hit, open, onClose, onChanged }) => {
   const file = hit?.file;
   const [path, setPath] = useState('');
   const [loading, setLoading] = useState('');
+  const [shareOpen, setShareOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameName, setRenameName] = useState('');
   const [moveOpen, setMoveOpen] = useState(false);
   const [root, setRoot] = useState(null);
+
+  useEffect(() => { setShareOpen(false); }, [file?.id, open]);
 
   useEffect(() => {
     if (!open || !file?.folder_id) return undefined;
@@ -98,31 +101,7 @@ const SearchResultModal = ({ hit, open, onClose, onChanged }) => {
     }
   };
 
-  const copyShareKey = async value => {
-    try {
-      await navigator.clipboard.writeText(value);
-      message.success('分享 Key 已复制');
-    } catch {
-      message.error('复制失败，请手动选择分享 Key');
-    }
-  };
-
-  const share = async () => {
-    if (!file || loading) return;
-    setLoading('share');
-    try {
-      const result = await createShare(file.id);
-      modal.info({
-        title: '分享 Key',
-        content: <Input readOnly value={result.share_key} addonAfter={<Tooltip title="复制"><Button aria-label="复制分享 Key" type="text" icon={<LinkOutlined />} onClick={() => copyShareKey(result.share_key)} /></Tooltip>} />,
-        okText: '关闭',
-      });
-    } catch (error) {
-      message.error(error.message || '分享创建失败');
-    } finally {
-      setLoading('');
-    }
-  };
+  const share = () => { if (file && !loading) setShareOpen(true); };
 
   const remove = () => file && modal.confirm({
     title: `删除 ${file.name}?`,
@@ -228,6 +207,7 @@ const SearchResultModal = ({ hit, open, onClose, onChanged }) => {
     >
       <Input autoFocus aria-label="新文件名" value={renameName} onChange={event => setRenameName(event.target.value)} onPressEnter={rename} />
     </Modal>
+    <ShareModal open={Boolean(shareOpen && open)} file={file} onCancel={() => setShareOpen(false)} />
     <MoveFileModal
       open={Boolean(moveOpen && file && root)}
       file={file}

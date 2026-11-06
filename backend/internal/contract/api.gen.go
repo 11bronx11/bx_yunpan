@@ -113,19 +113,19 @@ func (e FolderType) Valid() bool {
 
 // Defines values for HealthStatus.
 const (
-	Degraded    HealthStatus = "degraded"
-	Ok          HealthStatus = "ok"
-	Unavailable HealthStatus = "unavailable"
+	HealthStatusDegraded    HealthStatus = "degraded"
+	HealthStatusOk          HealthStatus = "ok"
+	HealthStatusUnavailable HealthStatus = "unavailable"
 )
 
 // Valid indicates whether the value is a known member of the HealthStatus enum.
 func (e HealthStatus) Valid() bool {
 	switch e {
-	case Degraded:
+	case HealthStatusDegraded:
 		return true
-	case Ok:
+	case HealthStatusOk:
 		return true
-	case Unavailable:
+	case HealthStatusUnavailable:
 		return true
 	default:
 		return false
@@ -237,6 +237,30 @@ func (e SearchRequestMode) Valid() bool {
 	}
 }
 
+// Defines values for ShareStatus.
+const (
+	ShareStatusActive      ShareStatus = "active"
+	ShareStatusExpired     ShareStatus = "expired"
+	ShareStatusRevoked     ShareStatus = "revoked"
+	ShareStatusUnavailable ShareStatus = "unavailable"
+)
+
+// Valid indicates whether the value is a known member of the ShareStatus enum.
+func (e ShareStatus) Valid() bool {
+	switch e {
+	case ShareStatusActive:
+		return true
+	case ShareStatusExpired:
+		return true
+	case ShareStatusRevoked:
+		return true
+	case ShareStatusUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskStatus.
 const (
 	TaskStatusCanceled  TaskStatus = "canceled"
@@ -266,13 +290,15 @@ func (e TaskStatus) Valid() bool {
 
 // Defines values for UploadSessionStatus.
 const (
-	UploadSessionStatusAborted   UploadSessionStatus = "aborted"
-	UploadSessionStatusCompleted UploadSessionStatus = "completed"
-	UploadSessionStatusCreated   UploadSessionStatus = "created"
-	UploadSessionStatusExpired   UploadSessionStatus = "expired"
-	UploadSessionStatusFailed    UploadSessionStatus = "failed"
-	UploadSessionStatusUploading UploadSessionStatus = "uploading"
-	UploadSessionStatusVerifying UploadSessionStatus = "verifying"
+	UploadSessionStatusAborted      UploadSessionStatus = "aborted"
+	UploadSessionStatusCompleted    UploadSessionStatus = "completed"
+	UploadSessionStatusCompleting   UploadSessionStatus = "completing"
+	UploadSessionStatusCreated      UploadSessionStatus = "created"
+	UploadSessionStatusExpired      UploadSessionStatus = "expired"
+	UploadSessionStatusFailed       UploadSessionStatus = "failed"
+	UploadSessionStatusInitializing UploadSessionStatus = "initializing"
+	UploadSessionStatusUploading    UploadSessionStatus = "uploading"
+	UploadSessionStatusVerifying    UploadSessionStatus = "verifying"
 )
 
 // Valid indicates whether the value is a known member of the UploadSessionStatus enum.
@@ -282,11 +308,15 @@ func (e UploadSessionStatus) Valid() bool {
 		return true
 	case UploadSessionStatusCompleted:
 		return true
+	case UploadSessionStatusCompleting:
+		return true
 	case UploadSessionStatusCreated:
 		return true
 	case UploadSessionStatusExpired:
 		return true
 	case UploadSessionStatusFailed:
+		return true
+	case UploadSessionStatusInitializing:
 		return true
 	case UploadSessionStatusUploading:
 		return true
@@ -317,10 +347,8 @@ func (e UserStatus) Valid() bool {
 
 // Defines values for Sort.
 const (
-	SortNameAsc     Sort = "name_asc"
-	SortNameDesc    Sort = "name_desc"
-	SortSizeDesc    Sort = "size_desc"
-	SortUpdatedDesc Sort = "updated_desc"
+	SortNameAsc  Sort = "name_asc"
+	SortNameDesc Sort = "name_desc"
 )
 
 // Valid indicates whether the value is a known member of the Sort enum.
@@ -330,10 +358,6 @@ func (e Sort) Valid() bool {
 		return true
 	case SortNameDesc:
 		return true
-	case SortSizeDesc:
-		return true
-	case SortUpdatedDesc:
-		return true
 	default:
 		return false
 	}
@@ -341,10 +365,8 @@ func (e Sort) Valid() bool {
 
 // Defines values for ListFolderChildrenParamsSort.
 const (
-	ListFolderChildrenParamsSortNameAsc     ListFolderChildrenParamsSort = "name_asc"
-	ListFolderChildrenParamsSortNameDesc    ListFolderChildrenParamsSort = "name_desc"
-	ListFolderChildrenParamsSortSizeDesc    ListFolderChildrenParamsSort = "size_desc"
-	ListFolderChildrenParamsSortUpdatedDesc ListFolderChildrenParamsSort = "updated_desc"
+	ListFolderChildrenParamsSortNameAsc  ListFolderChildrenParamsSort = "name_asc"
+	ListFolderChildrenParamsSortNameDesc ListFolderChildrenParamsSort = "name_desc"
 )
 
 // Valid indicates whether the value is a known member of the ListFolderChildrenParamsSort enum.
@@ -354,9 +376,20 @@ func (e ListFolderChildrenParamsSort) Valid() bool {
 		return true
 	case ListFolderChildrenParamsSortNameDesc:
 		return true
-	case ListFolderChildrenParamsSortSizeDesc:
-		return true
-	case ListFolderChildrenParamsSortUpdatedDesc:
+	default:
+		return false
+	}
+}
+
+// Defines values for DownloadPublicShareParamsPreview.
+const (
+	N1 DownloadPublicShareParamsPreview = "1"
+)
+
+// Valid indicates whether the value is a known member of the DownloadPublicShareParamsPreview enum.
+func (e DownloadPublicShareParamsPreview) Valid() bool {
+	switch e {
+	case N1:
 		return true
 	default:
 		return false
@@ -402,11 +435,15 @@ type AskRequest struct {
 	Question string        `json:"question"`
 }
 
-// AskResponse defines model for AskResponse.
+// AskResponse Citations contain only model-selected evidence IDs validated against the retrieved authorized chunks.
 type AskResponse struct {
-	Answer    string     `json:"answer"`
+	Answer string `json:"answer"`
+
+	// Citations Empty when the answer is not grounded in the retrieved evidence.
 	Citations []Citation `json:"citations"`
-	Grounded  bool       `json:"grounded"`
+
+	// Grounded True only when at least one returned citation survived server-side evidence validation.
+	Grounded bool `json:"grounded"`
 }
 
 // AuthResponse defines model for AuthResponse.
@@ -467,7 +504,7 @@ type CreateFolderRequest struct {
 
 // CreateShareRequest defines model for CreateShareRequest.
 type CreateShareRequest struct {
-	ExpiresAt *Timestamp `json:"expires_at,omitempty"`
+	ExpiresAt *NullableTimestamp `json:"expires_at,omitempty"`
 
 	// FileId Example: 0198a1f0-7b2a-7000-8000-000000000001
 	FileId UUID `json:"file_id"`
@@ -681,6 +718,10 @@ type PublicShare struct {
 
 // PublicShareContent defines model for PublicShareContent.
 type PublicShareContent struct {
+	Download struct {
+		ExpiresAt Timestamp `json:"expires_at"`
+		Url       string    `json:"url"`
+	} `json:"download"`
 	Preview Preview     `json:"preview"`
 	Share   PublicShare `json:"share"`
 }
@@ -727,17 +768,19 @@ type SearchHit struct {
 // SearchHitMatchType defines model for SearchHit.MatchType.
 type SearchHitMatchType string
 
-// SearchRequest defines model for SearchRequest.
+// SearchRequest Search defaults to the 20 highest-ranked matching files.
 type SearchRequest struct {
-	FolderId          *NullableUUID     `json:"folder_id,omitempty"`
-	IncludeSubfolders *bool             `json:"include_subfolders,omitempty"`
-	Limit             *int              `json:"limit,omitempty"`
-	MimeTypes         *[]string         `json:"mime_types,omitempty"`
-	Mode              SearchRequestMode `json:"mode"`
-	Query             string            `json:"query"`
+	FolderId          *NullableUUID `json:"folder_id,omitempty"`
+	IncludeSubfolders *bool         `json:"include_subfolders,omitempty"`
+	Limit             *int          `json:"limit,omitempty"`
+	MimeTypes         *[]string     `json:"mime_types,omitempty"`
+
+	// Mode Name search is exact/prefix/fuzzy ranked; hybrid uses full-text and vector RRF.
+	Mode  SearchRequestMode `json:"mode"`
+	Query string            `json:"query"`
 }
 
-// SearchRequestMode defines model for SearchRequest.Mode.
+// SearchRequestMode Name search is exact/prefix/fuzzy ranked; hybrid uses full-text and vector RRF.
 type SearchRequestMode string
 
 // SearchResponse defines model for SearchResponse.
@@ -748,16 +791,25 @@ type SearchResponse struct {
 
 // Share defines model for Share.
 type Share struct {
-	CreatedAt Timestamp          `json:"created_at"`
-	ExpiresAt *NullableTimestamp `json:"expires_at,omitempty"`
+	CreatedAt     Timestamp          `json:"created_at"`
+	ExpiresAt     *NullableTimestamp `json:"expires_at,omitempty"`
+	FileAvailable *bool              `json:"file_available,omitempty"`
 
 	// FileId Example: 0198a1f0-7b2a-7000-8000-000000000001
-	FileId UUID `json:"file_id"`
+	FileId   UUID    `json:"file_id"`
+	FileName *string `json:"file_name,omitempty"`
 
 	// Id Example: 0198a1f0-7b2a-7000-8000-000000000001
 	Id        UUID               `json:"id"`
+	MimeType  *string            `json:"mime_type,omitempty"`
 	RevokedAt *NullableTimestamp `json:"revoked_at,omitempty"`
+	SizeBytes *int64             `json:"size_bytes,omitempty"`
+	Status    *ShareStatus       `json:"status,omitempty"`
+	Version   int64              `json:"version"`
 }
+
+// ShareStatus defines model for Share.Status.
+type ShareStatus string
 
 // SharePage defines model for SharePage.
 type SharePage struct {
@@ -773,7 +825,10 @@ type Task struct {
 	ErrorMessage *string   `json:"error_message,omitempty"`
 
 	// Id Example: 0198a1f0-7b2a-7000-8000-000000000001
-	Id           UUID          `json:"id"`
+	Id UUID `json:"id"`
+
+	// PollAfterMs Suggested minimum polling interval in milliseconds, present only for pending or running tasks. Clients may back off further while status, progress and attempt are unchanged.
+	PollAfterMs  *int          `json:"poll_after_ms,omitempty"`
 	Progress     int           `json:"progress"`
 	ResourceId   *NullableUUID `json:"resource_id,omitempty"`
 	ResourceType *string       `json:"resource_type,omitempty"`
@@ -791,6 +846,12 @@ type Timestamp = time.Time
 // UUID Example: 0198a1f0-7b2a-7000-8000-000000000001
 type UUID = openapi_types.UUID
 
+// UpdateShareRequest defines model for UpdateShareRequest.
+type UpdateShareRequest struct {
+	ExpiresAt *NullableTimestamp `json:"expires_at"`
+	Version   int64              `json:"version"`
+}
+
 // UploadSession defines model for UploadSession.
 type UploadSession struct {
 	CompletedEntryId  *NullableUUID         `json:"completed_entry_id,omitempty"`
@@ -805,12 +866,15 @@ type UploadSession struct {
 	FolderId UUID `json:"folder_id"`
 
 	// Id Example: 0198a1f0-7b2a-7000-8000-000000000001
-	Id        UUID                `json:"id"`
-	PartCount int                 `json:"part_count"`
-	PartSize  int64               `json:"part_size"`
-	Sha256    string              `json:"sha256"`
-	SizeBytes int64               `json:"size_bytes"`
-	Status    UploadSessionStatus `json:"status"`
+	Id        UUID  `json:"id"`
+	PartCount int   `json:"part_count"`
+	PartSize  int64 `json:"part_size"`
+
+	// PollAfterMs Suggested minimum polling interval in milliseconds, present only during server-side initialization, completion or verification. Clients may back off further while status is unchanged.
+	PollAfterMs *int                `json:"poll_after_ms,omitempty"`
+	Sha256      string              `json:"sha256"`
+	SizeBytes   int64               `json:"size_bytes"`
+	Status      UploadSessionStatus `json:"status"`
 }
 
 // UploadSessionStatus defines model for UploadSession.Status.
@@ -936,7 +1000,7 @@ type UpdateFolderParams struct {
 
 // ListFolderChildrenParams defines parameters for ListFolderChildren.
 type ListFolderChildrenParams struct {
-	Cursor *Cursor                       `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Cursor *string                       `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *Limit                        `form:"limit,omitempty" json:"limit,omitempty"`
 	Sort   *ListFolderChildrenParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
 }
@@ -949,6 +1013,16 @@ type MoveFolderParams struct {
 	// IfMatch Current numeric resource version
 	IfMatch IfMatch `json:"If-Match"`
 }
+
+// DownloadPublicShareParams defines parameters for DownloadPublicShare.
+type DownloadPublicShareParams struct {
+	// AccessToken Short-lived share access token; X-Share-Token header is also accepted
+	AccessToken *string                           `form:"access_token,omitempty" json:"access_token,omitempty"`
+	Preview     *DownloadPublicShareParamsPreview `form:"preview,omitempty" json:"preview,omitempty"`
+}
+
+// DownloadPublicShareParamsPreview defines parameters for DownloadPublicShare.
+type DownloadPublicShareParamsPreview string
 
 // ListSharesParams defines parameters for ListShares.
 type ListSharesParams struct {
@@ -1011,6 +1085,9 @@ type SearchJSONRequestBody = SearchRequest
 
 // CreateShareJSONRequestBody defines body for CreateShare for application/json ContentType.
 type CreateShareJSONRequestBody = CreateShareRequest
+
+// UpdateShareJSONRequestBody defines body for UpdateShare for application/json ContentType.
+type UpdateShareJSONRequestBody = UpdateShareRequest
 
 // ImportShareJSONRequestBody defines body for ImportShare for application/json ContentType.
 type ImportShareJSONRequestBody = ImportShareRequest

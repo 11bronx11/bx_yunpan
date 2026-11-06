@@ -62,6 +62,7 @@ func IsV2Event(eventType string) bool {
 		eventcontract.EventFolderMovedV1,
 		eventcontract.EventFolderDeletedV1,
 		eventcontract.EventShareCreatedV1,
+		eventcontract.EventShareUpdatedV1,
 		eventcontract.EventShareRevokedV1:
 		return true
 	default:

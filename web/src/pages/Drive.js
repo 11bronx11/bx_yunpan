@@ -5,7 +5,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useTransfers } from '../contexts/TransferContext';
 import { createFolder, deleteFile, deleteFolder, getBreadcrumb, getChildren, getDownloadURL, getPreview, getRoot, renameFile } from '../services/drive';
-import { createShare, importShare, resolveShare } from '../services/share';
+import ShareModal from '../components/ShareModal';
+import ImportShareModal from '../components/ImportShareModal';
 import { FileTypeBadge, fileTypeLabel, GraphicEmpty, PageHeader, ProductPage, StatusTag } from '../components/design/ProductUI';
 import MoveFileModal from '../components/MoveFileModal';
 import AIIndexModal from '../components/AIIndexModal';
@@ -56,10 +57,6 @@ const PreviewShell = styled.div`
 
   img { display: block; max-width: 100%; max-height: 70vh; object-fit: contain; }
 `;
-const ShareFields = styled.div`display: grid; gap: 16px; padding-top: 8px;`;
-const SharePreview = styled.div`display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 14px; border: 1px solid var(--divider); border-radius: var(--radius-control); background: var(--surface-soft); @media (max-width: 520px) { grid-template-columns: auto minmax(0, 1fr); > :last-child { grid-column: 1 / -1; justify-self: start; } }`;
-const ShareMeta = styled.div`min-width: 0; color: var(--muted); font-size: 12px; strong { display: block; margin-bottom: 3px; overflow: hidden; color: var(--ink); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }`;
-
 const { useBreakpoint } = Grid;
 
 const formatSize = bytes => {
@@ -102,10 +99,7 @@ const Drive = () => {
   const [moveTarget, setMoveTarget] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [shareOpen, setShareOpen] = useState(false);
-  const [shareKey, setShareKey] = useState('');
-  const [shareResult, setShareResult] = useState(null);
-  const [shareResolving, setShareResolving] = useState(false);
-  const [shareImporting, setShareImporting] = useState(false);
+  const [shareTarget, setShareTarget] = useState(null);
   const [previews, setPreviews] = useState({});
   const [aiTarget, setAITarget] = useState(null);
   const [summaryTarget, setSummaryTarget] = useState(null);
@@ -253,36 +247,9 @@ const Drive = () => {
       message.error(error.message || '图片预览加载失败');
     }
   };
-  const copyShareKey = async shareKeyValue => {
-    try { await navigator.clipboard.writeText(shareKeyValue); message.success('分享 Key 已复制'); }
-    catch { message.error('复制失败，请手动选择分享 Key'); }
-  };
-  const handleShare = async file => {
-    try {
-      const result = await createShare(file.id);
-      Modal.info({ title: '分享 Key', content: <Input readOnly value={result.share_key} addonAfter={<Tooltip title="复制"><Button aria-label="复制分享 Key" type="text" icon={<LinkOutlined />} onClick={() => copyShareKey(result.share_key)} /></Tooltip>} />, okText: '关闭' });
-    } catch (error) {
-      message.error(error.message || '分享创建失败');
-    }
-  };
-  const openShareImport = () => { setShareKey(''); setShareResult(null); setShareOpen(true); };
-  const handleResolveShare = async () => {
-    if (!shareKey.trim()) { message.warning('请输入分享 Key'); return; }
-    setShareResolving(true);
-    try { setShareResult(await resolveShare(shareKey.trim())); }
-    catch (error) { setShareResult(null); message.error(error.message || '分享 Key 无效'); }
-    finally { setShareResolving(false); }
-  };
-  const handleImportShare = async () => {
-    if (!shareResult) { await handleResolveShare(); return; }
-    setShareImporting(true);
-    try {
-      await importShare(shareResult.share.id, folder, shareResult.share_access_token);
-      message.success('分享已导入当前目录');
-      setShareOpen(false); setShareKey(''); setShareResult(null); await loadFolder(folder);
-    } catch (error) { message.error(error.message || '导入失败'); }
-    finally { setShareImporting(false); }
-  };
+  const handleShare = file => setShareTarget(file);
+  const openShareImport = () => setShareOpen(true);
+
 
   const handleAIStatusChange = useCallback((fileId, status) => {
     setItems(current => current.map(item => item.id === fileId ? { ...item, ai_status: status || undefined } : item));
@@ -387,7 +354,8 @@ const Drive = () => {
     <AIIndexModal file={aiTarget} open={Boolean(aiTarget)} onClose={() => setAITarget(null)} onStatusChange={handleAIStatusChange} />
     <FileSummaryModal file={summaryTarget} open={Boolean(summaryTarget)} onClose={() => setSummaryTarget(null)} onManageIndex={file => { setSummaryTarget(null); setAITarget(file); }} />
     <Modal open={Boolean(imagePreview)} title={imagePreview?.name || '图片预览'} footer={null} width={920} centered destroyOnClose onCancel={() => setImagePreview(null)}><PreviewShell>{imagePreview && <img src={imagePreview.url} alt={imagePreview.name} />}</PreviewShell></Modal>
-    <Modal open={shareOpen} title="导入分享" okText={shareResult ? '导入到当前目录' : '解析分享'} cancelText="取消" confirmLoading={shareResolving || shareImporting} onOk={handleImportShare} onCancel={() => setShareOpen(false)} destroyOnClose><ShareFields><Input autoFocus prefix={<LinkOutlined />} value={shareKey} onChange={event => { setShareKey(event.target.value); setShareResult(null); }} onPressEnter={handleResolveShare} placeholder="粘贴分享 Key" />{shareResult && <SharePreview><ImportOutlined /><ShareMeta><strong title={shareResult.share.file_name}>{shareResult.share.file_name}</strong><span>{shareResult.share.mime_type} · {formatSize(shareResult.share.size_bytes)}</span></ShareMeta><StatusTag tone="mint">可导入</StatusTag></SharePreview>}<div style={{ color: 'var(--muted)', fontSize: 12 }}>目标位置：{crumbs.map(item => item.name === '/' ? '根目录' : item.name).join(' / ')}</div></ShareFields></Modal>
+    <ShareModal open={Boolean(shareTarget)} file={shareTarget} onCancel={() => setShareTarget(null)} />
+    <ImportShareModal open={shareOpen} folderId={folder} targetLabel={crumbs.map(item => item.name === '/' ? '根目录' : item.name).join(' / ')} onCancel={() => setShareOpen(false)} onImported={() => loadFolder(folder)} />
   </Workspace></ProductPage>;
 };
 

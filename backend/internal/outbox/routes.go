@@ -41,7 +41,7 @@ func SearchRoutes(eventType string, enabled bool) []DeliveryTarget {
 	case EventFileCreated, eventcontract.EventFileUpdatedV1, eventcontract.EventFileDeletedV1,
 		eventcontract.EventFolderCreatedV1, eventcontract.EventFolderRenamedV1,
 		eventcontract.EventFolderMovedV1, eventcontract.EventFolderDeletedV1,
-		eventcontract.EventShareCreatedV1, eventcontract.EventShareRevokedV1,
+		eventcontract.EventShareCreatedV1, eventcontract.EventShareUpdatedV1, eventcontract.EventShareRevokedV1,
 		EventShareImported, EventObjectReady, EventObjectGCRequested,
 		eventcontract.EventAIIndexRequestedV1, eventcontract.EventAIIndexedV1:
 		return []DeliveryTarget{target("rabbitmq", TaskSearchProjectV1, "search")}

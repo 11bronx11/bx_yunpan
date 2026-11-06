@@ -76,6 +76,16 @@ test('downloads a search result without opening a new window', async () => {
   await waitFor(() => expect(startDownload).toHaveBeenCalledWith('https://example.test/report.pdf', 'report.pdf'));
 });
 
+test('uses the shared creation form and waits for expiry confirmation', async () => {
+  renderModal();
+  fireEvent.click(screen.getByRole('button', { name: '分享' }));
+  expect(await screen.findByRole('combobox', { name: '有效期' })).toBeInTheDocument();
+  expect(createShare).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: '创建分享' }));
+  expect(await screen.findByLabelText('分享 Key')).toHaveValue('share-key');
+  expect(createShare).toHaveBeenCalledWith('file-1', expect.any(String));
+});
+
 test('renames a search result and refreshes the search', async () => {
   const { onClose, onChanged } = renderModal();
 

@@ -111,7 +111,7 @@ func TestRunOnceRebuildsEveryPersistentWorkClassIdempotently(t *testing.T) {
 		t.Fatal(err)
 	}
 	cleanup := func() {
-		_ = db.Exec(`DELETE FROM outbox_recoveries WHERE resource_id IN (?, ?, ?) OR recovery_key LIKE ?`, sessionID, objectID, taskID, "%"+userID.String()+"%").Error
+		_ = db.Exec(`DELETE FROM outbox_recoveries WHERE resource_id IN (?, ?, ?, ?) OR recovery_key LIKE ?`, sessionID, objectID, taskID, operationID, "%"+userID.String()+"%").Error
 		_ = db.Exec(`DELETE FROM outbox_events WHERE producer = 'maintenance-recovery' AND id NOT IN (SELECT event_id FROM outbox_recoveries)`).Error
 		_ = db.Exec(`DELETE FROM storage_operations WHERE id = ?`, operationID).Error
 		_ = db.Exec(`DELETE FROM async_tasks WHERE id = ?`, taskID).Error
@@ -131,7 +131,7 @@ func TestRunOnceRebuildsEveryPersistentWorkClassIdempotently(t *testing.T) {
 		t.Fatalf("repaired = %d, report = %#v", first.Repaired, first)
 	}
 	var recoveryCount, deliveryCount int64
-	if err := db.Table("outbox_recoveries").Where("resource_id IN (?, ?, ?)", sessionID, objectID, taskID).Count(&recoveryCount).Error; err != nil {
+	if err := db.Table("outbox_recoveries").Where("resource_id IN (?, ?, ?, ?)", sessionID, objectID, taskID, operationID).Count(&recoveryCount).Error; err != nil {
 		t.Fatal(err)
 	}
 	if recoveryCount < 5 {

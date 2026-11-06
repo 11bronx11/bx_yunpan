@@ -401,7 +401,14 @@ func (s *Service) RequestReprocess(ctx context.Context, ownerID, fileID uuid.UUI
 			return result.Error
 		}
 		if result.RowsAffected == 0 {
-			return tx.Where("task_type = ? AND dedupe_key = ?", task.TaskType, dedupeKey).First(&task).Error
+			// A populated destination adds its primary key to GORM's query.
+			// Read into an empty value so a losing insert returns the winner.
+			var existing Task
+			if err := tx.Where("task_type = ? AND dedupe_key = ?", task.TaskType, dedupeKey).First(&existing).Error; err != nil {
+				return err
+			}
+			task = existing
+			return nil
 		}
 		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
 			EventType: eventcontract.EventAIReprocessRequestedV1, AggregateID: task.ID, AggregateVersion: task.Version,

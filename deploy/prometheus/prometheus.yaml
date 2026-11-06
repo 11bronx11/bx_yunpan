@@ -36,6 +36,16 @@ scrape_configs:
       - source_labels: [__meta_dns_name]
         target_label: service
 
+  - job_name: bx-yunpan-ai
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: ["ai-query", "ai-indexer"]
+        type: A
+        port: 8083
+    relabel_configs:
+      - source_labels: [__meta_dns_name]
+        target_label: service
+
   - job_name: bx-yunpan-rabbitmq
     metrics_path: /metrics/per-object
     static_configs:

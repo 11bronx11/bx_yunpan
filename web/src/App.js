@@ -7,6 +7,7 @@ import Drive from './pages/Drive';
 import AIWorkspace from './pages/AIWorkspace';
 import AIAsk from './pages/AIAsk';
 import Transfers from './pages/Transfers';
+import Shares from './pages/Shares';
 import NavBar from './components/NavBar';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { TransferProvider } from './contexts/TransferContext';
@@ -36,7 +37,7 @@ const ScrollReset = () => {
 
 const AppRoutes = () => <Routes>
   <Route path="/login" element={<LoginRoute />} />
-  <Route path="*" element={<PrivateRoute><Shell className="product-shell"><NavBar /><Content><Routes><Route path="/" element={<Navigate to="/drive" replace />} /><Route path="/drive" element={<Drive />} /><Route path="/transfers" element={<Transfers />} /><Route path="/ai" element={<AIWorkspace />} /><Route path="/ask" element={<AIAsk />} /><Route path="*" element={<Navigate to="/drive" replace />} /></Routes></Content></Shell></PrivateRoute>} />
+  <Route path="*" element={<PrivateRoute><Shell className="product-shell"><NavBar /><Content><Routes><Route path="/" element={<Navigate to="/drive" replace />} /><Route path="/drive" element={<Drive />} /><Route path="/transfers" element={<Transfers />} /><Route path="/shares" element={<Shares />} /><Route path="/ai" element={<AIWorkspace />} /><Route path="/ask" element={<AIAsk />} /><Route path="*" element={<Navigate to="/drive" replace />} /></Routes></Content></Shell></PrivateRoute>} />
 </Routes>;
 
 const App = () => <AuthProvider><TransferProvider><BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><ScrollReset /><AppRoutes /></BrowserRouter></TransferProvider></AuthProvider>;

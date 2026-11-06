@@ -11,6 +11,7 @@ const (
 	EventFolderMovedV1             = "folder.moved.v1"
 	EventFolderDeletedV1           = "folder.deleted.v1"
 	EventShareCreatedV1            = "share.created.v1"
+	EventShareUpdatedV1            = "share.updated.v1"
 	EventShareRevokedV1            = "share.revoked.v1"
 	EventShareImportedV1           = "share.imported.v1"
 	EventObjectVerifyRequestedV1   = "object.verify_requested.v1"
@@ -42,6 +43,7 @@ var definitions = map[string]Definition{
 	EventFolderMovedV1:             {EventFolderMovedV1, MessageKindDomainEvent, 1, "folder", func() any { return &FolderMovedV1{} }},
 	EventFolderDeletedV1:           {EventFolderDeletedV1, MessageKindDomainEvent, 1, "folder", func() any { return &FolderDeletedV1{} }},
 	EventShareCreatedV1:            {EventShareCreatedV1, MessageKindDomainEvent, 1, "share", func() any { return &ShareCreatedV1{} }},
+	EventShareUpdatedV1:            {EventShareUpdatedV1, MessageKindDomainEvent, 1, "share", func() any { return &ShareUpdatedV1{} }},
 	EventShareRevokedV1:            {EventShareRevokedV1, MessageKindDomainEvent, 1, "share", func() any { return &ShareRevokedV1{} }},
 	EventShareImportedV1:           {EventShareImportedV1, MessageKindDomainEvent, 1, "share", func() any { return &ShareImportedV1{} }},
 	EventObjectVerifyRequestedV1:   {EventObjectVerifyRequestedV1, MessageKindCommand, 1, "upload_session", func() any { return &ObjectVerifyRequestedV1{} }},

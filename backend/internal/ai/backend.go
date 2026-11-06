@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -61,10 +62,13 @@ func (r *Reader) GetDocument(ownerID, fileID uuid.UUID) (drive.FileView, Documen
 	return file, document, nil
 }
 
-func (r *Reader) GetTask(ownerID, taskID uuid.UUID) (Task, error) {
+func (r *Reader) GetTask(ctx context.Context, ownerID, taskID uuid.UUID) (Task, error) {
 	var task Task
-	if err := r.db.Where("id = ? AND owner_id = ?", taskID, ownerID).First(&task).Error; err != nil {
-		return Task{}, ErrNotFound
+	if err := r.db.WithContext(ctx).Where("id = ? AND owner_id = ?", taskID, ownerID).First(&task).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return Task{}, ErrNotFound
+		}
+		return Task{}, err
 	}
 	return task, nil
 }

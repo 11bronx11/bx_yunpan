@@ -81,6 +81,32 @@ func TestImportSerializesConcurrentIdempotentRequests(t *testing.T) {
 		_ = db.Exec("DELETE FROM users WHERE id IN ?", []uuid.UUID{ownerID, recipientID}).Error
 		_ = db.Exec("DELETE FROM file_objects WHERE id = ?", object.ID).Error
 	})
+	t.Run("quota rejection rolls back without reporting a duplicate", func(t *testing.T) {
+		if err := db.Model(&identity.User{}).Where("id = ?", recipientID).Update("quota_bytes", 0).Error; err != nil {
+			t.Fatal(err)
+		}
+		defer db.Model(&identity.User{}).Where("id = ?", recipientID).Update("quota_bytes", 10*1024*1024*1024)
+		if _, err := service.Import(context.Background(), recipientID, share.ID, recipientRoot.ID, uuid.NewString(), accessToken); !errors.Is(err, ErrQuotaExceeded) {
+			t.Fatalf("quota error = %v", err)
+		}
+		var rows int64
+		db.Model(&Import{}).Where("share_id = ?", share.ID).Count(&rows)
+		var stored objectstore.Object
+		db.First(&stored, "id = ?", object.ID)
+		var recipient identity.User
+		db.First(&recipient, "id = ?", recipientID)
+		if rows != 0 || stored.ReferenceCount != 1 || recipient.UsedLogicalBytes != 0 {
+			t.Fatalf("failed import changed rows=%d refs=%d usage=%d", rows, stored.ReferenceCount, recipient.UsedLogicalBytes)
+		}
+	})
+	t.Run("quota database failures are preserved", func(t *testing.T) {
+		failure := errors.New("quota database unavailable")
+		service.quota = failedQuota{failure}
+		defer func() { service.quota = quota }()
+		if _, err := service.Import(context.Background(), recipientID, share.ID, recipientRoot.ID, uuid.NewString(), accessToken); !errors.Is(err, failure) {
+			t.Fatalf("database error = %v", err)
+		}
+	})
 
 	const requests = 8
 	results := make(chan drive.FileView, requests)
@@ -135,3 +161,7 @@ func TestImportSerializesConcurrentIdempotentRequests(t *testing.T) {
 		t.Fatalf("idempotency target change=%v", err)
 	}
 }
+
+type failedQuota struct{ err error }
+
+func (q failedQuota) AddLogicalUsage(*gorm.DB, uuid.UUID, int64) error { return q.err }

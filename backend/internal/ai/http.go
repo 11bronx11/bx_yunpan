@@ -129,7 +129,7 @@ func (h *HTTP) getTask(c *gin.Context) {
 		h.writeError(c, ErrNotFound)
 		return
 	}
-	task, err := h.reader.GetTask(ownerID, taskID)
+	task, err := h.reader.GetTask(c.Request.Context(), ownerID, taskID)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -147,11 +147,18 @@ func (h *HTTP) writeError(c *gin.Context, err error) {
 }
 
 func taskResponse(task Task) gin.H {
-	return gin.H{
+	response := gin.H{
 		"id": task.ID, "task_type": task.TaskType, "resource_type": nullableResponse(task.ResourceType), "resource_id": task.ResourceID,
 		"status": task.Status, "progress": task.Progress, "attempt": task.Attempt, "error_code": task.ErrorCode,
 		"error_message": task.ErrorMessage, "created_at": task.CreatedAt, "updated_at": task.UpdatedAt,
 	}
+	switch task.Status {
+	case "pending":
+		response["poll_after_ms"] = 2000
+	case "running":
+		response["poll_after_ms"] = 1000
+	}
+	return response
 }
 
 func nullableResponse(value string) any {

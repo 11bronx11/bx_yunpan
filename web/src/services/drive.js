@@ -1,5 +1,6 @@
 import { api, clientError } from './api';
 import { hashFile } from './fileHash';
+import { createPollDelay, sleep } from './polling';
 
 export const getRoot = ({ signal } = {}) => api('/api/v1/folders/root', { signal });
 export const getChildren = (folderId, { cursor, limit, sort, signal } = {}) => {
@@ -20,22 +21,6 @@ export const deleteFile = (id, version) => api(`/api/v1/files/${id}`, { method: 
 export const getDownloadURL = id => api(`/api/v1/files/${id}/download-url`);
 export const getPreview = (id, { signal } = {}) => api(`/api/v1/files/${id}/preview`, { signal });
 
-const sleep = (milliseconds, signal) => new Promise((resolve, reject) => {
-  if (signal?.aborted) {
-    reject(new DOMException('Upload canceled', 'AbortError'));
-    return;
-  }
-  let timer;
-  const onAbort = () => {
-    clearTimeout(timer);
-    reject(new DOMException('Upload canceled', 'AbortError'));
-  };
-  timer = setTimeout(() => {
-    signal?.removeEventListener('abort', onAbort);
-    resolve();
-  }, milliseconds);
-  signal?.addEventListener('abort', onAbort, { once: true });
-});
 const randomId = () => window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 export const listActiveUploads = () => api('/api/v1/uploads?status=active');
@@ -50,11 +35,12 @@ const validateResumeFile = async (file, session) => {
   return hash;
 };
 
-export const waitForUpload = async (session, onProgress, control = {}, pollInterval = 1000) => {
+export const waitForUpload = async (session, onProgress, control = {}, pollInterval) => {
+  const nextDelay = createPollDelay();
+  let current = session;
   for (;;) {
     if (control.isCanceled?.()) throw new DOMException('Upload canceled', 'AbortError');
-    const current = await api(`/api/v1/uploads/${session.id}`, { signal: control.signal });
-    control.onSession?.(current);
+    if (control.signal?.aborted) throw new DOMException('Upload canceled', 'AbortError');
     if (current.status === 'completed') {
       onProgress?.(100);
       return { file: { id: current.completed_entry_id, name: current.filename }, session: current };
@@ -66,7 +52,10 @@ export const waitForUpload = async (session, onProgress, control = {}, pollInter
       throw error;
     }
     onProgress?.(95);
-    await sleep(pollInterval, control.signal);
+    await sleep(pollInterval ?? control.pollInterval ?? nextDelay(current.status, current.poll_after_ms), control.signal);
+    if (control.isCanceled?.()) throw new DOMException('Upload canceled', 'AbortError');
+    current = await api(`/api/v1/uploads/${session.id}`, { signal: control.signal });
+    control.onSession?.(current);
   }
 };
 
@@ -89,10 +78,13 @@ export const uploadFile = async (file, folderId, onProgress, control = {}, exist
     session = created.upload;
   }
   control.onSession?.(session);
+  const initializationDelay = createPollDelay();
   while (session.status === 'initializing') {
     if (control.isCanceled?.()) throw new DOMException('Upload canceled', 'AbortError');
     if (control.isPaused?.()) return { paused: true, session };
-    await sleep(control.pollInterval ?? 1000, control.signal);
+    await sleep(control.pollInterval ?? initializationDelay(session.status, session.poll_after_ms), control.signal);
+    if (control.isCanceled?.()) throw new DOMException('Upload canceled', 'AbortError');
+    if (control.isPaused?.()) return { paused: true, session };
     session = await api(`/api/v1/uploads/${session.id}`, { signal: control.signal });
     control.onSession?.(session);
   }

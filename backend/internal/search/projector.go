@@ -284,7 +284,7 @@ func (p *Projector) publishExternal(ctx context.Context, eventType string, aggre
 		fileIDs = append(fileIDs, value.FileEntryID)
 	case eventcontract.EventFileDeletedV1:
 		fileIDs = append(fileIDs, value.FileEntryID)
-	case eventcontract.EventShareRevokedV1:
+	case eventcontract.EventShareRevokedV1, eventcontract.EventShareUpdatedV1:
 		var share struct{ FileEntryID uuid.UUID }
 		if err := p.db.WithContext(ctx).Table("shares").Select("file_entry_id").Where("id = ?", value.ShareID).Scan(&share).Error; err != nil {
 			return err
@@ -379,10 +379,10 @@ func (p *Projector) project(tx *gorm.DB, _ uuid.UUID, eventType string, aggregat
 			return errors.New("search: invalid share create event")
 		}
 		return p.projectFileWithACL(tx, value.FileEntryID, false, value.ACLEpoch)
-	case eventcontract.EventShareRevokedV1:
-		var value eventcontract.ShareRevokedV1
+	case eventcontract.EventShareRevokedV1, eventcontract.EventShareUpdatedV1:
+		var value eventcontract.ShareUpdatedV1
 		if err := json.Unmarshal(payload, &value); err != nil || value.ShareID == uuid.Nil || value.OwnerID == uuid.Nil {
-			return errors.New("search: invalid share revoke event")
+			return errors.New("search: invalid share ACL event")
 		}
 		var share struct{ FileEntryID uuid.UUID }
 		if err := tx.Table("shares").Select("file_entry_id").Where("id = ?", value.ShareID).Scan(&share).Error; err != nil {

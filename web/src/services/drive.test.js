@@ -17,6 +17,13 @@ jest.mock('./fileHash', () => ({
 
 const hash = 'a'.repeat(64);
 
+const advanceTime = async milliseconds => {
+  jest.advanceTimersByTime(milliseconds);
+  await new Promise(resolve => jest.requireActual('timers').setImmediate(resolve));
+};
+
+afterEach(() => jest.useRealTimers());
+
 test('encodes directory pagination and forwards request cancellation', async () => {
   api.mockResolvedValue({ items: [], page: { has_more: false } });
   const controller = new AbortController();
@@ -80,6 +87,50 @@ test('server verification keeps polling beyond the old timeout', async () => {
 
 	expect(polls).toBe(61);
 	expect(result.file.id).toBe('file-large');
+});
+
+test('unchanged verification reduces requests and cancellation stops future checks', async () => {
+  jest.useFakeTimers();
+  api.mockClear();
+  const session = { id: 'slow-upload', status: 'verifying', poll_after_ms: 2000 };
+  api.mockResolvedValue(session);
+  const controller = new AbortController();
+  const result = waitForUpload(session, jest.fn(), { signal: controller.signal });
+
+  for (let second = 0; second < 30; second += 1) await advanceTime(1000);
+  expect(api).toHaveBeenCalledTimes(6);
+
+  controller.abort();
+  await expect(result).rejects.toMatchObject({ name: 'AbortError' });
+  await advanceTime(30000);
+  expect(api).toHaveBeenCalledTimes(6);
+});
+
+test('a changed upload state resets the delay and completion stops all checks', async () => {
+  jest.useFakeTimers();
+  api.mockClear();
+  const session = { id: 'changing-upload', status: 'completing', poll_after_ms: 2000 };
+  api
+    .mockResolvedValueOnce(session)
+    .mockResolvedValueOnce({ ...session, status: 'verifying' })
+    .mockResolvedValueOnce({ ...session, status: 'completed', completed_entry_id: 'file-1' });
+  const result = waitForUpload(session, jest.fn());
+
+  await advanceTime(2000);
+  expect(api).toHaveBeenCalledTimes(1);
+  await advanceTime(4000);
+  expect(api).toHaveBeenCalledTimes(2);
+  await advanceTime(2000);
+  expect((await result).file.id).toBe('file-1');
+  await advanceTime(30000);
+  expect(api).toHaveBeenCalledTimes(3);
+});
+
+test('an already completed response needs no extra status request', async () => {
+  api.mockClear();
+  const result = await waitForUpload({ id: 'done', status: 'completed', completed_entry_id: 'file-done' });
+  expect(result.file.id).toBe('file-done');
+  expect(api).not.toHaveBeenCalled();
 });
 
 test('asynchronous create waits for initialization before signing parts', async () => {

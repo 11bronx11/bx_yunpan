@@ -82,6 +82,13 @@ type ShareRevokedV1 struct {
 	ACLEpoch  int64     `json:"acl_epoch,omitempty"`
 }
 
+type ShareUpdatedV1 struct {
+	OwnerID   uuid.UUID  `json:"owner_id"`
+	ShareID   uuid.UUID  `json:"share_id"`
+	ExpiresAt *time.Time `json:"expires_at"`
+	ACLEpoch  int64      `json:"acl_epoch,omitempty"`
+}
+
 type ShareImportedV1 struct {
 	OwnerID      uuid.UUID `json:"owner_id"`
 	ShareID      uuid.UUID `json:"share_id"`

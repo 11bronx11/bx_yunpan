@@ -65,8 +65,8 @@ func runCombinedAISvc(ctx context.Context, cfg config.Config, logger *slog.Logge
 		WithParser(parser).WithParserProfileVersion(cfg.Parser.ProfileVersion).WithPipelineVersion(indexPipelineVersion(cfg))
 	configureAISearch(aiService, cfg)
 
-	// 限流下移到 aisvc：放 API 侧的话多副本各自计数，总量会是副本数的倍数，
-	// 对下游 LLM 配额没有保护作用。
+	// 查询请求在 aisvc 限流。兼容的 gRPC Reprocess 入口与 core-api 的
+	// 本地命令入口使用相同 Redis owner/scope 预算，跨副本统一计数。
 	var limiter ai.RequestLimiter
 	if cfg.AI.RateLimitEnabled {
 		limiter = ai.NewRequestLimiter(deps.RedisCoordination, ai.RateLimits{

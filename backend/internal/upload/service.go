@@ -304,10 +304,17 @@ func (s *Service) persistMultipartUploadID(ctx context.Context, operationID, lea
 }
 
 func (s *Service) Get(userID, sessionID uuid.UUID) (Session, error) {
+	return s.GetContext(context.Background(), userID, sessionID)
+}
+
+func (s *Service) GetContext(ctx context.Context, userID, sessionID uuid.UUID) (Session, error) {
 	var session Session
-	if err := s.db.Preload("ConfirmedParts", func(db *gorm.DB) *gorm.DB { return db.Order("part_number ASC") }).
+	if err := s.db.WithContext(ctx).Preload("ConfirmedParts", func(db *gorm.DB) *gorm.DB { return db.Order("part_number ASC") }).
 		Where("id = ? AND user_id = ?", sessionID, userID).First(&session).Error; err != nil {
-		return Session{}, ErrNotFound
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return Session{}, ErrNotFound
+		}
+		return Session{}, err
 	}
 	return session, nil
 }

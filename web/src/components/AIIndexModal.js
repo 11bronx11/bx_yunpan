@@ -3,6 +3,7 @@ import { App, Alert, Button, Modal, Progress, Space } from 'antd';
 import { ReloadOutlined, SyncOutlined } from '@ant-design/icons';
 import styled from '@emotion/styled';
 import { getAIJob, getFileAI, reprocessFileAI } from '../services/ai';
+import { createPollDelay } from '../services/polling';
 import { StatusTag } from './design/ProductUI';
 
 const Detail = styled.div`
@@ -85,12 +86,13 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
     setLoadError('');
     try {
       const value = await getFileAI(file.id, { signal });
+      if (signal?.aborted) return null;
       setDocument(value);
       setMissing(false);
       onStatusChange?.(file.id, value.status);
       return value;
     } catch (error) {
-      if (error.name === 'AbortError') return null;
+      if (error.name === 'AbortError' || signal?.aborted) return null;
       if (error.status === 404) {
         setDocument(null);
         setMissing(true);
@@ -100,7 +102,7 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
       setLoadError(error.message || 'AI 索引状态加载失败');
       return null;
     } finally {
-      if (!quiet) setLoading(false);
+      if (!quiet && !signal?.aborted) setLoading(false);
     }
   }, [file?.id, onStatusChange]);
 
@@ -118,16 +120,21 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
     if (!open || !activeTaskID) return undefined;
     let stopped = false;
     let timer;
+    const controller = new AbortController();
+    const nextDelay = createPollDelay();
     const poll = async () => {
       try {
-        const current = await getAIJob(activeTaskID);
+        const current = await getAIJob(activeTaskID, { signal: controller.signal });
         if (stopped) return;
-        if (current.status === 'succeeded' || current.status === 'failed') {
-          const result = await refreshDocument(undefined, true);
+        setLoadError('');
+        if (current.status === 'succeeded' || current.status === 'failed' || current.status === 'canceled') {
+          const result = await refreshDocument(controller.signal, true);
           if (stopped) return;
           setTask(current);
           if (current.status === 'failed') {
             message.error(current.error_message || 'AI 索引重建失败');
+          } else if (current.status === 'canceled') {
+            message.warning('AI 索引任务已取消');
           } else if (result?.status === 'indexed') {
             message.success('AI 索引已重建');
           } else {
@@ -136,14 +143,22 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
           return;
         }
         setTask(current);
-        timer = window.setTimeout(poll, 1200);
+        timer = window.setTimeout(poll, nextDelay(`${current.status}:${current.progress}:${current.attempt}`, current.poll_after_ms));
       } catch (error) {
-        if (!stopped) message.error(error.message || 'AI 任务状态获取失败');
+        if (stopped || error.name === 'AbortError') return;
+        if (!error.status || error.status >= 500 || error.status === 429) {
+          setLoadError(error.message || 'AI 任务状态获取失败，正在重试');
+          timer = window.setTimeout(poll, 5000);
+        } else {
+          setTask(null);
+          message.error(error.message || 'AI 任务状态获取失败');
+        }
       }
     };
     timer = window.setTimeout(poll, 600);
     return () => {
       stopped = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [activeTaskID, message, open, refreshDocument]);

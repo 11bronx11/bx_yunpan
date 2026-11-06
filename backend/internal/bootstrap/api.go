@@ -60,7 +60,7 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	fileManager := drive.NewFileManager(driveService, objects, identityService, deps.Presigner, mediaService, cfg.Storage.ReadURLTTL)
 	fileHTTP := drive.NewFileHTTP(fileManager, identityHTTP.Authenticate())
 	sharingService := sharing.NewService(deps.GORM, driveService, objects, identityService, cfg.Sharing)
-	sharingHTTP := sharing.NewHTTP(sharingService, fileManager, identityHTTP.Authenticate())
+	sharingHTTP := sharing.NewHTTP(sharingService, fileManager, identityHTTP.Authenticate()).WithStorage(deps.Storage)
 	readiness := httpapi.NewReadiness(true)
 	var aiBackend ai.Backend = ai.DisabledBackend{}
 	closeAI := func() {}
@@ -71,7 +71,13 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		aiBackend = &splitAIBackend{query: aiClient, command: ai.NewService(deps.GORM, driveService, objects, deps.Storage, cfg.AI)}
+		var commandLimiter ai.RequestLimiter
+		if cfg.AI.RateLimitEnabled {
+			commandLimiter = ai.NewRequestLimiter(deps.RedisCoordination, ai.RateLimits{
+				ReprocessPerMinute: cfg.AI.RateLimitReprocessPerMinute,
+			})
+		}
+		aiBackend = &splitAIBackend{query: aiClient, command: ai.NewService(deps.GORM, driveService, objects, deps.Storage, cfg.AI), limiter: commandLimiter}
 		closeAI = func() {
 			_ = aiClient.Close()
 			closeRegistry()
@@ -139,7 +145,10 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 // HTTP requests never depend on it.
 type splitAIBackend struct {
 	query   *grpcclient.Client
-	command *ai.Service
+	command interface {
+		RequestReprocess(context.Context, uuid.UUID, uuid.UUID, string) (ai.Task, error)
+	}
+	limiter ai.RequestLimiter
 }
 
 func (b *splitAIBackend) Search(ctx context.Context, ownerID uuid.UUID, input ai.SearchInput) ([]ai.SearchHit, error) {
@@ -151,6 +160,13 @@ func (b *splitAIBackend) Ask(ctx context.Context, ownerID uuid.UUID, question st
 }
 
 func (b *splitAIBackend) RequestReprocess(ctx context.Context, ownerID, fileID uuid.UUID, idempotencyKey string) (ai.Task, error) {
+	if b.limiter != nil {
+		// The command now stays in core-api, so preserve the shared limiter
+		// here. Match the query plane's fail-open behavior on Redis errors.
+		if allowed, err := b.limiter.Allow(ctx, ownerID, "reprocess"); err == nil && !allowed {
+			return ai.Task{}, ai.ErrRateLimited
+		}
+	}
 	return b.command.RequestReprocess(ctx, ownerID, fileID, idempotencyKey)
 }
 

@@ -18,7 +18,7 @@ import (
 // 全采会把 Jaeger 刷满且没有诊断价值。
 func tracedRequest(c *gin.Context) bool {
 	switch c.FullPath() {
-	case "/health/live", "/health/ready", "/metrics", "/openapi.yaml", "/docs":
+	case "/health/live", "/health/ready", "/metrics", "/openapi.yaml", "/docs", "/api/v1/public/shares/file":
 		return false
 	default:
 		return true

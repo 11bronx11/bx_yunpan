@@ -2,6 +2,7 @@ package sharing
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -36,6 +37,24 @@ func TestShareCommandsRejectInvalidBodies(t *testing.T) {
 					t.Fatalf("code = %s", result.Error.Code)
 				}
 			})
+		}
+	}
+}
+
+func TestImportQuotaErrorResponses(t *testing.T) {
+	for _, test := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{ErrQuotaExceeded, 429, "quota.exceeded"},
+		{errors.New("database unavailable"), 500, "internal.error"},
+	} {
+		response := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(response)
+		(&HTTP{}).writeError(ctx, test.err)
+		if response.Code != test.status || !strings.Contains(response.Body.String(), test.code) {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
 		}
 	}
 }

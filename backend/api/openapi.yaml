@@ -600,6 +600,31 @@ paths:
           description: Share revoked
         '404':
           $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Shares]
+      summary: Update share expiry; revoked shares cannot be restored
+      operationId: updateShare
+      parameters:
+        - $ref: '#/components/parameters/ShareId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateShareRequest'
+      responses:
+        '200':
+          description: Updated share
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Share'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
   /api/v1/public/shares/resolve:
     post:
       tags: [Shares]
@@ -637,6 +662,37 @@ paths:
                 $ref: '#/components/schemas/PublicShareContent'
         '401':
           $ref: '#/components/responses/Unauthorized'
+  /api/v1/public/shares/file:
+    get:
+      tags: [Shares]
+      summary: Stream shared bytes, rechecking expiry and revocation on every request
+      operationId: downloadPublicShare
+      security: []
+      parameters:
+        - name: access_token
+          in: query
+          schema:
+            type: string
+          description: Short-lived share access token; X-Share-Token header is also accepted
+        - name: preview
+          in: query
+          schema:
+            type: string
+            enum: ['1']
+      responses:
+        '200':
+          description: File bytes, no-store; safe types may be previewed inline
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '206':
+          description: Requested byte range
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: Object storage unavailable
   /api/v1/shares/{shareId}/import:
     post:
       tags: [Shares]
@@ -665,6 +721,8 @@ paths:
           $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
   /api/v1/search:
     post:
       tags: [Search]
@@ -1276,7 +1334,11 @@ components:
           $ref: '#/components/schemas/UUID'
         status:
           type: string
-          enum: [created, uploading, verifying, completed, failed, aborted, expired]
+          enum: [initializing, created, uploading, completing, verifying, completed, failed, aborted, expired]
+        poll_after_ms:
+          type: integer
+          minimum: 1
+          description: Suggested minimum polling interval in milliseconds, present only during server-side initialization, completion or verification. Clients may back off further while status is unchanged.
         folder_id:
           $ref: '#/components/schemas/UUID'
         filename:
@@ -1412,12 +1474,28 @@ components:
       additionalProperties: false
     Share:
       type: object
-      required: [id, file_id, created_at]
+      required: [id, file_id, created_at, version]
       properties:
         id:
           $ref: '#/components/schemas/UUID'
         file_id:
           $ref: '#/components/schemas/UUID'
+        file_name:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        mime_type:
+          type: string
+        file_available:
+          type: boolean
+        status:
+          type: string
+          enum: [active, expired, revoked, unavailable]
+        version:
+          type: integer
+          format: int64
+          minimum: 1
         expires_at:
           $ref: '#/components/schemas/NullableTimestamp'
         revoked_at:
@@ -1441,7 +1519,18 @@ components:
         file_id:
           $ref: '#/components/schemas/UUID'
         expires_at:
-          $ref: '#/components/schemas/Timestamp'
+          $ref: '#/components/schemas/NullableTimestamp'
+      additionalProperties: false
+    UpdateShareRequest:
+      type: object
+      required: [version, expires_at]
+      properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        expires_at:
+          $ref: '#/components/schemas/NullableTimestamp'
       additionalProperties: false
     CreateShareResponse:
       type: object
@@ -1492,12 +1581,20 @@ components:
           $ref: '#/components/schemas/PublicShare'
     PublicShareContent:
       type: object
-      required: [share, preview]
+      required: [share, preview, download]
       properties:
         share:
           $ref: '#/components/schemas/PublicShare'
         preview:
           $ref: '#/components/schemas/Preview'
+        download:
+          type: object
+          required: [url, expires_at]
+          properties:
+            url:
+              type: string
+            expires_at:
+              $ref: '#/components/schemas/Timestamp'
     ImportShareRequest:
       type: object
       required: [target_folder_id]
@@ -1659,6 +1756,10 @@ components:
         status:
           type: string
           enum: [pending, running, succeeded, failed, canceled]
+        poll_after_ms:
+          type: integer
+          minimum: 1
+          description: Suggested minimum polling interval in milliseconds, present only for pending or running tasks. Clients may back off further while status, progress and attempt are unchanged.
         progress:
           type: integer
           minimum: 0
