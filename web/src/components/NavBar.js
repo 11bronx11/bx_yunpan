@@ -1,18 +1,18 @@
 import React from 'react';
 import { Badge, Button, Dropdown } from 'antd';
-import { CloudOutlined, CommentOutlined, LogoutOutlined, LinkOutlined, MenuOutlined, RobotOutlined, SwapOutlined } from '@ant-design/icons';
+import { CloudOutlined, CommentOutlined, LogoutOutlined, LinkOutlined, MenuOutlined, SearchOutlined, SwapOutlined } from '@ant-design/icons';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import styled from '@emotion/styled';
 import { useAuth } from '../contexts/AuthContext';
 import { useTransfers } from '../contexts/TransferContext';
 
 const Header = styled.header`width: min(calc(100% - 64px), 1280px); margin: 20px auto 0; @media (max-width: 900px) { width: calc(100% - 28px); margin-top: 14px; }`;
-const Bar = styled.div`display: flex; gap: 16px; align-items: center; min-width: 0; min-height: 60px; padding: 7px 10px 7px 16px; border: 1px solid var(--ink); border-radius: var(--radius-pill); background: rgba(255,255,255,.94); box-shadow: 0 3px 0 var(--ink);`;
-const Brand = styled(NavLink)`display: flex; flex: 0 0 auto; gap: 9px; align-items: center; color: var(--ink); font-weight: 700; text-decoration: none;`;
+const Bar = styled.div`display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 16px; align-items: center; min-width: 0; min-height: 60px; padding: 7px 12px; border: 1px solid var(--ink); border-radius: var(--radius-pill); background: rgba(255,255,255,.94); box-shadow: 0 3px 0 var(--ink); @media (max-width: 900px) { display: flex; }`;
+const Brand = styled(NavLink)`display: flex; justify-self: start; flex: 0 0 auto; gap: 9px; align-items: center; color: var(--ink); font-weight: 700; text-decoration: none; white-space: nowrap;`;
 const Mark = styled.span`width: 22px; height: 22px; border: 1px solid var(--ink); border-radius: 50% 44% 50% 36%; background: var(--lime); transform: rotate(-18deg);`;
-const Nav = styled.nav`display: flex; flex: 1; justify-content: center; gap: 4px; @media (max-width: 900px) { display: none; }`;
+const Nav = styled.nav`display: flex; justify-content: center; gap: 4px; @media (max-width: 900px) { display: none; }`;
 const Item = styled(NavLink)`display: inline-flex; gap: 7px; align-items: center; min-height: 40px; padding: 0 14px; border-radius: var(--radius-pill); color: var(--ink); text-decoration: none; .ant-badge, .ant-badge .anticon { color: inherit; } &:hover { color: var(--ink); background: var(--surface-hover); } &.active, &.active:hover { color: var(--white); background: var(--ink); }`;
-const Account = styled.button`min-height: 42px; max-width: 170px; padding: 0 14px; border: 1px solid var(--divider); border-radius: var(--radius-pill); color: var(--ink); background: var(--white); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; @media (max-width: 900px) { display: none; }`;
+const Account = styled.button`justify-self: end; min-width: 0; min-height: 42px; max-width: min(100%, 170px); padding: 0 14px; border: 1px solid var(--divider); border-radius: var(--radius-pill); color: var(--ink); background: var(--white); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; @media (max-width: 900px) { display: none; }`;
 const Mobile = styled(Button)`display: none; width: 44px; height: 44px; @media (max-width: 900px) { display: inline-flex; margin-left: auto; }`;
 
 const NavBar = () => {
@@ -20,7 +20,7 @@ const NavBar = () => {
   const { activeCount } = useTransfers();
   const location = useLocation();
   const navigate = useNavigate();
-  const links = [{ to: '/drive', text: '我的云盘', icon: <CloudOutlined /> }, { to: '/transfers', text: '传输', icon: <Badge count={activeCount} size="small" offset={[7, -3]}><SwapOutlined /></Badge> }, { to: '/shares', text: '我的分享', icon: <LinkOutlined /> }, { to: '/ai', text: 'AI 检索', icon: <RobotOutlined /> }, { to: '/ask', text: 'AI 问答', icon: <CommentOutlined /> }];
+  const links = [{ to: '/drive', text: '我的云盘', icon: <CloudOutlined /> }, { to: '/transfers', text: '传输', icon: <Badge count={activeCount} size="small" offset={[7, -3]}><SwapOutlined /></Badge> }, { to: '/shares', text: '我的分享', icon: <LinkOutlined /> }, { to: '/ai', text: '检索', icon: <SearchOutlined /> }, { to: '/ask', text: '问答', icon: <CommentOutlined /> }];
   const accountMenu = {
     items: [
       { key: 'username', label: user?.username || '当前用户', disabled: true },

@@ -152,24 +152,6 @@ const HeroLine = styled.h1`
   }
 `;
 
-const HeroMeta = styled.p`
-  position: relative;
-  z-index: 4;
-  margin: clamp(24px, 4vh, 54px) 0 0 clamp(4px, 4vw, 58px);
-  font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif;
-  font-size: clamp(11px, 1.1vw, 14px);
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  line-height: 1.25;
-  text-transform: uppercase;
-
-  @media (max-width: 760px) {
-    margin-top: 28px;
-    margin-left: 2px;
-    font-size: 10px;
-  }
-`;
-
 const Blob = styled.div`
   position: absolute;
   z-index: 2;
@@ -252,6 +234,76 @@ const PinkDot = styled(Blob)`
   @media (max-width: 760px) { display: none; }
 `;
 
+const StickerCluster = styled.div`
+  position: absolute;
+  z-index: 4;
+  bottom: clamp(36px, 8vh, 84px);
+  left: clamp(96px, 22vw, 380px);
+  display: flex;
+  gap: 18px;
+  align-items: flex-end;
+  pointer-events: none;
+  user-select: none;
+
+  @media (max-width: 1100px) {
+    left: 64px;
+    transform: scale(0.86);
+    transform-origin: left bottom;
+  }
+  @media (min-width: 761px) and (max-width: 960px) {
+    bottom: 42px;
+    left: 9vw;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  @media (max-width: 760px) {
+    bottom: 18px;
+    left: 30px;
+    transform: none;
+  }
+`;
+
+const FileSticker = styled.svg`
+  width: 86px;
+  height: 106px;
+  overflow: visible;
+  filter: drop-shadow(4px 4px 0 var(--ink));
+  transform: rotate(-12deg);
+
+  @media (max-width: 760px) { display: none; }
+`;
+
+const YoursSticker = styled.span`
+  display: inline-flex;
+  gap: 14px;
+  align-items: center;
+  min-height: 58px;
+  margin-bottom: 12px;
+  padding: 12px 20px;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  background: var(--lime);
+  box-shadow: 4px 4px 0 var(--ink);
+  font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif;
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  white-space: nowrap;
+  transform: rotate(7deg);
+
+  span { font-size: 24px; }
+  @media (max-width: 760px) {
+    min-height: 42px;
+    margin-bottom: 0;
+    padding: 9px 14px;
+    font-size: 14px;
+    box-shadow: 3px 3px 0 var(--ink);
+    transform: rotate(-4deg);
+    span { font-size: 19px; }
+  }
+`;
+
 const PanelWrap = styled.section`
   position: relative;
   z-index: 5;
@@ -275,14 +327,14 @@ const PanelWrap = styled.section`
 const Panel = styled.div`
   position: relative;
   overflow: hidden;
-  padding: 24px 26px 20px;
+  padding: 24px 26px;
   border: 2px solid var(--ink);
   border-radius: 28px;
   background: #fff;
   box-shadow: 8px 8px 0 var(--ink);
 
   @media (max-width: 760px) {
-    padding: 20px 18px 18px;
+    padding: 20px 18px;
     border-radius: 24px;
     box-shadow: 6px 6px 0 var(--ink);
   }
@@ -329,24 +381,17 @@ const ModeButton = styled.button`
 `;
 
 const PanelTitle = styled.h2`
-  margin: 23px 0 6px;
-  font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif;
-  font-size: clamp(28px, 3vw, 38px);
-  font-weight: 900;
-  line-height: 0.9;
-  letter-spacing: -0.055em;
-  text-transform: uppercase;
-`;
-
-const PanelIntro = styled.p`
-  margin: 0 0 21px;
-  color: #4c4c47;
-  font-size: 13px;
-  line-height: 1.5;
+  margin: 24px 0;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: clamp(28px, 2.7vw, 34px);
+  font-weight: 800;
+  line-height: 1.25;
+  letter-spacing: 0;
 `;
 
 const StyledForm = styled(Form)`
   .ant-form-item { margin-bottom: 15px; }
+  > .ant-form-item:last-child { margin-bottom: 0; }
   .ant-form-item-label { padding-bottom: 6px; }
   .ant-form-item-label > label {
     height: auto;
@@ -429,21 +474,6 @@ const SubmitButton = styled(Button)`
   }
   &:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
   .anticon { font-size: 19px; }
-`;
-
-const PanelFooter = styled.div`
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 16px;
-  padding-top: 13px;
-  border-top: 1px solid var(--ink);
-  font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif;
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.05em;
-  line-height: 1.25;
-  text-transform: uppercase;
 `;
 
 const SideNote = styled.div`
@@ -539,14 +569,13 @@ const Login = () => {
   return (
     <AuthCanvas ref={canvasRef}>
       <Topline className="auth-micro">
-        <Brand className="auth-brand">AI 云存储 <span> / AI CLOUD STORAGE</span></Brand>
+        <Brand className="auth-brand">BX YUNPAN</Brand>
         <Issue>01 / AUTH</Issue>
       </Topline>
 
       <Hero aria-label="Your files. Your cloud.">
         <HeroMask><HeroLine className="hero-reveal">YOUR FILES.</HeroLine></HeroMask>
         <HeroMask><HeroLine className="hero-reveal">YOUR CLOUD.</HeroLine></HeroMask>
-        <HeroMeta className="auth-micro">STORE. &nbsp; SEARCH. &nbsp; SHARE.<br />上传、管理、分享，并用 AI 找回每一份文件。</HeroMeta>
       </Hero>
 
       <BlueBlob className="auth-blob blob-blue" $color="#087FC3" aria-hidden="true" />
@@ -563,8 +592,7 @@ const Login = () => {
             <ModeButton type="button" $active={isRegister} aria-pressed={isRegister} onClick={() => switchMode(true)}>Create account</ModeButton>
           </ModeSwitch>
 
-          <PanelTitle>{isRegister ? 'Create your space.' : 'Welcome back.'}</PanelTitle>
-          <PanelIntro>{isRegister ? '建立你的私有文件空间，从这里开始。' : '回到你的文件、记忆与云端空间。'}</PanelIntro>
+          <PanelTitle>{isRegister ? '创建你的账户' : '欢迎回来'}</PanelTitle>
 
           <StyledForm
           form={form}
@@ -651,9 +679,17 @@ const Login = () => {
             </SubmitButton>
           </Form.Item>
           </StyledForm>
-          <PanelFooter><span>Secure storage</span><span>AI search ready</span></PanelFooter>
         </Panel>
       </PanelWrap>
+
+      <StickerCluster aria-hidden="true">
+        <FileSticker viewBox="0 0 88 108" fill="none" focusable="false">
+          <path d="M12 2H56L84 30V96C84 101 81 104 76 104H12C7 104 4 101 4 96V10C4 5 7 2 12 2Z" fill="#fff" stroke="var(--ink)" strokeWidth="2" />
+          <path d="M56 2L84 30H64C59 30 56 27 56 22V2Z" fill="var(--pink)" stroke="var(--ink)" strokeWidth="2" strokeLinejoin="round" />
+          <path d="M21 53H64M21 66H55M21 79H42" stroke="var(--ink)" strokeWidth="4" strokeLinecap="round" />
+        </FileSticker>
+        <YoursSticker>ALL YOURS.<span>↗</span></YoursSticker>
+      </StickerCluster>
     </AuthCanvas>
   );
 };

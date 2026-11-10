@@ -1,15 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, App, Button, Descriptions, Modal, Space, Table, Tabs } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { Alert, App, Button, Grid, Space, Table, Tabs } from 'antd';
+import { CalendarOutlined, StopOutlined } from '@ant-design/icons';
 import { listShares, revokeShare } from '../services/share';
 import { GraphicEmpty, PageHeader, ProductPage } from '../components/design/ProductUI';
 import ShareModal, { formatShareExpiry } from '../components/ShareModal';
 
 const PAGE_SIZE = 10;
-const statusMeta = {
-  active: { label: '有效', tone: 'mint' }, expired: { label: '已过期', tone: 'coral' },
-  revoked: { label: '已撤销', tone: 'coral' }, source_deleted: { label: '源文件已删除', tone: 'coral' },
-};
 const tabs = [
   { key: 'active', label: '分享有效' }, { key: 'expired', label: '分享过期' }, { key: 'revoked', label: '分享撤销' }, { key: 'source_deleted', label: '源文件已删除' },
 ];
@@ -31,16 +27,19 @@ export const shareStatus = (share, now = Date.now()) => {
 };
 
 export default function Shares() {
-  const { message, modal } = App.useApp();
+  const { message } = App.useApp();
+  const screens = Grid.useBreakpoint();
+  const compact = !screens.md;
   const [items, setItems] = useState([]);
   const [page, setPage] = useState({});
   const [query, setQuery] = useState({ status: 'active', cursors: [''], index: 0 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState(null);
-  const [viewing, setViewing] = useState(null);
+  const [revoking, setRevoking] = useState([]);
   const [now, setNow] = useState(Date.now());
   const request = useRef(null);
+  const pendingRevokes = useRef(new Set());
   const load = useCallback(async () => {
     request.current?.abort();
     const controller = new AbortController(); request.current = controller;
@@ -75,32 +74,38 @@ export default function Shares() {
       return { ...current, cursors, index: current.index + direction };
     });
   };
-  const revoke = share => modal.confirm({
-    title: '提前撤销分享？', content: '撤销后原 Key 将失效，已经导入的文件不受影响。此操作不能恢复。',
-    okText: '撤销分享', cancelText: '保留分享', okButtonProps: { danger: true },
-    onOk: async () => {
-      try { await revokeShare(share.id); message.success('分享已撤销'); refresh(); }
-      catch (err) { message.error(err.message || '撤销分享失败'); refresh(); throw err; }
-    },
-  });
+  const revoke = async share => {
+    if (pendingRevokes.current.has(share.id)) return;
+    if (shareStatus(share) !== 'active') { refresh(); return; }
+    pendingRevokes.current.add(share.id); setRevoking([...pendingRevokes.current]);
+    try { await revokeShare(share.id); message.success('分享已取消'); refresh(); }
+    catch (err) { message.error(err.message || '取消分享失败'); refresh(); }
+    finally { pendingRevokes.current.delete(share.id); setRevoking([...pendingRevokes.current]); }
+  };
+  const renderActions = share => shareStatus(share, now) === 'active' && <div className="share-actions">
+    <Button size="small" icon={<CalendarOutlined />} aria-label="修改有效期" disabled={revoking.includes(share.id)} onClick={() => setEditing(share)}>修改有效期</Button>
+    <Button size="small" icon={<StopOutlined />} aria-label="取消分享" danger loading={revoking.includes(share.id)} onClick={() => revoke(share)}>取消分享</Button>
+  </div>;
   const columns = [
-    { title: '文件', dataIndex: 'file_name', render: name => <span style={{ overflowWrap: 'anywhere' }}>{name || '未知文件'}</span> },
-    { title: '类型', dataIndex: 'mime_type', width: 100, render: (_, share) => fileType(share) },
-    ...(query.status === 'active' ? [{ title: '有效期', dataIndex: 'expires_at', width: 210, render: formatShareExpiry }] : []),
-    { title: '操作', key: 'actions', fixed: 'right', width: query.status === 'active' ? 280 : 90, render: (_, share) => <Space>
-      <Button size="small" onClick={() => setViewing(share)}>查看</Button>
-      {shareStatus(share, now) === 'active' && <>
-        <Button size="small" onClick={() => setEditing(share)}>修改有效期</Button>
-        <Button size="small" danger onClick={() => revoke(share)}>提前撤销</Button>
-      </>}
-    </Space> },
+    { title: '文件', dataIndex: 'file_name', render: (name, share) => <div className="share-file">
+      <span>{name || '未知文件'}</span>
+      {compact && <div className="share-mobile-meta"><span>{fileType(share)}</span>{query.status === 'active' && <span>{formatShareExpiry(share.expires_at)}</span>}</div>}
+      {compact && query.status === 'active' && renderActions(share)}
+    </div> },
+    ...(!compact ? [
+      { title: '类型', dataIndex: 'mime_type', width: 80, render: (_, share) => fileType(share) },
+      ...(query.status === 'active' ? [
+        { title: '有效期', dataIndex: 'expires_at', width: 210, render: formatShareExpiry },
+        { title: '', key: 'actions', width: 228, align: 'right', render: (_, share) => renderActions(share) },
+      ] : []),
+    ] : []),
   ];
-  return <ProductPage page="shares">
-    <PageHeader title="我的分享" action={<Button icon={<ReloadOutlined />} loading={loading} onClick={refresh}>刷新</Button>} />
-    <Tabs activeKey={query.status} items={tabs} onChange={changeTab} />
+  return <ProductPage className="shares-page">
+    <PageHeader title="我的分享" />
+    <Tabs activeKey={query.status} items={tabs} onChange={changeTab} tabBarGutter={24} />
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       {error && <Alert type="error" showIcon message={error} action={<Button onClick={load}>重试</Button>} />}
-      <Table rowKey="id" columns={columns} dataSource={items} pagination={false} loading={loading} scroll={{ x: query.status === 'active' ? 900 : 480 }} locale={{ emptyText: <GraphicEmpty title={`暂无${query.status === 'source_deleted' ? '源文件已删除的' : tabs.find(tab => tab.key === query.status).label.slice(2)}分享`} description={query.status === 'active' ? '选择文件即可创建分享。' : ''} /> }} />
+      <Table className="editorial-ledger" rowKey="id" columns={columns} dataSource={items} pagination={false} loading={loading} tableLayout="fixed" locale={{ emptyText: <GraphicEmpty title={`暂无${query.status === 'source_deleted' ? '源文件已删除的' : tabs.find(tab => tab.key === query.status).label.slice(2)}分享`} description={query.status === 'active' ? '选择文件即可创建分享。' : ''} /> }} />
       <Space aria-label="分享分页" wrap>
         <Button disabled={loading || query.index === 0} onClick={() => turnPage(-1)}>上一页</Button>
         <span>第 {query.index + 1} 页 · 每页 {PAGE_SIZE} 条</span>
@@ -108,12 +113,5 @@ export default function Shares() {
       </Space>
     </Space>
     <ShareModal open={Boolean(editing)} share={editing} onCancel={() => setEditing(null)} onSaved={refresh} />
-    <Modal open={Boolean(viewing)} title="分享详情" onCancel={() => setViewing(null)} footer={<Button onClick={() => setViewing(null)}>关闭</Button>}>
-      {viewing && <Descriptions column={1} items={[
-        { key: 'file', label: '文件', children: viewing.file_name || '未知文件' },
-        { key: 'type', label: '类型', children: fileType(viewing) },
-        { key: 'status', label: '状态', children: statusMeta[shareStatus(viewing, now)].label },
-      ]} />}
-    </Modal>
   </ProductPage>;
 }

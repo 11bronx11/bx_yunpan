@@ -16,7 +16,14 @@ import { startDownload } from '../utils/download';
 import styled from '@emotion/styled';
 
 const Workspace = styled.div`display: grid; min-width: 0; gap: 16px;`;
-const ActionGroup = styled.div`display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end;`;
+const ActionGroup = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  @media (min-width: 621px) { transform: translateY(3px); }
+`;
 const RowActions = styled.div`
   display: flex;
   gap: 4px;
@@ -67,11 +74,11 @@ const formatSize = bytes => {
 };
 
 const aiStatusMeta = {
-  pending: { label: '等待处理', tone: 'blue' },
-  processing: { label: '处理中', tone: 'blue' },
+  pending: { label: '等待构建', tone: 'blue' },
+  processing: { label: '正在构建', tone: 'blue' },
   indexed: { label: '已索引', tone: 'mint' },
-  failed: { label: '失败', tone: 'coral' },
-  unsupported: { label: '未索引', tone: 'coral' },
+  failed: { label: '构建失败', tone: 'coral' },
+  unsupported: { label: '构建失败', tone: 'coral' },
 };
 
 const Drive = () => {
@@ -294,7 +301,7 @@ const Drive = () => {
     { title: '名称', key: 'name', render: (_, item) => <NameCell>{previews[item.id]?.url ? <Thumb src={previews[item.id].url} alt="" /> : <FileTypeBadge type={item.type === 'folder' ? 'folder' : item.mime_type} />}<FileName title={item.name}>{item.name}</FileName></NameCell> },
     { title: '类型', key: 'type', width: 110, responsive: ['md'], render: (_, item) => <StatusTag tone={item.type === 'folder' ? 'blue' : undefined}>{fileTypeLabel(item.type === 'folder' ? 'folder' : item.mime_type)}</StatusTag> },
     { title: '大小', key: 'size', width: 120, responsive: ['md'], render: (_, item) => item.type === 'folder' ? '-' : formatSize(item.size_bytes) },
-    { title: '索引', key: 'ai', width: 110, responsive: ['lg'], render: (_, item) => item.type === 'folder' ? null : item.ai_status ? <StatusTag tone={aiStatusMeta[item.ai_status]?.tone}>{aiStatusMeta[item.ai_status]?.label || item.ai_status}</StatusTag> : <span style={{ color: 'var(--text-tertiary)' }}>未建立</span> },
+    { title: '索引', key: 'ai', width: 110, responsive: ['lg'], render: (_, item) => item.type === 'folder' ? null : item.ai_status ? <StatusTag tone={aiStatusMeta[item.ai_status]?.tone}>{aiStatusMeta[item.ai_status]?.label || '状态待确认'}</StatusTag> : <span style={{ color: 'var(--text-tertiary)' }}>未建立</span> },
     { title: '', key: 'action', width: compactActions ? 68 : 210, render: (_, item) => item.type === 'folder'
       ? compactActions
         ? <Dropdown menu={compactFolderMenu(item)} trigger={['click']}><Button aria-label={`管理目录 ${item.name}`} icon={<MoreOutlined />} onClick={event => event.stopPropagation()} /></Dropdown>
@@ -343,7 +350,7 @@ const Drive = () => {
 
   if (!root || !folder) return <ProductPage>{loadError ? <Alert type="error" showIcon message={loadError} action={<Button icon={<ReloadOutlined />} onClick={() => root ? loadFolder(root.id) : window.location.reload()}>重试</Button>} /> : <GraphicEmpty title="正在打开你的云盘" description="目录与对象索引加载中。" />}</ProductPage>;
   return <ProductPage accent="var(--lime)"><Workspace>
-    <PageHeader title="我的云盘" description="目录、秒传、Multipart 上传和对象级缩略图都在这里。" action={<ActionGroup><Button icon={<ImportOutlined />} onClick={openShareImport}>导入分享</Button><Button icon={<FolderAddOutlined />} onClick={() => setCreateOpen(true)}>新建目录</Button><Upload multiple showUploadList={false} beforeUpload={handleUpload}><Button type="primary" icon={<UploadOutlined />}>上传文件</Button></Upload></ActionGroup>} />
+    <PageHeader title="我的云盘" action={<ActionGroup><Button icon={<ImportOutlined />} onClick={openShareImport}>导入分享</Button><Button icon={<FolderAddOutlined />} onClick={() => setCreateOpen(true)}>新建目录</Button><Upload multiple showUploadList={false} beforeUpload={handleUpload}><Button type="primary" icon={<UploadOutlined />}>上传文件</Button></Upload></ActionGroup>} />
     <DirectoryRow aria-label="目录导航"><Tooltip title="返回上级目录"><Button aria-label="返回上级目录" icon={<LeftOutlined />} disabled={!parentFolder} onClick={() => parentFolder && loadFolder(parentFolder.id)} /></Tooltip><FolderRow>{crumbs.map((item, index) => <React.Fragment key={item.id}>{index > 0 && <CrumbSeparator aria-hidden="true" />}<li><FolderCrumb type="button" aria-current={item.id === folder ? 'page' : undefined} onClick={() => loadFolder(item.id)}><FolderOutlined />{item.name === '/' ? '根目录' : item.name}</FolderCrumb></li></React.Fragment>)}</FolderRow></DirectoryRow>
     {loadError && <Alert type="error" showIcon message={loadError} action={<Button icon={<ReloadOutlined />} onClick={() => loadFolder(folder)}>刷新</Button>} />}
     {items.length === 0 && !loading ? <GraphicEmpty title="这个目录还是空的" description="新建目录或上传第一个文件。" /> : <Table className="editorial-ledger" rowKey="id" columns={columns} dataSource={[...folders, ...files]} loading={loading} pagination={false} tableLayout="fixed" onRow={rowInteraction} />}
@@ -352,7 +359,7 @@ const Drive = () => {
     <Modal open={Boolean(renameTarget)} title="重命名文件" okText="保存" cancelText="取消" confirmLoading={renaming} onOk={handleRename} onCancel={() => setRenameTarget(null)} destroyOnClose><Input autoFocus aria-label="新文件名" value={renameName} onChange={event => setRenameName(event.target.value)} onPressEnter={handleRename} placeholder="新文件名" /></Modal>
     <MoveFileModal open={Boolean(moveTarget)} file={moveTarget} root={root} currentFolderId={folder} onCancel={() => setMoveTarget(null)} onMoved={handleMoved} />
     <AIIndexModal file={aiTarget} open={Boolean(aiTarget)} onClose={() => setAITarget(null)} onStatusChange={handleAIStatusChange} />
-    <FileSummaryModal file={summaryTarget} open={Boolean(summaryTarget)} onClose={() => setSummaryTarget(null)} onManageIndex={file => { setSummaryTarget(null); setAITarget(file); }} />
+    <FileSummaryModal file={summaryTarget} open={Boolean(summaryTarget)} onClose={() => setSummaryTarget(null)} />
     <Modal open={Boolean(imagePreview)} title={imagePreview?.name || '图片预览'} footer={null} width={920} centered destroyOnClose onCancel={() => setImagePreview(null)}><PreviewShell>{imagePreview && <img src={imagePreview.url} alt={imagePreview.name} />}</PreviewShell></Modal>
     <ShareModal open={Boolean(shareTarget)} file={shareTarget} onCancel={() => setShareTarget(null)} />
     <ImportShareModal open={shareOpen} folderId={folder} targetLabel={crumbs.map(item => item.name === '/' ? '根目录' : item.name).join(' / ')} onCancel={() => setShareOpen(false)} onImported={() => loadFolder(folder)} />

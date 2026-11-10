@@ -3,7 +3,7 @@ import { Button, Progress, Segmented, Tooltip, Upload } from 'antd';
 import { CloseOutlined, DeleteOutlined, FileSearchOutlined, PauseOutlined, PlayCircleOutlined, RedoOutlined, UploadOutlined } from '@ant-design/icons';
 import styled from '@emotion/styled';
 import { GraphicEmpty, PageHeader, ProductPage, StatusTag } from '../components/design/ProductUI';
-import { MAX_BATCH_FILES, MAX_CONCURRENT_UPLOADS, useTransfers } from '../contexts/TransferContext';
+import { useTransfers } from '../contexts/TransferContext';
 
 const Workspace = styled.div`display: grid; gap: 18px; min-width: 0;`;
 const FilterRow = styled.div`display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap;`;
@@ -98,16 +98,13 @@ const Transfers = () => {
   }
 
   return <ProductPage accent="var(--blue)"><Workspace>
-    <PageHeader
-      title="传输"
-      description={`单次最多 ${MAX_BATCH_FILES} 个文件，同时上传 ${MAX_CONCURRENT_UPLOADS} 个，支持分片与断点续传。`}
-    />
+    <PageHeader title="传输" />
     {uploads.length > 0 && <FilterRow>
       <Segmented value={filter} onChange={setFilter} options={[{ label: `全部 ${uploads.length}`, value: 'all' }, { label: `未完成 ${activeCount}`, value: 'active' }, { label: `已结束 ${finishedCount}`, value: 'completed' }]} />
       <QueueMeta aria-live="polite">{queueText}</QueueMeta>
     </FilterRow>}
     {filtered.length === 0
-      ? <GraphicEmpty title={uploads.length === 0 ? '暂无上传任务' : '没有符合条件的上传任务'} description="从我的云盘选择文件后，任务会显示在这里。" />
+      ? <GraphicEmpty title={uploads.length === 0 ? '暂无上传任务' : '没有符合条件的上传任务'} />
       : <TransferList>{filtered.map(task => {
         const meta = task.status === 'skipped' && task.errorCode === 'upload.name_conflict'
           ? { label: '同名冲突', tone: 'blue' }

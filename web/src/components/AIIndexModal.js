@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { App, Alert, Button, Modal, Progress, Space } from 'antd';
 import { ReloadOutlined, SyncOutlined } from '@ant-design/icons';
 import styled from '@emotion/styled';
@@ -48,27 +48,18 @@ const Summary = styled.p`
 
 const statusMeta = {
   missing: { label: '尚未建立', tone: undefined },
-  pending: { label: '等待处理', tone: 'blue' },
-  processing: { label: '正在处理', tone: 'blue' },
+  pending: { label: '等待构建', tone: 'blue' },
+  processing: { label: '正在构建', tone: 'blue' },
   indexed: { label: '已完成', tone: 'mint' },
   failed: { label: '构建失败', tone: 'coral' },
-  unsupported: { label: '不支持', tone: 'coral' },
-};
-
-const errorMessages = {
-  'ai.object_too_large': '文件超过 AI 处理大小上限，请调整 AI_MAX_OBJECT_MIB 后重建。',
-  'ai.unsupported_type': '当前 Provider 不支持该文件类型，或图片超过 10 MiB。',
-  'ai.invalid_content': '文件内容无法解析，请确认文件没有损坏。',
-  'ai.empty_content': '文件中没有提取到可索引内容。',
-  'ai.storage_read_failed': '读取对象存储失败，请稍后重试。',
-  'ai.extraction_failed': '文本或图片内容提取失败，请稍后重试。',
-  'ai.embedding_failed': '向量模型调用失败，请检查模型配置后重试。',
-  'ai.enrichment_failed': '摘要模型调用失败，请检查模型配置后重试。',
-  'ai.persistence_failed': '索引写入失败，请稍后重试。',
-  'ai.reprocess_failed': '索引重建失败，请检查 Worker 日志后重试。',
+  unsupported: { label: '构建失败', tone: 'coral' },
+  canceled: { label: '已取消', tone: undefined },
+  unconfirmed: { label: '结果待确认', tone: undefined },
 };
 
 const isActiveTask = task => task && (task.status === 'pending' || task.status === 'running');
+const isFailedIndex = status => status === 'failed' || status === 'unsupported';
+const buildMessageKey = 'index-build';
 
 const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
   const { message } = App.useApp();
@@ -78,6 +69,8 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
   const [submitting, setSubmitting] = useState(false);
   const [task, setTask] = useState(null);
   const [loadError, setLoadError] = useState('');
+  const view = useRef(null);
+  const submissionPending = useRef(false);
   const activeTaskID = isActiveTask(task) ? task.id : null;
 
   const refreshDocument = useCallback(async (signal, quiet = false) => {
@@ -89,6 +82,7 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
       if (signal?.aborted) return null;
       setDocument(value);
       setMissing(false);
+      setTask(current => current?.status === 'succeeded' ? { ...current, resultStatus: value.status } : current);
       onStatusChange?.(file.id, value.status);
       return value;
     } catch (error) {
@@ -99,7 +93,7 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
         onStatusChange?.(file.id, null);
         return null;
       }
-      setLoadError(error.message || 'AI 索引状态加载失败');
+      setLoadError('索引状态加载失败，请稍后重试。');
       return null;
     } finally {
       if (!quiet && !signal?.aborted) setLoading(false);
@@ -109,12 +103,19 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
   useEffect(() => {
     if (!open || !file?.id) return undefined;
     const controller = new AbortController();
+    view.current = controller;
+    submissionPending.current = false;
+    setSubmitting(false);
     setTask(null);
     setDocument(null);
     setMissing(false);
     refreshDocument(controller.signal);
-    return () => controller.abort();
-  }, [open, file?.id, refreshDocument]);
+    return () => {
+      controller.abort();
+      view.current = null;
+      message.destroy(buildMessageKey);
+    };
+  }, [open, file?.id, message, refreshDocument]);
 
   useEffect(() => {
     if (!open || !activeTaskID) return undefined;
@@ -130,15 +131,15 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
         if (current.status === 'succeeded' || current.status === 'failed' || current.status === 'canceled') {
           const result = await refreshDocument(controller.signal, true);
           if (stopped) return;
-          setTask(current);
-          if (current.status === 'failed') {
-            message.error(current.error_message || 'AI 索引重建失败');
+          setTask({ ...current, resultStatus: result?.status });
+          if (current.status === 'failed' || (current.status === 'succeeded' && isFailedIndex(result?.status))) {
+            message.open({ key: buildMessageKey, type: 'error', content: '构建失败' });
           } else if (current.status === 'canceled') {
-            message.warning('AI 索引任务已取消');
+            message.open({ key: buildMessageKey, type: 'info', content: '构建已取消' });
           } else if (result?.status === 'indexed') {
-            message.success('AI 索引已重建');
+            message.open({ key: buildMessageKey, type: 'success', content: '索引构建完成' });
           } else {
-            message.warning('处理已完成，但该文件仍无法建立 AI 索引');
+            message.open({ key: buildMessageKey, type: 'info', content: '暂未确认构建结果，请刷新状态。' });
           }
           return;
         }
@@ -147,11 +148,11 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
       } catch (error) {
         if (stopped || error.name === 'AbortError') return;
         if (!error.status || error.status >= 500 || error.status === 429) {
-          setLoadError(error.message || 'AI 任务状态获取失败，正在重试');
+          setLoadError('索引状态获取失败，正在重试。');
           timer = window.setTimeout(poll, 5000);
         } else {
           setTask(null);
-          message.error(error.message || 'AI 任务状态获取失败');
+          setLoadError('索引状态获取失败，请刷新状态。');
         }
       }
     };
@@ -164,26 +165,38 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
   }, [activeTaskID, message, open, refreshDocument]);
 
   const startReprocess = async () => {
-    if (!file?.id) return;
+    const controller = view.current;
+    if (!file?.id || !controller || controller.signal.aborted || submissionPending.current || isActiveTask(task)) return;
+    submissionPending.current = true;
     setSubmitting(true);
+    setLoadError('');
     try {
       const value = await reprocessFileAI(file.id);
+      if (controller.signal.aborted) return;
       setTask(value);
-      message.success('已加入 AI 索引队列');
+      message.open({ key: buildMessageKey, type: 'success', content: '索引构建请求已提交' });
     } catch (error) {
-      message.error(error.message || 'AI 索引任务创建失败');
+      if (!controller.signal.aborted) message.open({ key: buildMessageKey, type: 'error', content: '构建失败' });
     } finally {
-      setSubmitting(false);
+      if (!controller.signal.aborted) {
+        submissionPending.current = false;
+        setSubmitting(false);
+      }
     }
   };
 
-  const status = document?.status || (missing ? 'missing' : 'pending');
+  // A completed request is only a successful build when the index is confirmed.
+  // In particular, older workers can report succeeded with an unsupported index.
+  let status = document?.status || (missing ? 'missing' : 'pending');
+  if (isActiveTask(task)) status = task.status === 'pending' ? 'pending' : 'processing';
+  else if (task?.status === 'failed' || task?.status === 'canceled') status = task.status;
+  else if (task?.status === 'succeeded') {
+    status = task.resultStatus === 'indexed' ? 'indexed' : isFailedIndex(task.resultStatus) ? 'failed' : 'unconfirmed';
+  }
   const meta = statusMeta[status] || statusMeta.pending;
-  const active = isActiveTask(task) || status === 'processing' || status === 'pending';
-  const feedback = useMemo(() => {
-    const code = task?.error_code || document?.error_code;
-    return code ? errorMessages[code] || task?.error_message || `处理失败：${code}` : '';
-  }, [document?.error_code, task?.error_code, task?.error_message]);
+  const active = submitting || isActiveTask(task) || status === 'processing' || status === 'pending';
+  const failed = isFailedIndex(status);
+  const progressStatus = failed ? 'exception' : status === 'indexed' ? 'success' : isActiveTask(task) ? 'active' : 'normal';
 
   return (
     <Modal
@@ -194,20 +207,19 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
       onCancel={onClose}
       footer={[
         <Button key="close" onClick={onClose}>关闭</Button>,
-        <Button key="refresh" aria-label="刷新 AI 索引状态" icon={<ReloadOutlined />} disabled={loading || isActiveTask(task)} onClick={() => refreshDocument()}>刷新状态</Button>,
-        <Button key="reprocess" aria-label={missing ? '构建 AI 索引' : '重新构建索引'} type="primary" icon={<SyncOutlined />} loading={submitting || isActiveTask(task)} disabled={loading || active} onClick={startReprocess}>
-          {missing ? '构建 AI 索引' : '重新构建索引'}
+        <Button key="refresh" aria-label="刷新 AI 索引状态" icon={<ReloadOutlined />} disabled={loading || submitting || isActiveTask(task)} onClick={() => refreshDocument(view.current?.signal)}>刷新状态</Button>,
+        <Button key="reprocess" aria-label={missing ? '构建索引' : '重新构建索引'} type="primary" icon={<SyncOutlined />} loading={submitting || isActiveTask(task)} disabled={loading || active} onClick={startReprocess}>
+          {missing ? '构建索引' : '重新构建索引'}
         </Button>,
       ]}
     >
       <Detail aria-live="polite" aria-busy={loading || isActiveTask(task)}>
         <StatusRow>
           <Space><span>当前状态</span><StatusTag tone={meta.tone}>{loading ? '正在加载' : meta.label}</StatusTag></Space>
-          {task && <span style={{ color: 'var(--muted)', fontSize: 12 }}>第 {task.attempt || 0} 次处理</span>}
         </StatusRow>
         {loadError && <Alert type="error" showIcon message={loadError} />}
-        {feedback && <Alert type={status === 'unsupported' ? 'warning' : 'error'} showIcon message={feedback} />}
-        {task && <Progress percent={task.progress || 0} status={task.status === 'failed' ? 'exception' : task.status === 'succeeded' ? 'success' : 'active'} />}
+        {failed && <Alert type="error" showIcon message="构建失败" />}
+        {task && <Progress percent={task.progress || 0} status={progressStatus} />}
         {document && <Metadata>
           <dt>模型</dt><dd>{document.model_version || '-'}</dd>
           <dt>索引管线</dt><dd>{document.pipeline_version || '-'}</dd>

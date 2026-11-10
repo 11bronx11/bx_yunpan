@@ -52,7 +52,7 @@ const AIAsk = () => {
 
   return <ProductPage accent="var(--mint)">
     <Workspace>
-      <PageHeader title="AI 问答" description="从已索引的网盘文件中整理答案。" />
+      <PageHeader title="问答" />
       <Composer className="page-reveal">
         <Input.TextArea
           aria-label="向文件提问"
@@ -71,7 +71,7 @@ const AIAsk = () => {
         <ResultTitle>回答</ResultTitle>
         {answer
           ? <Answer className="page-reveal">{answer.answer}<Citations>{answer.citations?.map(citation => <Tag key={citation.id} color="green"><CommentOutlined /> {citation.file_name}{citation.page_number ? ` / 第 ${citation.page_number} 页` : ''}</Tag>)}</Citations></Answer>
-          : <GraphicEmpty title={asking ? '正在整理答案' : '等待你的问题'} description="已完成 AI 索引的文件会参与回答。" />}
+          : <GraphicEmpty title={asking ? '正在整理答案' : '等待你的问题'} />}
       </ResultSection>
     </Workspace>
   </ProductPage>;

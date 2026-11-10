@@ -25,6 +25,11 @@ test('switches filtered tabs, replaces pages, and navigates back with the correc
     .mockResolvedValueOnce({ items: [share('revoked', { status: 'revoked' })], page: {} });
   const view = show();
   expect(await screen.findByText('one.pdf')).toBeInTheDocument();
+  expect(screen.queryByRole('columnheader', { name: '操作' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /查\s*看|刷\s*新/ })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '修改有效期' }));
+  expect(await screen.findByRole('dialog')).toHaveTextContent('修改分享有效期');
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /取\s*消/ }));
   expect(listShares).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'active', limit: 10, cursor: '' }));
   expect(screen.getByRole('button', { name: '上一页' })).toBeDisabled();
   fireEvent.click(screen.getByRole('button', { name: '下一页' }));
@@ -38,11 +43,9 @@ test('switches filtered tabs, replaces pages, and navigates back with the correc
   expect(await screen.findByText('expired.pdf')).toBeInTheDocument();
   expect(listShares).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'expired', cursor: '' }));
   expect(screen.queryByRole('button', { name: '修改有效期' })).not.toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: '提前撤销' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '取消分享' })).not.toBeInTheDocument();
   const row = screen.getByRole('row', { name: /expired.pdf/ });
-  fireEvent.click(within(row).getByRole('button', { name: /查\s*看/ }));
-  expect(await screen.findByText('分享详情')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: /关\s*闭/ }));
+  expect(within(row).queryByRole('button')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('tab', { name: '分享撤销' }));
   expect(await screen.findByText('revoked.pdf')).toBeInTheDocument();
   expect(listShares).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'revoked', cursor: '' }));
@@ -51,17 +54,33 @@ test('switches filtered tabs, replaces pages, and navigates back with the correc
   view.unmount(); expect(signal.aborted).toBe(true);
 });
 
-test('requires confirmation before revoking an active share and refreshes the list', async () => {
+test('revokes immediately without a dialog, ignores repeated clicks, and refreshes the list', async () => {
+  let finish;
   listShares.mockResolvedValueOnce({ items: [share('one')], page: {} }).mockResolvedValue({ items: [], page: {} });
-  revokeShare.mockResolvedValue(null);
+  revokeShare.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
   show();
   const row = await screen.findByRole('row', { name: /one.pdf/ });
-  fireEvent.click(within(row).getByRole('button', { name: '提前撤销' }));
-  const dialog = within(await screen.findByRole('dialog'));
-  expect(revokeShare).not.toHaveBeenCalled();
-  fireEvent.click(dialog.getByRole('button', { name: '撤销分享' }));
+  const cancel = within(row).getByRole('button', { name: '取消分享' });
+  fireEvent.click(cancel);
+  fireEvent.click(cancel);
   await waitFor(() => expect(revokeShare).toHaveBeenCalledWith('one'));
+  expect(revokeShare).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(within(row).getByRole('button', { name: '修改有效期' })).toBeDisabled();
+  finish(null);
   expect(await screen.findByText('暂无有效分享')).toBeInTheDocument();
+});
+
+test('recovers from a failed cancellation and allows retrying the same share', async () => {
+  listShares.mockResolvedValue({ items: [share('one')], page: {} });
+  revokeShare.mockRejectedValueOnce(new Error('网络连接失败')).mockResolvedValueOnce(null);
+  show();
+  fireEvent.click(await screen.findByRole('button', { name: '取消分享' }));
+  expect(await screen.findByText('网络连接失败')).toBeInTheDocument();
+  await waitFor(() => expect(listShares).toHaveBeenCalledTimes(2));
+  fireEvent.click(await screen.findByRole('button', { name: '取消分享' }));
+  await waitFor(() => expect(revokeShare).toHaveBeenCalledTimes(2));
+  expect(await screen.findByText('分享已取消')).toBeInTheDocument();
 });
 
 test('ignores a late response from a previously selected tab', async () => {
@@ -88,7 +107,7 @@ test('shows a recoverable list error without informational blue alerts', async (
 });
 
 
-test('deleted source history has its own tab and only offers viewing', async () => {
+test('deleted source history shows only the filename and type without action buttons', async () => {
   listShares.mockResolvedValueOnce({ items: [], page: {} }).mockResolvedValueOnce({
     items: [share('history', { status: 'source_deleted', source_deleted_at: '2026-01-01', revoked_at: '2026-01-01', file_available: false, mime_type: 'application/pdf' })], page: {},
   });
@@ -98,7 +117,6 @@ test('deleted source history has its own tab and only offers viewing', async () 
   const row = await screen.findByRole('row', { name: /history.pdf/ });
   expect(listShares).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'source_deleted', limit: 10 }));
   expect(within(row).getByText('PDF')).toBeInTheDocument();
-  expect(within(row).getAllByRole('button')).toHaveLength(1);
-  expect(within(row).getByRole('button', { name: /查\s*看/ })).toBeInTheDocument();
+  expect(within(row).queryByRole('button')).not.toBeInTheDocument();
   expect(shareStatus(share('both', { revoked_at: '2026-01-01', source_deleted_at: '2026-01-01' }))).toBe('source_deleted');
 });

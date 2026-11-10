@@ -17,9 +17,9 @@ const Header = styled.header`
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 24px;
   align-items: center;
-  min-height: 104px;
-  margin-bottom: 28px;
-  padding: 12px 0 24px;
+  min-height: ${({ $hasDescription }) => $hasDescription ? '104px' : '80px'};
+  margin-bottom: ${({ $hasDescription }) => $hasDescription ? '28px' : '24px'};
+  padding: 12px 0 20px;
   border-bottom: 1px solid var(--divider);
 
   @media (max-width: 620px) {
@@ -207,14 +207,14 @@ const EmptyMark = styled.div`
 `;
 
 const EmptyTitle = styled.h3`
-  margin: 0 0 5px;
+  margin: 0;
   font-family: var(--body-font);
   font-size: 16px;
   font-weight: 600;
 `;
 
 const EmptyCopy = styled.p`
-  margin: 0;
+  margin: 5px 0 0;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.55;
@@ -248,7 +248,7 @@ const Toolbar = styled.div`
   }
   .toolbar-search .ant-input-affix-wrapper-focused {
     border-color: #292926;
-    box-shadow: 0 0 0 3px rgba(198, 255, 0, 0.18);
+    box-shadow: 0 0 0 3px rgba(24, 24, 22, 0.1);
   }
   .toolbar-filters { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
 
@@ -310,7 +310,7 @@ export const ProductPage = ({ accent = 'var(--lime)', children, className, onDra
 };
 
 export const PageHeader = ({ title, description, count, action }) => (
-  <Header className="page-reveal">
+  <Header className="page-reveal" $hasDescription={Boolean(description)}>
     <HeaderCopy>
       <TitleRow><AccentDot aria-hidden="true" /><Title>{title}</Title></TitleRow>
       {description && <Description>{description}</Description>}
@@ -429,7 +429,7 @@ export const FilePreview = ({ file, width = '42px', height = '36px' }) => {
 export const GraphicEmpty = ({ title, description, action }) => (
   <EmptyWrap className="page-reveal">
     <EmptyMark aria-hidden="true"><InboxOutlined /></EmptyMark>
-    <div><EmptyTitle>{title}</EmptyTitle><EmptyCopy>{description}</EmptyCopy></div>
+    <div><EmptyTitle>{title}</EmptyTitle>{description && <EmptyCopy>{description}</EmptyCopy>}</div>
     {action && <EmptyAction>{action}</EmptyAction>}
   </EmptyWrap>
 );

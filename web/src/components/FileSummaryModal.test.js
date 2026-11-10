@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { App } from 'antd';
 import FileSummaryModal, { AI_SUMMARY_LIMIT, truncateSummary } from './FileSummaryModal';
 import { getFileAI } from '../services/ai';
@@ -16,13 +16,20 @@ test('loads and displays a bounded AI summary', async () => {
   expect(Array.from(truncateSummary(longSummary))).toHaveLength(AI_SUMMARY_LIMIT);
 });
 
-test('offers index management when the summary is missing', async () => {
+test('shows a plain unavailable message without index management when the summary is missing', async () => {
   getFileAI.mockRejectedValue({ status: 404 });
-  const onManageIndex = jest.fn();
 
-  render(<App><FileSummaryModal file={{ id: 'file-2', name: '记录.txt' }} open onClose={jest.fn()} onManageIndex={onManageIndex} /></App>);
+  render(<App><FileSummaryModal file={{ id: 'file-2', name: '记录.txt' }} open onClose={jest.fn()} /></App>);
 
-  expect(await screen.findByText('该文档还没有建立 AI 摘要。')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: '管理索引' }));
-  expect(onManageIndex).toHaveBeenCalledWith({ id: 'file-2', name: '记录.txt' });
+  expect(await screen.findByText('暂时无法查看AI摘要')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '管理索引' })).not.toBeInTheDocument();
+});
+
+test.each(['failed', 'unsupported', 'pending', 'processing', 'indexed'])('unavailable %s summaries do not expose index or provider details', async status => {
+  getFileAI.mockResolvedValue({ status, summary: '', error_code: 'ai.vision.rejected' });
+  render(<App><FileSummaryModal file={{ id: 'file-3', name: '记录.txt' }} open onClose={jest.fn()} /></App>);
+
+  expect(await screen.findByText('暂时无法查看AI摘要')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '管理索引' })).not.toBeInTheDocument();
+  expect(screen.queryByText(/ai\.vision|重建索引|构建失败|索引队列/)).not.toBeInTheDocument();
 });

@@ -5,7 +5,6 @@ import styled from '@emotion/styled';
 import { getBreadcrumb, getChildren, moveFile } from '../services/drive';
 
 const Picker = styled.div`display: grid; gap: 14px; padding-top: 4px;`;
-const Intro = styled.p`margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6;`;
 const TreeShell = styled.div`
   min-height: 220px;
   max-height: min(46vh, 360px);
@@ -196,7 +195,6 @@ const MoveFileModal = ({ open, file, root, currentFolderId, onCancel, onMoved })
       width={560}
     >
       <Picker>
-        <Intro>选择目标目录。移动只改变文件所在位置，不会重新上传或修改文件内容。</Intro>
         {browseError && <Alert type="error" showIcon message={browseError} action={<Button size="small" onClick={loadRoot}>重试</Button>} />}
         <TreeShell>
           {loading

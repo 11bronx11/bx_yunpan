@@ -68,7 +68,7 @@ const ShareForm = ({ file, share, onCancel, onSaved }) => {
           { value: '1', label: '1 天' }, { value: '7', label: '7 天' }, { value: '30', label: '30 天' },
           { value: 'forever', label: '长期有效' }, { value: 'custom', label: '自定义时间' },
         ]} />
-        {period === 'custom' && <DatePicker aria-label="过期时间" showTime value={date} onChange={setDate} style={{ width: '100%' }} />}
+        {period === 'custom' && <DatePicker aria-label="过期时间" popupClassName="share-expiry-popup" showTime value={date} onChange={setDate} style={{ width: '100%' }} />}
         {share && <div>所选天数从本次保存起重新计算。</div>}
         </>}
       </>}

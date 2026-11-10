@@ -28,10 +28,10 @@ test('renders the authentication poster and switches to registration', async () 
   window.scrollTo = jest.fn();
   render(<App />);
   expect(await screen.findByRole('heading', { name: /your files/i })).toBeInTheDocument();
-  expect(screen.getByRole('heading', { name: /welcome back/i })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '欢迎回来' })).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: /create account/i }));
 
-  expect(screen.getByRole('heading', { name: /create your space/i })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '创建你的账户' })).toBeInTheDocument();
   expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
 });
