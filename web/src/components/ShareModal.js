@@ -1,5 +1,5 @@
-import React, { useRef, useState } from 'react';
-import { Alert, App, Button, DatePicker, Input, Modal, Select, Space } from 'antd';
+import React, { useEffect, useRef, useState } from 'react';
+import { App, Button, DatePicker, Input, Modal, Select, Space } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import { createShare, updateShare } from '../services/share';
 
@@ -13,9 +13,18 @@ const ShareForm = ({ file, share, onCancel, onSaved }) => {
   const [date, setDate] = useState(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
+  const [now, setNow] = useState(Date.now());
   const pending = useRef(false);
+  useEffect(() => {
+    if (!share?.expires_at) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [share?.expires_at]);
+  const inactive = at => share && (share.source_deleted_at || share.revoked_at || share.file_available === false || ['expired', 'revoked', 'source_deleted'].includes(share.status) || (share.expires_at && new Date(share.expires_at).valueOf() <= at));
+  const readOnly = inactive(now);
   const save = async () => {
     if (pending.current) return;
+    if (inactive(Date.now())) { message.warning('分享已失效，仅可查看'); onSaved?.(); onCancel(); return; }
     let expiresAt = null;
     if (period === 'custom') {
       if (!date || date.valueOf() <= Date.now()) { message.warning('请选择未来的过期时间'); return; }
@@ -35,7 +44,7 @@ const ShareForm = ({ file, share, onCancel, onSaved }) => {
       }
     } catch (error) {
       message.error(error.message || '分享操作失败');
-      if (error.code === 'share.version_conflict') { onSaved?.(); onCancel(); }
+      if (['share.version_conflict', 'share.inactive', 'share.not_found'].includes(error.code)) { onSaved?.(); onCancel(); }
     } finally { pending.current = false; setBusy(false); }
   };
   const copy = async () => {
@@ -44,22 +53,24 @@ const ShareForm = ({ file, share, onCancel, onSaved }) => {
   };
   return <Modal open title={result ? '分享已创建' : share ? '修改分享有效期' : '创建分享'} onCancel={onCancel}
     maskClosable={!busy} closable={!busy} keyboard={!busy}
-    footer={result ? <Button onClick={onCancel}>关闭</Button> : <Space><Button disabled={busy} onClick={onCancel}>取消</Button><Button type="primary" loading={busy} onClick={save}>{share ? '保存' : '创建分享'}</Button></Space>}>
+    footer={result || readOnly ? <Button onClick={onCancel}>关闭</Button> : <Space><Button disabled={busy} onClick={onCancel}>取消</Button><Button type="primary" loading={busy} onClick={save}>{share ? '保存' : '创建分享'}</Button></Space>}>
     <Space direction="vertical" size={16} style={{ width: '100%', paddingTop: 8 }}>
       <strong style={{ overflowWrap: 'anywhere' }}>{file?.name || share?.file_name}</strong>
       {result ? <>
         <Input aria-label="分享 Key" readOnly value={result.share_key} addonAfter={<Button aria-label="复制分享 Key" type="text" icon={<CopyOutlined />} onClick={copy} />} />
         <div>有效期：{formatShareExpiry(result.share?.expires_at)}</div>
-        <Alert type="info" showIcon message="请保存分享 Key，关闭后无法再次查看。可在“我的分享”中修改有效期或取消分享。" />
+        <div>请保存分享 Key，关闭后无法再次查看。</div>
       </> : <>
         {share && <div>当前有效期：{formatShareExpiry(share.expires_at)}</div>}
+        {readOnly ? <div>分享已失效，仅可查看。</div> : <>
         <label htmlFor="share-period">有效期</label>
         <Select id="share-period" aria-label="有效期" value={period} onChange={setPeriod} style={{ width: '100%' }} options={[
           { value: '1', label: '1 天' }, { value: '7', label: '7 天' }, { value: '30', label: '30 天' },
           { value: 'forever', label: '长期有效' }, { value: 'custom', label: '自定义时间' },
         ]} />
         {period === 'custom' && <DatePicker aria-label="过期时间" showTime value={date} onChange={setDate} style={{ width: '100%' }} />}
-        <Alert type="info" showIcon message={share ? '新有效期从本次保存起计算。已撤销的分享不能恢复。' : '持有 Key 的用户可导入文件。取消或过期会阻止后续访问，已经导入的文件不受影响。'} />
+        {share && <div>所选天数从本次保存起重新计算。</div>}
+        </>}
       </>}
     </Space>
   </Modal>;

@@ -65,8 +65,17 @@ func (m *FileManager) Delete(ctx context.Context, ownerID, fileID uuid.UUID, ver
 	var folderID uuid.UUID
 	err := m.drive.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var entry FileEntry
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ? AND deleted_at IS NULL", fileID, ownerID).First(&entry).Error; err != nil {
-			return ErrNotFound
+		// Lock order shared with sharing: source entry, then share rows, then
+		// quota, owner epochs, object. Include tombstones for idempotent retries.
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ?", fileID, ownerID).First(&entry).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return ErrNotFound
+			}
+			return err
+		}
+		if entry.DeletedAt != nil {
+			folderID = entry.FolderID
+			return nil
 		}
 		if entry.Version != version {
 			return ErrConflict
@@ -80,15 +89,25 @@ func (m *FileManager) Delete(ctx context.Context, ownerID, fileID uuid.UUID, ver
 		if err := tx.Model(&entry).Updates(map[string]any{"deleted_at": now, "version": gorm.Expr("version + 1"), "updated_at": now}).Error; err != nil {
 			return err
 		}
+		// Mark every historical share in the same transaction as the source
+		// tombstone. Snapshot metadata stays intact; only the first delete writes.
+		if err := tx.Exec(`UPDATE shares SET source_deleted_at = ?,
+			version = version + 1, updated_at = ?
+			WHERE file_entry_id = ? AND owner_id = ? AND source_deleted_at IS NULL`,
+			now, now, fileID, ownerID).Error; err != nil {
+			return err
+		}
+		// Import/upload take the owner's quota row before its epoch row.
+		// Use that same order when deleting another file for this owner.
+		if err := m.quota.RemoveLogicalUsage(tx, ownerID, object.SizeBytes); err != nil {
+			return err
+		}
 		epoch, err := ownerepoch.BumpContent(tx, ownerID)
 		if err != nil {
 			return err
 		}
 		remaining, err := m.objects.ReleaseReference(tx, entry.ObjectID)
 		if err != nil {
-			return err
-		}
-		if err := m.quota.RemoveLogicalUsage(tx, ownerID, object.SizeBytes); err != nil {
 			return err
 		}
 		if err := outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{

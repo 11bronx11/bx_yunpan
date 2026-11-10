@@ -1,0 +1,9 @@
+# Layer after the existing fullchain and sharing overrides. Only the API,
+# migration runner, and Web need new images for this schema/API change.
+services:
+  migrate:
+    image: bx-yunpan-migrate:${SHARING_LIFECYCLE_IMAGE_TAG:-sharing-lifecycle-20261113}
+  api:
+    image: bx-yunpan-api:${SHARING_LIFECYCLE_IMAGE_TAG:-sharing-lifecycle-20261113}
+  web:
+    image: bx-yunpan-web:${SHARING_LIFECYCLE_IMAGE_TAG:-sharing-lifecycle-20261113}

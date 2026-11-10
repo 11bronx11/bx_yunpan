@@ -540,11 +540,24 @@ paths:
   /api/v1/shares:
     get:
       tags: [Shares]
-      summary: List shares created by the current user
+      summary: List shares by lifecycle status (10 per page by default)
       operationId: listShares
       parameters:
+        - name: status
+          in: query
+          description: Lifecycle states are disjoint; source deletion takes precedence. Cursors are bound to this filter.
+          schema:
+            type: string
+            enum: [active, expired, revoked, source_deleted]
+            default: active
         - $ref: '#/components/parameters/Cursor'
-        - $ref: '#/components/parameters/Limit'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
       responses:
         '200':
           description: Shares
@@ -591,18 +604,20 @@ paths:
           $ref: '#/components/responses/NotFound'
     delete:
       tags: [Shares]
-      summary: Revoke a share
+      summary: Revoke an active share; inactive shares are read-only
       operationId: revokeShare
       parameters:
         - $ref: '#/components/parameters/ShareId'
       responses:
         '204':
           description: Share revoked
+        '409':
+          description: Share is already expired, revoked, or its source is deleted (share.inactive)
         '404':
           $ref: '#/components/responses/NotFound'
     patch:
       tags: [Shares]
-      summary: Update share expiry; revoked shares cannot be restored
+      summary: Update active share expiry; expired and revoked shares are read-only
       operationId: updateShare
       parameters:
         - $ref: '#/components/parameters/ShareId'
@@ -1482,16 +1497,15 @@ components:
           $ref: '#/components/schemas/UUID'
         file_name:
           type: string
-        size_bytes:
-          type: integer
-          format: int64
         mime_type:
           type: string
+        source_deleted_at:
+          $ref: '#/components/schemas/NullableTimestamp'
         file_available:
           type: boolean
         status:
           type: string
-          enum: [active, expired, revoked, unavailable]
+          enum: [active, expired, revoked, source_deleted]
         version:
           type: integer
           format: int64

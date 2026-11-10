@@ -33,15 +33,18 @@ var (
 )
 
 type Share struct {
-	ID          uuid.UUID `gorm:"type:uuid;primaryKey"`
-	OwnerID     uuid.UUID `gorm:"type:uuid"`
-	FileEntryID uuid.UUID `gorm:"type:uuid"`
-	KeyHash     []byte
-	ExpiresAt   *time.Time
-	RevokedAt   *time.Time
-	Version     int64
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID              uuid.UUID `gorm:"type:uuid;primaryKey"`
+	OwnerID         uuid.UUID `gorm:"type:uuid"`
+	FileEntryID     uuid.UUID `gorm:"type:uuid"`
+	FileName        string
+	MimeType        string
+	SourceDeletedAt *time.Time
+	KeyHash         []byte
+	ExpiresAt       *time.Time
+	RevokedAt       *time.Time
+	Version         int64
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 func (Share) TableName() string { return "shares" }
@@ -80,9 +83,6 @@ func (s *Service) Create(ownerID, fileID uuid.UUID, expiresAt *time.Time) (Share
 }
 
 func (s *Service) CreateWithContext(ctx context.Context, ownerID, fileID uuid.UUID, expiresAt *time.Time) (Share, string, error) {
-	if expiresAt != nil && !expiresAt.After(time.Now().UTC()) {
-		return Share{}, "", ErrInvalidInput
-	}
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
 		return Share{}, "", err
@@ -98,11 +98,25 @@ func (s *Service) CreateWithContext(ctx context.Context, ownerID, fileID uuid.UU
 		if err := lockSource(tx, ownerID, fileID); err != nil {
 			return err
 		}
-		if err := tx.Create(&share).Error; err != nil {
+		var snapshot struct{ FileName, MimeType string }
+		if err := tx.Raw(`SELECT e.name AS file_name, o.mime_type FROM file_entries e
+            JOIN file_objects o ON o.id = e.object_id WHERE e.id = ? AND e.owner_id = ?`, fileID, ownerID).
+			Scan(&snapshot).Error; err != nil {
 			return err
 		}
+		share.FileName, share.MimeType = snapshot.FileName, snapshot.MimeType
 		epoch, err := ownerepoch.BumpACL(tx, ownerID)
 		if err != nil {
+			return err
+		}
+		now, err := databaseNow(tx)
+		if err != nil {
+			return err
+		}
+		if expiresAt != nil && !expiresAt.After(now) {
+			return ErrInvalidInput
+		}
+		if err := tx.Create(&share).Error; err != nil {
 			return err
 		}
 		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
@@ -135,20 +149,27 @@ func (s *Service) Revoke(ownerID, shareID uuid.UUID) error {
 
 func (s *Service) RevokeWithContext(ctx context.Context, ownerID, shareID uuid.UUID) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var share Share
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ?", shareID, ownerID).First(&share).Error; err != nil {
-			return lookupError(err)
-		}
-		if share.RevokedAt != nil {
-			return nil
-		}
-		now := time.Now().UTC()
-		if err := tx.Model(&share).Updates(map[string]any{"revoked_at": now, "version": gorm.Expr("version + 1"), "updated_at": now}).Error; err != nil {
+		share, err := lockShareForMutation(tx, ownerID, shareID)
+		if err != nil {
 			return err
 		}
 		epoch, err := ownerepoch.BumpACL(tx, ownerID)
 		if err != nil {
 			return err
+		}
+		now, err := databaseNow(tx)
+		if err != nil {
+			return err
+		}
+		if validateShareAt(share, now) != nil {
+			return ErrInactive
+		}
+		result := tx.Model(&share).Where("source_deleted_at IS NULL AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > clock_timestamp())").Updates(map[string]any{"revoked_at": now, "version": gorm.Expr("version + 1"), "updated_at": now})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrInactive
 		}
 		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
 			EventType: eventcontract.EventShareRevokedV1, AggregateID: share.ID, AggregateVersion: share.Version + 1,
@@ -158,21 +179,22 @@ func (s *Service) RevokeWithContext(ctx context.Context, ownerID, shareID uuid.U
 }
 
 func (s *Service) Resolve(key string) (Share, drive.FileView, string, time.Time, error) {
+	return s.ResolveWithContext(context.Background(), key)
+}
+
+func (s *Service) ResolveWithContext(ctx context.Context, key string) (Share, drive.FileView, string, time.Time, error) {
 	if len(key) != 22 {
 		return Share{}, drive.FileView{}, "", time.Time{}, ErrNotFound
 	}
-	var share Share
-	if err := s.db.Where("key_hash = ?", s.keyHash(key)).First(&share).Error; err != nil {
-		return Share{}, drive.FileView{}, "", time.Time{}, lookupError(err)
-	}
-	if err := validateShare(share); err != nil {
+	share, now, err := s.authorize(ctx, "key_hash = ?", s.keyHash(key), 0)
+	if err != nil {
 		return Share{}, drive.FileView{}, "", time.Time{}, err
 	}
 	file, err := s.drive.File(share.OwnerID, share.FileEntryID)
 	if err != nil {
 		return Share{}, drive.FileView{}, "", time.Time{}, ErrNotFound
 	}
-	expiresAt := time.Now().UTC().Add(s.accessTTL)
+	expiresAt := now.Add(s.accessTTL)
 	if share.ExpiresAt != nil && share.ExpiresAt.Before(expiresAt) {
 		expiresAt = *share.ExpiresAt
 	}
@@ -181,18 +203,19 @@ func (s *Service) Resolve(key string) (Share, drive.FileView, string, time.Time,
 }
 
 func (s *Service) Access(raw string) (Share, drive.FileView, error) {
+	return s.AccessWithContext(context.Background(), raw)
+}
+
+func (s *Service) AccessWithContext(ctx context.Context, raw string) (Share, drive.FileView, error) {
 	if len(raw) == 0 || len(raw) > 1024 {
 		return Share{}, drive.FileView{}, ErrNotFound
 	}
-	shareID, err := s.verifyAccess(raw)
+	claims, err := s.verifyAccess(raw)
 	if err != nil {
 		return Share{}, drive.FileView{}, ErrNotFound
 	}
-	var share Share
-	if err := s.db.First(&share, "id = ?", shareID).Error; err != nil {
-		return Share{}, drive.FileView{}, lookupError(err)
-	}
-	if err := validateShare(share); err != nil {
+	share, _, err := s.authorize(ctx, "id = ?", claims.ShareID, claims.ExpiresAt)
+	if err != nil {
 		return Share{}, drive.FileView{}, err
 	}
 	file, err := s.drive.File(share.OwnerID, share.FileEntryID)
@@ -204,7 +227,7 @@ func (s *Service) Access(raw string) (Share, drive.FileView, error) {
 
 // Import 需要 ctx：事务里写 Outbox 时要注入当前 span context。
 func (s *Service) Import(ctx context.Context, userID, shareID, targetFolderID uuid.UUID, idempotencyKey, accessToken string) (drive.FileView, error) {
-	share, source, err := s.Access(accessToken)
+	share, source, err := s.AccessWithContext(ctx, accessToken)
 	if err != nil {
 		return drive.FileView{}, err
 	}
@@ -224,8 +247,24 @@ func (s *Service) Import(ctx context.Context, userID, shareID, targetFolderID uu
 		if err := dblock.Transaction(tx, lockKey); err != nil {
 			return err
 		}
+		var sourceEntry drive.FileEntry
+		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ? AND owner_id = ? AND deleted_at IS NULL", share.FileEntryID, share.OwnerID).First(&sourceEntry).Error; err != nil {
+			return lookupError(err)
+		}
+		var current Share
+		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&current, "id = ?", shareID).Error; err != nil {
+			return lookupError(err)
+		}
+		now, err := databaseNow(tx)
+		if err != nil {
+			return err
+		}
+		claims, err := s.verifyAccess(accessToken)
+		if err != nil || now.Unix() >= claims.ExpiresAt || validateShareAt(current, now) != nil {
+			return ErrNotFound
+		}
 		var prior Import
-		err := tx.Where("user_id = ? AND share_id = ? AND idempotency_key = ?", userID, shareID, idempotencyKey).Take(&prior).Error
+		err = tx.Where("user_id = ? AND share_id = ? AND idempotency_key = ?", userID, shareID, idempotencyKey).Take(&prior).Error
 		if err == nil {
 			if prior.TargetFolderID != targetFolderID {
 				return ErrConflict
@@ -235,17 +274,6 @@ func (s *Service) Import(ctx context.Context, userID, shareID, targetFolderID uu
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
-		}
-		var current Share
-		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&current, "id = ?", shareID).Error; err != nil {
-			return lookupError(err)
-		}
-		if err := validateShare(current); err != nil {
-			return err
-		}
-		var sourceEntry drive.FileEntry
-		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ? AND owner_id = ? AND deleted_at IS NULL", share.FileEntryID, share.OwnerID).First(&sourceEntry).Error; err != nil {
-			return lookupError(err)
 		}
 		if err := s.quota.AddLogicalUsage(tx, userID, object.SizeBytes); err != nil {
 			if errors.Is(err, identity.ErrConflict) {
@@ -270,7 +298,7 @@ func (s *Service) Import(ctx context.Context, userID, shareID, targetFolderID uu
 			return err
 		}
 		if err := outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
-			EventType: eventcontract.EventShareImportedV1, AggregateID: share.ID, AggregateVersion: share.Version,
+			EventType: eventcontract.EventShareImportedV1, AggregateID: share.ID, AggregateVersion: current.Version,
 			Producer: "core-api", Payload: eventcontract.ShareImportedV1{OwnerID: userID, ShareID: share.ID, FileEntryID: entry.ID, ObjectID: object.ID, ContentEpoch: epoch.ContentEpoch},
 		}); err != nil {
 			return err
@@ -308,32 +336,61 @@ func (s *Service) signAccess(shareID uuid.UUID, expiresAt time.Time) (string, er
 	return encoded + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
-func (s *Service) verifyAccess(raw string) (uuid.UUID, error) {
+func (s *Service) verifyAccess(raw string) (accessClaims, error) {
 	parts := strings.Split(raw, ".")
 	if len(parts) != 2 {
-		return uuid.Nil, ErrNotFound
+		return accessClaims{}, ErrNotFound
 	}
 	mac := hmac.New(sha256.New, s.secret)
 	mac.Write([]byte(parts[0]))
 	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil || !hmac.Equal(signature, mac.Sum(nil)) {
-		return uuid.Nil, ErrNotFound
+		return accessClaims{}, ErrNotFound
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return uuid.Nil, ErrNotFound
+		return accessClaims{}, ErrNotFound
 	}
 	var claims accessClaims
-	if json.Unmarshal(payload, &claims) != nil || time.Now().UTC().Unix() >= claims.ExpiresAt {
-		return uuid.Nil, ErrNotFound
+	if json.Unmarshal(payload, &claims) != nil || claims.ShareID == uuid.Nil || claims.ExpiresAt <= 0 {
+		return accessClaims{}, ErrNotFound
 	}
-	return claims.ShareID, nil
+	return claims, nil
 }
 
-func validateShare(share Share) error {
-	now := time.Now().UTC()
-	if share.RevokedAt != nil || (share.ExpiresAt != nil && !share.ExpiresAt.After(now)) {
+func validateShareAt(share Share, now time.Time) error {
+	if share.SourceDeletedAt != nil || share.RevokedAt != nil || (share.ExpiresAt != nil && !share.ExpiresAt.After(now)) {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// clock_timestamp advances even while a transaction waits for a row lock.
+// PostgreSQL is the authority for deadlines across API replicas.
+func databaseNow(tx *gorm.DB) (time.Time, error) {
+	var now time.Time
+	err := tx.Raw("SELECT clock_timestamp()").Scan(&now).Error
+	return now, err
+}
+
+// Authorization and edits serialize on the share row. The lock ends before
+// streaming: an authorized transfer may finish after expiry or revocation.
+func (s *Service) authorize(ctx context.Context, lookup string, value any, tokenExpiry int64) (Share, time.Time, error) {
+	var share Share
+	var now time.Time
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where(lookup, value).First(&share).Error; err != nil {
+			return lookupError(err)
+		}
+		var err error
+		now, err = databaseNow(tx)
+		if err != nil {
+			return err
+		}
+		if tokenExpiry != 0 && now.Unix() >= tokenExpiry {
+			return ErrNotFound
+		}
+		return validateShareAt(share, now)
+	})
+	return share, now, err
 }

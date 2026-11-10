@@ -24,6 +24,7 @@ const errorMessages = {
   'share.not_found': '分享不存在、已失效或已被撤销',
   'share.invalid_input': '分享信息不符合要求，请检查后重试',
   'share.conflict': '网盘中已存在该文件，无法重复导入',
+  'share.inactive': '分享已失效，仅可查看，请刷新列表',
   'share.version_conflict': '分享已被其他操作修改，请刷新后重试',
   'ai.not_found': '没有找到对应的 AI 处理结果',
   'ai.invalid_request': '检索或提问内容不符合要求',

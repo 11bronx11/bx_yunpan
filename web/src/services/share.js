@@ -1,7 +1,7 @@
 import { api } from './api';
 
-export const listShares = ({ cursor = '', limit = 50, signal } = {}) => {
-  const params = new URLSearchParams({ limit: String(limit) });
+export const listShares = ({ status = 'active', cursor = '', limit = 10, signal } = {}) => {
+  const params = new URLSearchParams({ status, limit: String(limit) });
   if (cursor) params.set('cursor', cursor);
   return api(`/api/v1/shares?${params}`, { signal });
 };

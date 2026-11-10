@@ -113,19 +113,19 @@ func (e FolderType) Valid() bool {
 
 // Defines values for HealthStatus.
 const (
-	HealthStatusDegraded    HealthStatus = "degraded"
-	HealthStatusOk          HealthStatus = "ok"
-	HealthStatusUnavailable HealthStatus = "unavailable"
+	Degraded    HealthStatus = "degraded"
+	Ok          HealthStatus = "ok"
+	Unavailable HealthStatus = "unavailable"
 )
 
 // Valid indicates whether the value is a known member of the HealthStatus enum.
 func (e HealthStatus) Valid() bool {
 	switch e {
-	case HealthStatusDegraded:
+	case Degraded:
 		return true
-	case HealthStatusOk:
+	case Ok:
 		return true
-	case HealthStatusUnavailable:
+	case Unavailable:
 		return true
 	default:
 		return false
@@ -239,10 +239,10 @@ func (e SearchRequestMode) Valid() bool {
 
 // Defines values for ShareStatus.
 const (
-	ShareStatusActive      ShareStatus = "active"
-	ShareStatusExpired     ShareStatus = "expired"
-	ShareStatusRevoked     ShareStatus = "revoked"
-	ShareStatusUnavailable ShareStatus = "unavailable"
+	ShareStatusActive        ShareStatus = "active"
+	ShareStatusExpired       ShareStatus = "expired"
+	ShareStatusRevoked       ShareStatus = "revoked"
+	ShareStatusSourceDeleted ShareStatus = "source_deleted"
 )
 
 // Valid indicates whether the value is a known member of the ShareStatus enum.
@@ -254,7 +254,7 @@ func (e ShareStatus) Valid() bool {
 		return true
 	case ShareStatusRevoked:
 		return true
-	case ShareStatusUnavailable:
+	case ShareStatusSourceDeleted:
 		return true
 	default:
 		return false
@@ -390,6 +390,30 @@ const (
 func (e DownloadPublicShareParamsPreview) Valid() bool {
 	switch e {
 	case N1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListSharesParamsStatus.
+const (
+	ListSharesParamsStatusActive        ListSharesParamsStatus = "active"
+	ListSharesParamsStatusExpired       ListSharesParamsStatus = "expired"
+	ListSharesParamsStatusRevoked       ListSharesParamsStatus = "revoked"
+	ListSharesParamsStatusSourceDeleted ListSharesParamsStatus = "source_deleted"
+)
+
+// Valid indicates whether the value is a known member of the ListSharesParamsStatus enum.
+func (e ListSharesParamsStatus) Valid() bool {
+	switch e {
+	case ListSharesParamsStatusActive:
+		return true
+	case ListSharesParamsStatusExpired:
+		return true
+	case ListSharesParamsStatusRevoked:
+		return true
+	case ListSharesParamsStatusSourceDeleted:
 		return true
 	default:
 		return false
@@ -800,12 +824,12 @@ type Share struct {
 	FileName *string `json:"file_name,omitempty"`
 
 	// Id Example: 0198a1f0-7b2a-7000-8000-000000000001
-	Id        UUID               `json:"id"`
-	MimeType  *string            `json:"mime_type,omitempty"`
-	RevokedAt *NullableTimestamp `json:"revoked_at,omitempty"`
-	SizeBytes *int64             `json:"size_bytes,omitempty"`
-	Status    *ShareStatus       `json:"status,omitempty"`
-	Version   int64              `json:"version"`
+	Id              UUID               `json:"id"`
+	MimeType        *string            `json:"mime_type,omitempty"`
+	RevokedAt       *NullableTimestamp `json:"revoked_at,omitempty"`
+	SourceDeletedAt *NullableTimestamp `json:"source_deleted_at,omitempty"`
+	Status          *ShareStatus       `json:"status,omitempty"`
+	Version         int64              `json:"version"`
 }
 
 // ShareStatus defines model for Share.Status.
@@ -1026,9 +1050,14 @@ type DownloadPublicShareParamsPreview string
 
 // ListSharesParams defines parameters for ListShares.
 type ListSharesParams struct {
-	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
-	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+	// Status Lifecycle states are disjoint; source deletion takes precedence. Cursors are bound to this filter.
+	Status *ListSharesParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+	Cursor *Cursor                 `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int                    `form:"limit,omitempty" json:"limit,omitempty"`
 }
+
+// ListSharesParamsStatus defines parameters for ListShares.
+type ListSharesParamsStatus string
 
 // ImportShareParams defines parameters for ImportShare.
 type ImportShareParams struct {

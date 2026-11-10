@@ -72,7 +72,7 @@ func (h *HTTP) create(c *gin.Context) {
 
 func (h *HTTP) list(c *gin.Context) {
 	ownerID, _ := httpapi.PrincipalID(c)
-	limit := 50
+	limit := 10
 	if raw, exists := c.GetQuery("limit"); exists {
 		var err error
 		limit, err = strconv.Atoi(raw)
@@ -81,7 +81,7 @@ func (h *HTTP) list(c *gin.Context) {
 			return
 		}
 	}
-	shares, next, err := h.service.ListPage(c.Request.Context(), ownerID, c.Query("cursor"), limit)
+	shares, next, err := h.service.ListPage(c.Request.Context(), ownerID, c.DefaultQuery("status", "active"), c.Query("cursor"), limit)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -158,7 +158,7 @@ func (h *HTTP) resolve(c *gin.Context) {
 		h.writeError(c, ErrNotFound)
 		return
 	}
-	share, file, token, expiresAt, err := h.service.Resolve(request.ShareKey)
+	share, file, token, expiresAt, err := h.service.ResolveWithContext(c.Request.Context(), request.ShareKey)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -172,7 +172,7 @@ func (h *HTTP) resolve(c *gin.Context) {
 
 func (h *HTTP) content(c *gin.Context) {
 	token := c.GetHeader("X-Share-Token")
-	share, file, err := h.service.Access(token)
+	share, file, err := h.service.AccessWithContext(c.Request.Context(), token)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -218,7 +218,7 @@ func (h *HTTP) file(c *gin.Context) {
 	if token == "" {
 		token = c.Query("access_token")
 	}
-	_, file, err := h.service.Access(token)
+	_, file, err := h.service.AccessWithContext(c.Request.Context(), token)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -284,6 +284,10 @@ func (h *HTTP) importShare(c *gin.Context) {
 }
 
 func (h *HTTP) writeError(c *gin.Context, err error) {
+	if errors.Is(err, ErrInactive) {
+		c.JSON(http.StatusConflict, httpapi.ErrorEnvelope(c, "share.inactive", "inactive shares are read-only"))
+		return
+	}
 	if errors.Is(err, ErrQuotaExceeded) {
 		c.JSON(http.StatusTooManyRequests, httpapi.ErrorEnvelope(c, "quota.exceeded", "storage quota exceeded"))
 		return
@@ -311,23 +315,14 @@ func shareResponse(share Share) gin.H {
 	return gin.H{
 		"id": share.ID, "file_id": share.FileEntryID, "expires_at": share.ExpiresAt,
 		"revoked_at": share.RevokedAt, "created_at": share.CreatedAt,
-		"version": share.Version,
+		"version": share.Version, "file_name": share.FileName, "mime_type": share.MimeType,
+		"source_deleted_at": share.SourceDeletedAt,
 	}
 }
 
 func shareViewResponse(view ShareView) gin.H {
 	result := shareResponse(view.Share)
-	status := "active"
-	switch {
-	case view.RevokedAt != nil:
-		status = "revoked"
-	case !view.FileAvailable:
-		status = "unavailable"
-	case view.ExpiresAt != nil && !view.ExpiresAt.After(time.Now().UTC()):
-		status = "expired"
-	}
-	result["file_name"], result["size_bytes"], result["mime_type"] = view.FileName, view.SizeBytes, view.MimeType
-	result["status"], result["file_available"] = status, view.FileAvailable
+	result["status"], result["file_available"] = view.Status, view.FileAvailable
 	return result
 }
 

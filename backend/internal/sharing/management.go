@@ -21,13 +21,12 @@ import (
 )
 
 var ErrVersionConflict = errors.New("share version conflict")
+var ErrInactive = errors.New("inactive shares are read-only")
 
 type ShareView struct {
 	Share
-	FileName      string
-	SizeBytes     int64
-	MimeType      string
 	FileAvailable bool
+	Status        string
 }
 
 func lookupError(err error) error {
@@ -53,11 +52,33 @@ func lockSource(tx *gorm.DB, ownerID, fileID uuid.UUID) error {
 }
 
 func viewQuery(db *gorm.DB, ownerID uuid.UUID) *gorm.DB {
-	return db.Table("shares s").Select(`s.*, COALESCE(e.name, '') AS file_name,
-		COALESCE(o.size_bytes, 0) AS size_bytes, COALESCE(o.mime_type, '') AS mime_type,
-		(e.id IS NOT NULL AND e.deleted_at IS NULL AND o.status = 'ready') AS file_available`).
-		Joins("LEFT JOIN file_entries e ON e.id = s.file_entry_id AND e.owner_id = s.owner_id").
-		Joins("LEFT JOIN file_objects o ON o.id = e.object_id").Where("s.owner_id = ?", ownerID)
+	return db.Table("shares s").Select(`s.*, (s.source_deleted_at IS NULL) AS file_available,
+		CASE WHEN s.source_deleted_at IS NOT NULL THEN 'source_deleted'
+		WHEN s.revoked_at IS NOT NULL THEN 'revoked'
+		WHEN s.expires_at <= statement_timestamp() THEN 'expired' ELSE 'active' END AS status`).
+		Where("s.owner_id = ?", ownerID)
+}
+
+// All source-dependent mutations take locks in the same order as deletion:
+// source entry first, then share. The first lookup only locates immutable IDs.
+func lockShareForMutation(tx *gorm.DB, ownerID, shareID uuid.UUID) (Share, error) {
+	var share Share
+	if err := tx.Where("id = ? AND owner_id = ?", shareID, ownerID).First(&share).Error; err != nil {
+		return Share{}, lookupError(err)
+	}
+	if share.SourceDeletedAt != nil {
+		return Share{}, ErrInactive
+	}
+	if err := lockSource(tx, ownerID, share.FileEntryID); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Share{}, ErrInactive
+		}
+		return Share{}, err
+	}
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ?", shareID, ownerID).First(&share).Error; err != nil {
+		return Share{}, lookupError(err)
+	}
+	return share, nil
 }
 
 func (s *Service) GetView(ctx context.Context, ownerID, shareID uuid.UUID) (ShareView, error) {
@@ -68,15 +89,28 @@ func (s *Service) GetView(ctx context.Context, ownerID, shareID uuid.UUID) (Shar
 
 type shareCursor struct {
 	OwnerID uuid.UUID `json:"owner"`
+	Status  string    `json:"status"`
 	Created time.Time `json:"created"`
 	ID      uuid.UUID `json:"id"`
 }
 
-func (s *Service) ListPage(ctx context.Context, ownerID uuid.UUID, cursor string, limit int) ([]ShareView, string, error) {
+func (s *Service) ListPage(ctx context.Context, ownerID uuid.UUID, status, cursor string, limit int) ([]ShareView, string, error) {
 	if limit < 1 || limit > 100 {
 		return nil, "", ErrInvalidInput
 	}
 	query := viewQuery(s.db.WithContext(ctx), ownerID)
+	switch status {
+	case "active":
+		query = query.Where("s.source_deleted_at IS NULL AND s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > statement_timestamp())")
+	case "expired":
+		query = query.Where("s.source_deleted_at IS NULL AND s.revoked_at IS NULL AND s.expires_at <= statement_timestamp()")
+	case "revoked":
+		query = query.Where("s.source_deleted_at IS NULL AND s.revoked_at IS NOT NULL")
+	case "source_deleted":
+		query = query.Where("s.source_deleted_at IS NOT NULL")
+	default:
+		return nil, "", ErrInvalidInput
+	}
 	if cursor != "" {
 		parts := strings.Split(cursor, ".")
 		if len(parts) != 2 || len(cursor) > 1024 {
@@ -87,7 +121,7 @@ func (s *Service) ListPage(ctx context.Context, ownerID uuid.UUID, cursor string
 		sig, sigErr := base64.RawURLEncoding.DecodeString(parts[1])
 		data, dataErr := base64.RawURLEncoding.DecodeString(parts[0])
 		var after shareCursor
-		if sigErr != nil || dataErr != nil || !hmac.Equal(sig, mac.Sum(nil)) || json.Unmarshal(data, &after) != nil || after.OwnerID != ownerID || after.ID == uuid.Nil || after.Created.IsZero() {
+		if sigErr != nil || dataErr != nil || !hmac.Equal(sig, mac.Sum(nil)) || json.Unmarshal(data, &after) != nil || after.OwnerID != ownerID || after.Status != status || after.ID == uuid.Nil || after.Created.IsZero() {
 			return nil, "", ErrInvalidInput
 		}
 		query = query.Where("(s.created_at, s.id) < (?, ?)", after.Created, after.ID)
@@ -100,7 +134,7 @@ func (s *Service) ListPage(ctx context.Context, ownerID uuid.UUID, cursor string
 	if len(views) > limit {
 		views = views[:limit]
 		last := views[len(views)-1]
-		data, _ := json.Marshal(shareCursor{OwnerID: ownerID, Created: last.CreatedAt, ID: last.ID})
+		data, _ := json.Marshal(shareCursor{OwnerID: ownerID, Status: status, Created: last.CreatedAt, ID: last.ID})
 		payload := base64.RawURLEncoding.EncodeToString(data)
 		mac := hmac.New(sha256.New, s.secret)
 		mac.Write([]byte("share-page:" + payload))
@@ -109,32 +143,44 @@ func (s *Service) ListPage(ctx context.Context, ownerID uuid.UUID, cursor string
 	return views, next, nil
 }
 
-// UpdateExpiry may renew an expired share, but never restores a revoked share.
+// UpdateExpiry only changes active shares. Expired/revoked shares are read-only.
 // The version prevents a stale browser from silently overwriting another edit.
 func (s *Service) UpdateExpiry(ctx context.Context, ownerID, shareID uuid.UUID, version int64, expiresAt *time.Time) error {
-	if version < 1 || (expiresAt != nil && !expiresAt.After(time.Now().UTC())) {
+	if version < 1 {
 		return ErrInvalidInput
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var share Share
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ?", shareID, ownerID).First(&share).Error; err != nil {
-			return lookupError(err)
-		}
-		if share.RevokedAt != nil {
-			return ErrNotFound
-		}
-		if share.Version != version {
-			return ErrVersionConflict
-		}
-		if err := lockSource(tx, ownerID, share.FileEntryID); err != nil {
-			return err
-		}
-		if err := tx.Model(&share).Updates(map[string]any{"expires_at": expiresAt, "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()}).Error; err != nil {
+		share, err := lockShareForMutation(tx, ownerID, shareID)
+		if err != nil {
 			return err
 		}
 		epoch, err := ownerepoch.BumpACL(tx, ownerID)
 		if err != nil {
 			return err
+		}
+		now, err := databaseNow(tx)
+		if err != nil {
+			return err
+		}
+		if validateShareAt(share, now) != nil {
+			return ErrInactive
+		}
+		if share.Version != version {
+			return ErrVersionConflict
+		}
+		if expiresAt != nil && !expiresAt.After(now) {
+			return ErrInvalidInput
+		}
+		query := tx.Model(&share).Where("source_deleted_at IS NULL AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > clock_timestamp())")
+		if expiresAt != nil {
+			query = query.Where("? > clock_timestamp()", *expiresAt)
+		}
+		result := query.Updates(map[string]any{"expires_at": expiresAt, "version": gorm.Expr("version + 1"), "updated_at": now})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrInactive
 		}
 		return outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
 			EventType: eventcontract.EventShareUpdatedV1, AggregateID: share.ID, AggregateVersion: share.Version + 1,

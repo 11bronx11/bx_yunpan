@@ -96,7 +96,7 @@ func TestShareManagementLifecycle(t *testing.T) {
 		t.Fatalf("expiry=%v err=%v", accessExpiry, err)
 	}
 	view, err := f.s.GetView(ctx, f.owner, share.ID)
-	if err != nil || view.FileName != f.file.Name || view.SizeBytes != 128 || !view.FileAvailable {
+	if err != nil || view.FileName != f.file.Name || !view.FileAvailable {
 		t.Fatalf("view=%+v err=%v", view, err)
 	}
 	if _, err := f.s.GetView(ctx, uuid.New(), share.ID); !errors.Is(err, ErrNotFound) {
@@ -125,13 +125,28 @@ func TestShareManagementLifecycle(t *testing.T) {
 	if _, _, _, _, err := f.s.Resolve(key); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expired resolve: %v", err)
 	}
-	if err := f.s.UpdateExpiry(ctx, f.owner, share.ID, 2, nil); err != nil {
+	if err := f.s.UpdateExpiry(ctx, f.owner, share.ID, 2, nil); !errors.Is(err, ErrInactive) {
+		t.Fatalf("restored expired share: %v", err)
+	}
+	if err := f.s.Revoke(f.owner, share.ID); !errors.Is(err, ErrInactive) {
+		t.Fatalf("revoked expired share: %v", err)
+	}
+	expiredView, err := f.s.GetView(ctx, f.owner, share.ID)
+	if err != nil || expiredView.Version != 2 || expiredView.Status != "expired" {
+		t.Fatalf("expired share changed: %+v %v", expiredView, err)
+	}
+	share, key, err = f.s.Create(f.owner, f.file.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, token, _, err = f.s.Resolve(key)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := f.s.Revoke(f.owner, share.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.s.Revoke(f.owner, share.ID); err != nil {
+	if err := f.s.Revoke(f.owner, share.ID); !errors.Is(err, ErrInactive) {
 		t.Fatalf("repeat revoke: %v", err)
 	}
 	if err := f.s.Revoke(uuid.New(), share.ID); !errors.Is(err, ErrNotFound) {
@@ -140,7 +155,7 @@ func TestShareManagementLifecycle(t *testing.T) {
 	if _, _, err := f.s.Access(token); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("old token bypasses revocation: %v", err)
 	}
-	if err := f.s.UpdateExpiry(ctx, f.owner, share.ID, 4, nil); !errors.Is(err, ErrNotFound) {
+	if err := f.s.UpdateExpiry(ctx, f.owner, share.ID, 2, nil); !errors.Is(err, ErrInactive) {
 		t.Fatalf("restored revoked share: %v", err)
 	}
 }
@@ -159,7 +174,7 @@ func TestSharePageTiedDatesIsolationAndUnavailableSource(t *testing.T) {
 	seen := map[uuid.UUID]bool{}
 	cursor := ""
 	for {
-		items, next, err := f.s.ListPage(ctx, f.owner, cursor, 2)
+		items, next, err := f.s.ListPage(ctx, f.owner, "active", cursor, 2)
 		if err != nil || len(items) > 2 {
 			t.Fatalf("page: %d %v", len(items), err)
 		}
@@ -172,7 +187,7 @@ func TestSharePageTiedDatesIsolationAndUnavailableSource(t *testing.T) {
 		if next == "" {
 			break
 		}
-		if _, _, err := f.s.ListPage(ctx, uuid.New(), next, 2); !errors.Is(err, ErrInvalidInput) {
+		if _, _, err := f.s.ListPage(ctx, uuid.New(), "active", next, 2); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("foreign cursor: %v", err)
 		}
 		cursor = next
@@ -181,19 +196,22 @@ func TestSharePageTiedDatesIsolationAndUnavailableSource(t *testing.T) {
 		t.Fatalf("visited %d", len(seen))
 	}
 	for _, limit := range []int{0, -1, 101} {
-		if _, _, err := f.s.ListPage(ctx, f.owner, "", limit); !errors.Is(err, ErrInvalidInput) {
+		if _, _, err := f.s.ListPage(ctx, f.owner, "active", "", limit); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("limit %d: %v", limit, err)
 		}
 	}
-	if _, _, err := f.s.ListPage(ctx, f.owner, "garbage", 2); !errors.Is(err, ErrInvalidInput) {
+	if _, _, err := f.s.ListPage(ctx, f.owner, "active", "garbage", 2); !errors.Is(err, ErrInvalidInput) {
 		t.Fatal(err)
+	}
+	if err := f.db.Model(&Share{}).Where("owner_id = ?", f.owner).Update("source_deleted_at", time.Now()).Error; err != nil {
+		t.Fatal(err)
+	}
+	items, _, err := f.s.ListPage(ctx, f.owner, "source_deleted", "", 10)
+	if err != nil || len(items) != 7 || shareViewResponse(items[0])["status"] != "source_deleted" {
+		t.Fatalf("unavailable: %+v %v", items, err)
 	}
 	if err := f.db.Model(&drive.FileEntry{}).Where("id = ?", f.file.ID).Update("deleted_at", time.Now()).Error; err != nil {
 		t.Fatal(err)
-	}
-	items, _, err := f.s.ListPage(ctx, f.owner, "", 10)
-	if err != nil || len(items) != 7 || shareViewResponse(items[0])["status"] != "unavailable" {
-		t.Fatalf("unavailable: %+v %v", items, err)
 	}
 	if _, _, err := f.s.Create(f.owner, f.file.ID, nil); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("share deleted source: %v", err)
@@ -233,10 +251,16 @@ func TestConcurrentShareEditsAndRevokes(t *testing.T) {
 	}
 	wg.Wait()
 	close(errs)
+	winners = 0
 	for err := range errs {
-		if err != nil {
+		if err == nil {
+			winners++
+		} else if !errors.Is(err, ErrInactive) {
 			t.Fatal(err)
 		}
+	}
+	if winners != 1 {
+		t.Fatalf("revoke winners=%d", winners)
 	}
 	var count int64
 	if err := f.db.Table("outbox_events").Where("aggregate_id = ? AND event_type = ?", share.ID, eventcontract.EventShareRevokedV1).Count(&count).Error; err != nil || count != 1 {
@@ -302,7 +326,7 @@ func TestShareHTTPManagementAndExpiryValidation(t *testing.T) {
 	call("GET", "/api/v1/shares?limit=1", "", 200)
 	call("GET", "/api/v1/shares?limit=0", "", 422)
 	call("DELETE", path, "", 204)
-	call("DELETE", path, "", 204)
-	call("PATCH", path, `{"version":3,"expires_at":null}`, 404)
+	call("DELETE", path, "", 409)
+	call("PATCH", path, `{"version":3,"expires_at":null}`, 409)
 	call("GET", "/api/v1/public/shares/file?access_token=garbage", "", 404)
 }
