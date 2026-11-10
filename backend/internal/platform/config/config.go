@@ -49,9 +49,7 @@ type HTTP struct {
 }
 
 type Postgres struct {
-	// PrimaryDSN is the stable writer endpoint used by every process during
-	// the HA migration. DSN remains as the compatibility alias for older
-	// callers and is kept equal to PrimaryDSN when loaded from the environment.
+
 	PrimaryDSN      string
 	DSN             string
 	MaxOpenConns    int
@@ -61,9 +59,7 @@ type Postgres struct {
 }
 
 type Redis struct {
-	// Addr/Password/DB are the compatibility aliases for a single Redis
-	// instance.  The role-specific fields let Broker, Coordination and Cache
-	// move to independent instances without changing callers at once.
+	
 	Addr                 string
 	Password             string
 	DB                   int
@@ -123,10 +119,10 @@ type Upload struct {
 const maxOutboxBatchSize = 100
 
 type Outbox struct {
-	PollInterval    time.Duration // Minimum scan/error retry interval and follower lock retry interval.
-	MaxPollInterval time.Duration // Maximum delay before a fallback scan when idle or notifications are unavailable.
-	ScanTimeout     time.Duration // Per-operation PostgreSQL timeout for dispatcher state changes and scans.
-	NotifyEnabled   bool          // Use best-effort PostgreSQL LISTEN/NOTIFY wakeups.
+	PollInterval    time.Duration 
+	MaxPollInterval time.Duration 
+	ScanTimeout     time.Duration 
+	NotifyEnabled   bool          
 	BatchSize       int
 	MaxRetry        int
 	TaskTimeout     time.Duration
@@ -134,9 +130,7 @@ type Outbox struct {
 	V2EventsEnabled bool
 }
 
-// TaskQueue controls the RabbitMQ task execution plane. Redis remains
-// available for cache/coordination during the migration, but is no longer a
-// task broker for new workers.
+
 type TaskQueue struct {
 	URL            string
 	Exchange       string
@@ -145,8 +139,7 @@ type TaskQueue struct {
 	StopTimeout    time.Duration
 }
 
-// Search controls the rebuildable derived index plane. PostgreSQL remains the
-// default read path until an external index has passed snapshot/shadow gates.
+
 type Search struct {
 	Enabled          bool
 	WriteBackends    []string
@@ -183,8 +176,7 @@ type Tracing struct {
 
 // AIService 描述 aisvc 进程与 API 侧客户端的连接参数。
 type AIService struct {
-	// Role controls the P3 split. combined preserves the current compatibility
-	// process; query serves gRPC only; indexer consumes the ai queue only.
+
 	Role string
 	// GRPCAddr 是 aisvc 的 gRPC 监听地址。
 	GRPCAddr string
@@ -204,7 +196,7 @@ type AIService struct {
 	BreakerHalfOpenProbes int
 }
 
-// DocumentParser describes the independently scaled document parsing service.
+
 type DocumentParser struct {
 	RemoteEnabled      bool
 	GRPCAddr           string

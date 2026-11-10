@@ -25,7 +25,7 @@ type Service struct {
 	db                *gorm.DB
 	tokens            *TokenManager
 	provisioner       UserProvisioner
-	defaultQuotaBytes int64
+	defaultQuotaBytes int64        
 }
 
 type UserProvisioner interface {
@@ -76,8 +76,6 @@ func (s *Service) Register(username, email, password string) (Session, error) {
 	}
 	var session Session
 	err = s.db.Transaction(func(tx *gorm.DB) error {
-		// Both columns share the login namespace. Lock in a stable order so
-		// concurrent registrations cannot create a cross-column collision.
 		identifiers := []string{usernameNormalized}
 		if emailNormalized != nil && *emailNormalized != usernameNormalized {
 			identifiers = append(identifiers, *emailNormalized)
@@ -125,8 +123,6 @@ func (s *Service) Login(login, password string) (Session, error) {
 	if err := s.db.Where("username_normalized = ? OR email_normalized = ?", normalized, normalized).Find(&candidates).Error; err != nil {
 		return Session{}, err
 	}
-	// Existing accounts may predate the shared namespace check. Select by
-	// credentials rather than row order, and reject ambiguous credentials.
 	var user *User
 	for i := range candidates {
 		if VerifyPassword(candidates[i].PasswordHash, password) {

@@ -52,9 +52,7 @@ type multipartStorage interface {
 	AbortMultipartUpload(context.Context, string, string, string) error
 }
 
-// multipartUploadLister is optional so test doubles and providers without a
-// listing API remain usable. MinIO's Core implements it; recovery uses the
-// listing to avoid creating a second provider upload after a crash.
+
 type multipartUploadLister interface {
 	ListMultipartUploads(context.Context, string, string, string, string, string, int) (minio.ListMultipartUploadsResult, error)
 }
@@ -126,9 +124,6 @@ func NewService(db *gorm.DB, storage *minio.Client, presigner *storageurl.Presig
 	return &Service{db: db, storage: minioUploadStorage{client: storage}, presigner: presigner, core: minio.Core{Client: storage}, bucket: bucket, drive: driveService, objects: objects, quota: quota, config: cfg}
 }
 
-// NewRecoveryService constructs the database-only subset used by periodic
-// session expiry and canonical-orphan cleanup. It has no provider clients and
-// must not be used for upload operations that touch object storage.
 func NewRecoveryService(db *gorm.DB, objects *objectstore.Service, quota Quota) *Service {
 	return &Service{db: db, objects: objects, quota: quota}
 }

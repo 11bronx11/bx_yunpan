@@ -9,8 +9,7 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 )
 
-// v2EventsContextKey is intentionally private: only this package can decide
-// which event types belong to the compatibility window.
+
 type v2EventsContextKey struct{}
 
 type searchEnabledContextKey struct{}

@@ -24,8 +24,6 @@ import (
 )
 
 type Set struct {
-	// Redis is retained as the compatibility alias. New code should select the
-	// client matching its responsibility explicitly.
 	Redis             *redis.Client
 	Tasks             *taskqueue.Broker
 	RedisCoordination *redis.Client
@@ -137,9 +135,7 @@ func (s *Set) Probes() []health.Probe {
 	}
 }
 
-// AdvisoryProbes expose degraded derived/async planes without removing the
-// core API from service. PostgreSQL remains able to commit business state and
-// Outbox rows while RabbitMQ, Redis Coordination, or Cache is recovering.
+
 func (s *Set) AdvisoryProbes() []health.Probe {
 	return []health.Probe{
 		health.ProbeFunc{ProbeName: "rabbitmq", Func: s.Tasks.Health},

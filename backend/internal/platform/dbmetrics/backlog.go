@@ -10,8 +10,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// BacklogCollector reads durable work independently of the relay/reconciler.
-// Failed scrapes expose up=0 and omit backlog samples instead of reporting zero.
 type BacklogCollector struct {
 	db    *gorm.DB
 	query string

@@ -139,10 +139,7 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	return nil
 }
 
-// splitAIBackend keeps the online query plane behind gRPC while retaining
-// command ownership in core-api. The legacy gRPC Reprocess endpoint remains
-// available for an older client during the compatibility window, but current
-// HTTP requests never depend on it.
+
 type splitAIBackend struct {
 	query   *grpcclient.Client
 	command interface {
@@ -161,8 +158,6 @@ func (b *splitAIBackend) Ask(ctx context.Context, ownerID uuid.UUID, question st
 
 func (b *splitAIBackend) RequestReprocess(ctx context.Context, ownerID, fileID uuid.UUID, idempotencyKey string) (ai.Task, error) {
 	if b.limiter != nil {
-		// The command now stays in core-api, so preserve the shared limiter
-		// here. Match the query plane's fail-open behavior on Redis errors.
 		if allowed, err := b.limiter.Allow(ctx, ownerID, "reprocess"); err == nil && !allowed {
 			return ai.Task{}, ai.ErrRateLimited
 		}

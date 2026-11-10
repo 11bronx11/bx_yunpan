@@ -44,6 +44,7 @@ docs/*
 !docs/FULLCHAIN_VALIDATION_2026-11-06.md
 !docs/SHARING_MODULE_VALIDATION_2026-11-06.md
 !docs/SCALING_VALIDATION_2026-11-06.md
+!docs/ASYNC_CONTROL_PLANE_DESIGN_2026-11-12.md
 !docs/缓存优化说明.md
 !docs/facts/
 docs/facts/*
