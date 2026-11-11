@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, App, Button, Grid, Space, Table, Tabs, Tooltip } from 'antd';
 import { CalendarOutlined, StopOutlined } from '@ant-design/icons';
 import { listShares, revokeShare } from '../services/share';
-import { FileTypeBadge, fileTypeLabel, GraphicEmpty, PageHeader, ProductPage, StatusTag } from '../components/design/ProductUI';
+import { FileTypeBadge, fileTypeLabel, PageHeader, ProductPage, StatusTag } from '../components/design/ProductUI';
 import ShareModal, { formatShareExpiry } from '../components/ShareModal';
 
 const PAGE_SIZE = 10;
@@ -25,7 +25,7 @@ export default function Shares() {
   const [items, setItems] = useState([]);
   const [page, setPage] = useState({});
   const [query, setQuery] = useState({ status: 'active', cursors: [''], index: 0 });
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState(null);
   const [revoking, setRevoking] = useState([]);
@@ -45,7 +45,7 @@ export default function Shares() {
   }, [query]);
   useEffect(() => { load(); return () => request.current?.abort(); }, [load]);
   const refresh = useCallback(() => {
-    setItems([]); setPage({});
+    setLoading(true); setItems([]); setPage({});
     setQuery(current => ({ status: current.status, cursors: [''], index: 0 }));
   }, []);
   useEffect(() => {
@@ -56,11 +56,11 @@ export default function Shares() {
     return () => clearTimeout(timer);
   }, [items, query.status, refresh]);
   const changeTab = status => {
-    request.current?.abort(); setItems([]); setPage({}); setError(''); setEditing(null);
+    request.current?.abort(); setLoading(true); setItems([]); setPage({}); setError(''); setEditing(null);
     setQuery({ status, cursors: [''], index: 0 });
   };
   const turnPage = direction => {
-    setItems([]); setPage({});
+    setLoading(true); setItems([]); setPage({});
     setQuery(current => {
       const cursors = direction > 0 ? [...current.cursors.slice(0, current.index + 1), page.next_cursor] : current.cursors;
       return { ...current, cursors, index: current.index + direction };
@@ -74,7 +74,7 @@ export default function Shares() {
     catch (err) { message.error(err.message || '取消分享失败'); refresh(); }
     finally { pendingRevokes.current.delete(share.id); setRevoking([...pendingRevokes.current]); }
   };
-  const renderActions = share => shareStatus(share, now) === 'active' && <div className="share-actions">
+  const renderActions = share => shareStatus(share, now) === 'active' && <div className="share-actions" aria-busy={revoking.includes(share.id)}>
     <Tooltip title="修改有效期"><Button shape="circle" icon={<CalendarOutlined />} aria-label="修改有效期" disabled={revoking.includes(share.id)} onClick={() => setEditing(share)} /></Tooltip>
     <Tooltip title="取消分享"><Button shape="circle" icon={<StopOutlined />} aria-label="取消分享" danger loading={revoking.includes(share.id)} onClick={() => revoke(share)} /></Tooltip>
   </div>;
@@ -99,7 +99,7 @@ export default function Shares() {
     <Tabs activeKey={query.status} items={tabs} onChange={changeTab} tabBarGutter={24} />
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       {error && <Alert type="error" showIcon message={error} action={<Button onClick={load}>重试</Button>} />}
-      <Table className="editorial-ledger" rowKey="id" columns={columns} dataSource={items} pagination={false} loading={loading} tableLayout="fixed" locale={{ emptyText: <GraphicEmpty title={`暂无${query.status === 'source_deleted' ? '源文件已删除的' : tabs.find(tab => tab.key === query.status).label.slice(2)}分享`} description={query.status === 'active' ? '选择文件即可创建分享。' : ''} /> }} />
+      <Table className="editorial-ledger" aria-busy={loading} rowKey="id" columns={columns} dataSource={items} pagination={false} loading={loading} tableLayout="fixed" locale={{ emptyText: loading || error ? null : `暂无${query.status === 'source_deleted' ? '源文件已删除的' : tabs.find(tab => tab.key === query.status).label.slice(2)}分享` }} />
       <Space aria-label="分享分页" wrap>
         <Button disabled={loading || query.index === 0} onClick={() => turnPage(-1)}>上一页</Button>
         <span>第 {query.index + 1} 页 · 每页 {PAGE_SIZE} 条</span>

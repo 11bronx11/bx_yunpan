@@ -48,7 +48,7 @@ test('distinguishes a same-folder name conflict from duplicate content', async (
   fetchMock.mockRestore();
 });
 
-test('explains when the AI provider quota is exhausted', async () => {
+test('shows a generic unavailable message when the AI provider quota is exhausted', async () => {
   const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
     status: 429,
     ok: false,
@@ -58,7 +58,7 @@ test('explains when the AI provider quota is exhausted', async () => {
 
   await expect(api('/api/v1/search', {}, false)).rejects.toMatchObject({
     code: 'ai.quota_exhausted',
-    message: 'AI 模型免费额度已用尽，请切换可用模型或调整百炼计费设置',
+    message: '功能暂时不可用',
   });
 
   fetchMock.mockRestore();

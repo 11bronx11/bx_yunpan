@@ -127,6 +127,7 @@
 .compact-upload .ant-progress-bg { background: var(--ink) !important; }
 
 .shares-page .ant-tabs-tab-active .ant-tabs-tab-btn { font-weight: 600; text-shadow: none; }
+.shares-page table[aria-busy="false"] .ant-table-placeholder > td { height: 260px; }
 .shares-page .share-name-heading { padding-inline-start: 4px; }
 .shares-page .share-type-heading { padding-inline-start: 10px; }
 .shares-page .share-file { display: flex; gap: 12px; align-items: center; min-width: 0; }
@@ -140,6 +141,22 @@
 .shares-page .share-actions .ant-btn:active:not(:disabled) { transform: translateY(0); }
 .shares-page .share-actions .ant-btn-dangerous:hover:not(:disabled),
 .shares-page .share-actions .ant-btn-dangerous:focus-visible:not(:disabled) { color: #a52c26 !important; border-color: rgba(165, 44, 38, 0.6) !important; background: #fff5f3 !important; }
+
+@media (min-width: 768px) and (hover: hover) and (pointer: fine) {
+  .shares-page .share-actions {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(4px);
+    transition: opacity var(--transition-fast), transform var(--transition-fast);
+  }
+  .shares-page .ant-table-row:hover .share-actions,
+  .shares-page .ant-table-row:focus-within .share-actions,
+  .shares-page .share-actions[aria-busy="true"] {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(0);
+  }
+}
 
 @media (max-width: 620px) {
   .ant-picker-dropdown.share-expiry-popup { position: fixed; top: 50% !important; left: 50% !important; right: auto !important; bottom: auto !important; min-width: 0 !important; width: min(352px, calc(100vw - 32px)); transform: translate(-50%, -50%) !important; }
