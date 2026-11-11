@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { App, Button, Input, Select, Space, Tag } from 'antd';
+import { App, Button, Input, Select, Tag } from 'antd';
 import { FileSearchOutlined, SearchOutlined } from '@ant-design/icons';
 import { searchFiles } from '../services/ai';
-import { GraphicEmpty, PageHeader, ProductPage, SectionHeading, StatusTag } from '../components/design/ProductUI';
+import { GraphicEmpty, PageHeader, ProductPage, SectionHeading } from '../components/design/ProductUI';
 import SearchResultModal from '../components/SearchResultModal';
 import styled from '@emotion/styled';
 
@@ -48,7 +48,7 @@ const AIWorkspace = () => {
     <PageHeader title="检索" />
     <SearchBar><Input size="large" prefix={<SearchOutlined />} value={query} onChange={event => setQuery(event.target.value)} onPressEnter={runSearch} placeholder="例如：上季度项目复盘中的风险" /><Select size="large" value={mode} onChange={setMode} options={[{ value: 'hybrid', label: '混合检索' }, { value: 'name', label: '文件名' }, { value: 'fulltext', label: '全文' }, { value: 'semantic', label: '语义' }]} /><Button type="primary" size="large" icon={<FileSearchOutlined />} loading={searching} onClick={runSearch}>搜索</Button></SearchBar>
     <SectionHeading title="检索结果" meta={`${results.length} 个文件`} />
-    {results.length === 0 ? <GraphicEmpty title="输入一句话开始检索" /> : <ResultList>{results.map(hit => <Result key={hit.file.id} role="button" tabIndex={0} aria-label={`打开 ${hit.file.name} 文件详情`} onClick={() => openResult(hit)} onKeyDown={event => handleResultKeyDown(event, hit)}><div><Space><strong>{hit.file.name}</strong><StatusTag tone="blue">{hit.match_type}</StatusTag></Space>{hit.citations?.map(citation => <Excerpt key={citation.id}>“{citation.excerpt}” <Tag color="blue">{citation.page_number ? `第 ${citation.page_number} 页` : citation.section || '正文'}</Tag></Excerpt>)}</div><div><strong>{(hit.score || 0).toFixed(3)}</strong><small> relevance</small></div></Result>)}</ResultList>}
+    {results.length === 0 ? <GraphicEmpty title="输入一句话开始检索" /> : <ResultList>{results.map(hit => <Result key={hit.file.id} role="button" tabIndex={0} aria-label={`打开 ${hit.file.name} 文件详情`} onClick={() => openResult(hit)} onKeyDown={event => handleResultKeyDown(event, hit)}><div><strong>{hit.file.name}</strong>{hit.citations?.map(citation => <Excerpt key={citation.id}>“{citation.excerpt}” <Tag color="blue">{citation.page_number ? `第 ${citation.page_number} 页` : citation.section || '正文'}</Tag></Excerpt>)}</div><div><strong>{(hit.score || 0).toFixed(3)}</strong><small> relevance</small></div></Result>)}</ResultList>}
     <SearchResultModal hit={selectedHit} open={Boolean(selectedHit)} onClose={() => setSelectedHit(null)} onChanged={runSearch} />
   </ProductPage>;
 };

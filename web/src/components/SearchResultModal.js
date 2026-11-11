@@ -10,7 +10,7 @@ import {
 import styled from '@emotion/styled';
 import { deleteFile, getBreadcrumb, getDownloadURL, getRoot, renameFile } from '../services/drive';
 import ShareModal from './ShareModal';
-import { FileTypeBadge, fileTypeLabel, StatusTag } from './design/ProductUI';
+import { FileTypeBadge, fileTypeLabel } from './design/ProductUI';
 import MoveFileModal from './MoveFileModal';
 import { startDownload } from '../utils/download';
 
@@ -46,13 +46,6 @@ const formatSize = bytes => {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-};
-
-const matchLabels = {
-  hybrid: '混合检索',
-  name: '文件名',
-  fulltext: '全文',
-  semantic: '语义',
 };
 
 const SearchResultModal = ({ hit, open, onClose, onChanged }) => {
@@ -188,7 +181,6 @@ const SearchResultModal = ({ hit, open, onClose, onChanged }) => {
         <MetaRow>
           <span>{fileTypeLabel(file.mime_type)}</span>
           <span>{formatSize(file.size_bytes || 0)}</span>
-          <StatusTag tone="blue">{matchLabels[hit.match_type] || hit.match_type}</StatusTag>
         </MetaRow>
         {hit.citations?.length > 0
           ? <CitationList>{hit.citations.map(citation => <Citation key={citation.id}>“{citation.excerpt}”<CitationLabel><Tag color="blue">{citation.page_number ? `第 ${citation.page_number} 页` : citation.section || '正文'}</Tag></CitationLabel></Citation>)}</CitationList>
