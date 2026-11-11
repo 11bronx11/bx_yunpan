@@ -3,7 +3,7 @@ import { App as AntApp, ConfigProvider } from 'antd';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Drive from './Drive';
-import { deleteFolder, getBreadcrumb, getChildren, getDownloadURL, getRoot } from '../services/drive';
+import { deleteFolder, getBreadcrumb, getChildren, getDownloadURL, getPreview, getRoot } from '../services/drive';
 import { getFileAI } from '../services/ai';
 import { startDownload } from '../utils/download';
 
@@ -84,6 +84,42 @@ test('downloads a file without opening a new window', async () => {
   fireEvent.click(await screen.findByText('下载'));
 
   await waitFor(() => expect(startDownload).toHaveBeenCalledWith('https://example.test/report.pdf', 'report.pdf'));
+});
+
+test.each([
+  { kind: 'unsupported' },
+  { kind: 'processing' },
+  { kind: 'image', url: '' },
+  { kind: 'unsupported', url: 'https://example.test/original.jpg' },
+])('does not render an unavailable image preview: %j', async preview => {
+  getChildren.mockResolvedValue({
+    items: [{ id: 'huge-image', type: 'file', name: '三王山炼定仙游.jpg', mime_type: 'image/jpeg', size_bytes: 123076147, version: 1 }],
+  });
+  getPreview.mockResolvedValue(preview);
+  renderDrive();
+
+  const row = await screen.findByRole('row', { name: '预览图片 三王山炼定仙游.jpg' });
+  await waitFor(() => expect(getPreview).toHaveBeenCalledTimes(1));
+  expect(screen.queryByAltText('')).not.toBeInTheDocument();
+
+  fireEvent.click(row);
+  expect(await screen.findByText('图片暂时无法预览，可稍后重试或下载查看')).toBeInTheDocument();
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(screen.queryByAltText('')).not.toBeInTheDocument();
+});
+
+test('renders and opens an available image thumbnail', async () => {
+  getChildren.mockResolvedValue({
+    items: [{ id: 'image', type: 'file', name: 'landscape.jpg', mime_type: 'image/jpeg', size_bytes: 42, version: 1 }],
+  });
+  getPreview.mockResolvedValue({ kind: 'image', url: 'https://example.test/thumbnail.jpg' });
+  renderDrive();
+
+  const row = await screen.findByRole('row', { name: '预览图片 landscape.jpg' });
+  expect(await screen.findByAltText('')).toHaveAttribute('src', 'https://example.test/thumbnail.jpg');
+  fireEvent.click(row);
+  expect(await screen.findByRole('img', { name: 'landscape.jpg' })).toHaveAttribute('src', 'https://example.test/thumbnail.jpg');
+  expect(getPreview).toHaveBeenCalledTimes(1);
 });
 
 // Exercise the real menu and confirmation without waiting for CSS transitions

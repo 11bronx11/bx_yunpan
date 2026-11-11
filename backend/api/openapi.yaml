@@ -389,6 +389,12 @@ paths:
     get:
       tags: [Drive]
       summary: Get preview metadata and URL
+      description: |
+        Image previews only use generated thumbnails and never fall back to the
+        original image. If no thumbnail is available, returns kind=unsupported
+        with url and expires_at omitted. A later request may succeed after the
+        thumbnail has been generated. Original files remain available through
+        the download URL endpoint.
       operationId: getFilePreview
       parameters:
         - $ref: '#/components/parameters/FileId'

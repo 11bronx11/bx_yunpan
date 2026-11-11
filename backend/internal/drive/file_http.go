@@ -123,7 +123,12 @@ func (h *FileHTTP) preview(c *gin.Context) {
 		new(HTTP).writeError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"kind": kind, "url": value, "expires_at": expiresAt})
+	response := gin.H{"kind": kind}
+	if value != "" {
+		response["url"] = value
+		response["expires_at"] = expiresAt
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 func fileParams(c *gin.Context, requireVersion bool) (uuid.UUID, uuid.UUID, int64, error) {

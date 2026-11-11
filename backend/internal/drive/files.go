@@ -168,12 +168,17 @@ func (m *FileManager) Preview(ctx context.Context, ownerID, fileID uuid.UUID) (s
 		return "", "", time.Time{}, err
 	}
 	expiresAt := time.Now().UTC().Add(m.readURLTTL)
-	if kind == "image" && m.variant != nil {
-		if value, variantExpiry, ok, variantErr := m.variant.PreviewURL(ctx, file.ObjectID); variantErr != nil {
-			return "", "", time.Time{}, variantErr
-		} else if ok {
-			return kind, value, variantExpiry, nil
+	if kind == "image" {
+		if m.variant != nil {
+			if value, variantExpiry, ok, variantErr := m.variant.PreviewURL(ctx, file.ObjectID); variantErr != nil {
+				return "", "", time.Time{}, variantErr
+			} else if ok && value != "" {
+				return kind, value, variantExpiry, nil
+			}
 		}
+		// Directory listings load previews automatically. Falling back to an
+		// original image here can make the browser decode hundreds of megapixels.
+		return "unsupported", "", time.Time{}, nil
 	}
 	contentType := file.MimeType
 	if kind == "text" {

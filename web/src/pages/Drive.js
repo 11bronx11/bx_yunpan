@@ -137,7 +137,7 @@ const Drive = () => {
       const imageItems = (children.items || []).filter(item => item.type === 'file' && item.mime_type?.startsWith('image/'));
       for (let offset = 0; offset < imageItems.length && !signal.aborted; offset += 6) {
         const values = await Promise.all(imageItems.slice(offset, offset + 6).map(async item => [item.id, await getPreview(item.id, { signal }).catch(() => null)]));
-        if (!signal.aborted) setPreviews(current => ({ ...current, ...Object.fromEntries(values.filter(([, value]) => value?.url)) }));
+        if (!signal.aborted) setPreviews(current => ({ ...current, ...Object.fromEntries(values.filter(([, value]) => value?.kind === 'image' && value.url)) }));
       }
     } catch (error) {
       if (signal.aborted || error.name === 'AbortError') return;
@@ -248,6 +248,10 @@ const Drive = () => {
     if (!file.mime_type?.startsWith('image/')) return;
     try {
       const preview = previews[file.id] || await getPreview(file.id);
+      if (preview.kind !== 'image' || !preview.url) {
+        message.info('图片暂时无法预览，可稍后重试或下载查看');
+        return;
+      }
       if (!previews[file.id]) setPreviews(current => ({ ...current, [file.id]: preview }));
       setImagePreview({ name: file.name, url: preview.url });
     } catch (error) {
