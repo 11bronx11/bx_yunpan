@@ -52,13 +52,15 @@ test('refreshes and closes an edit when another device changed its version', asy
 
 
 test('recalculates edited duration from save time rather than the old deadline', async () => {
-  show({ share: { id: 'share-1', version: 3, expires_at: '2099-01-01T00:00:00Z' } });
-  const before = Date.now();
-  fireEvent.click(screen.getByRole('button', { name: /保\s*存/ }));
-  await waitFor(() => expect(updateShare).toHaveBeenCalledTimes(1));
-  const expires = new Date(updateShare.mock.calls[0][2]).valueOf();
-  expect(expires - before).toBeGreaterThan(7 * 86400000 - 1000);
-  expect(expires - before).toBeLessThan(7 * 86400000 + 1000);
+  const savedAt = Date.now();
+  const clock = jest.spyOn(Date, 'now').mockReturnValue(savedAt);
+  try {
+    show({ share: { id: 'share-1', version: 3, expires_at: '2099-01-01T00:00:00Z' } });
+    fireEvent.click(screen.getByRole('button', { name: /保\s*存/ }));
+    await waitFor(() => expect(updateShare).toHaveBeenCalledTimes(1));
+    const expires = new Date(updateShare.mock.calls[0][2]).valueOf();
+    expect(expires).toBe(savedAt + 7 * 86400000);
+  } finally { clock.mockRestore(); }
 });
 
 test.each(['expired', 'revoked', 'source_deleted'])('only displays inactive share %s', status => {

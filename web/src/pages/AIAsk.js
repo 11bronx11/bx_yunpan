@@ -27,8 +27,9 @@ const Answer = styled.article`
   white-space: pre-wrap;
   font-size: 15px;
   line-height: 1.8;
+  overflow-wrap: anywhere;
 `;
-const Citations = styled.div`display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px;`;
+const Citations = styled.div`display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; .ant-tag { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }`;
 
 const AIAsk = () => {
   const { message } = App.useApp();

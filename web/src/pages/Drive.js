@@ -176,7 +176,7 @@ const Drive = () => {
   const parentFolder = crumbs.length > 1 ? crumbs[crumbs.length - 2] : null;
 
   const handleCreate = async () => {
-    if (!folderName.trim()) return;
+    if (creatingFolder || !folderName.trim()) return;
     setCreatingFolder(true);
     try {
       await createFolder(folder, folderName.trim());
@@ -231,7 +231,7 @@ const Drive = () => {
   const openRename = file => { setRenameTarget(file); setRenameName(file.name); };
   const handleRename = async () => {
     const name = renameName.trim();
-    if (!renameTarget || !name) return;
+    if (renaming || !renameTarget || !name) return;
     if (name === renameTarget.name) { setRenameTarget(null); return; }
     setRenaming(true);
     try {
@@ -325,6 +325,7 @@ const Drive = () => {
       'aria-label': `进入目录 ${item.name}`,
       onClick: () => loadFolder(item.id),
       onKeyDown: event => {
+        if (event.target !== event.currentTarget) return;
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
         loadFolder(item.id);
@@ -336,6 +337,7 @@ const Drive = () => {
       'aria-label': `预览图片 ${item.name}`,
       onClick: () => openImagePreview(item),
       onKeyDown: event => {
+        if (event.target !== event.currentTarget) return;
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
         openImagePreview(item);
@@ -347,13 +349,14 @@ const Drive = () => {
       'aria-label': `查看 AI 摘要 ${item.name}`,
       onClick: () => setSummaryTarget(item),
       onKeyDown: event => {
+        if (event.target !== event.currentTarget) return;
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
         setSummaryTarget(item);
       },
       style: { cursor: 'pointer' },
     };
-    return {};
+    return { tabIndex: 0, 'aria-label': `文件 ${item.name}` };
   };
 
   if (!root || !folder) return <ProductPage>{loadError ? <Alert type="error" showIcon message={loadError} action={<Button icon={<ReloadOutlined />} onClick={() => root ? loadFolder(root.id) : window.location.reload()}>重试</Button>} /> : <GraphicEmpty title="正在打开你的云盘" description="目录与对象索引加载中。" />}</ProductPage>;

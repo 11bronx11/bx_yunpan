@@ -1,6 +1,6 @@
 import React from 'react';
 import { App } from 'antd';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import AIAsk from './AIAsk';
 import { askFiles } from '../services/ai';
 
@@ -42,4 +42,26 @@ test('confirms IME text without asking, keeps Shift+Enter, and submits with a la
   await waitFor(() => expect(askFiles).toHaveBeenCalledTimes(1));
   expect(askFiles).toHaveBeenCalledWith('hello');
   expect(input).toHaveValue('');
+});
+
+test('keeps the submitted question cleared when the request fails', async () => {
+  askFiles.mockRejectedValue(new Error('网络连接失败'));
+  render(<App><AIAsk /></App>);
+  const input = screen.getByLabelText('向文件提问');
+  fireEvent.change(input, { target: { value: '需要重试的问题' } });
+  fireEvent.click(await screen.findByRole('button', { name: '提问' }));
+  await screen.findByText('网络连接失败');
+  expect(input).toHaveValue('');
+});
+
+test('does not overwrite a new draft when the previous question fails', async () => {
+  let rejectAsk;
+  askFiles.mockImplementationOnce(() => new Promise((resolve, reject) => { rejectAsk = reject; }));
+  render(<App><AIAsk /></App>);
+  const input = screen.getByLabelText('向文件提问');
+  fireEvent.change(input, { target: { value: '旧问题' } });
+  fireEvent.click(await screen.findByRole('button', { name: '提问' }));
+  fireEvent.change(input, { target: { value: '新的草稿' } });
+  await act(async () => rejectAsk(new Error('网络连接失败')));
+  expect(input).toHaveValue('新的草稿');
 });

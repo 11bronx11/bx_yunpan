@@ -115,6 +115,11 @@ export const TransferProvider = ({ children }) => {
     let mounted = true;
     const local = readStoredUploads(nextOwnerId);
     const localBySession = new Map(local.filter(task => task.session?.id).map(task => [task.session.id, task]));
+    const restoreUploads = recovered => setUploads(current => {
+      const ids = new Set(current.map(task => task.id));
+      const sessions = new Set(current.map(task => task.session?.id).filter(Boolean));
+      return [...current, ...recovered.filter(task => !ids.has(task.id) && !sessions.has(task.session?.id))];
+    });
     listActiveUploads()
       .then(response => {
         if (!mounted || ownerId.current !== nextOwnerId) return;
@@ -122,12 +127,12 @@ export const TransferProvider = ({ children }) => {
         const backendTasks = sessions.map(session => recoveredUpload(session, localBySession.get(session.id)));
         const localOnly = local.filter(task => !task.session?.id).map(localInterruptedUpload);
         hydratedOwner.current = nextOwnerId;
-        setUploads([...backendTasks, ...localOnly]);
+        restoreUploads([...backendTasks, ...localOnly]);
       })
       .catch(() => {
         if (!mounted || ownerId.current !== nextOwnerId) return;
         hydratedOwner.current = nextOwnerId;
-        setUploads(local.map(localInterruptedUpload));
+        restoreUploads(local.map(localInterruptedUpload));
       });
     return () => { mounted = false; };
   }, [ready, user?.id]);

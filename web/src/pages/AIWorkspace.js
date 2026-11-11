@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { App, Button, Select, Tag } from 'antd';
 import Input from '../components/IMEInput';
 import { FileSearchOutlined, SearchOutlined } from '@ant-design/icons';
@@ -19,6 +19,8 @@ const Result = styled.article`
   background: var(--white);
   cursor: pointer;
   transition: border-color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast);
+  overflow-wrap: anywhere;
+  > div { min-width: 0; }
 
   &:hover { border-color: var(--divider-strong); background: var(--surface-hover); transform: translateY(-1px); }
   &:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
@@ -33,11 +35,26 @@ const AIWorkspace = () => {
   const [mode, setMode] = useState('hybrid');
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
+  const [searched, setSearched] = useState(false);
   const [selectedHit, setSelectedHit] = useState(null);
+  const request = useRef(null);
+  useEffect(() => () => request.current?.abort(), []);
   const runSearch = async () => {
     if (!query.trim()) return;
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
     setSearching(true);
-    try { const response = await searchFiles(query, mode); setResults(response.hits || []); } catch (error) { message.error(error.message || '搜索失败'); } finally { setSearching(false); }
+    setSearched(false);
+    setResults([]);
+    try {
+      const response = await searchFiles(query.trim(), mode, { signal: controller.signal });
+      if (!controller.signal.aborted) { setResults(response.hits || []); setSearched(true); }
+    } catch (error) {
+      if (!controller.signal.aborted) message.error(error.message || '搜索失败');
+    } finally {
+      if (!controller.signal.aborted) setSearching(false);
+    }
   };
   const openResult = hit => setSelectedHit(hit);
   const handleResultKeyDown = (event, hit) => {
@@ -49,7 +66,7 @@ const AIWorkspace = () => {
     <PageHeader title="检索" />
     <SearchBar><Input size="large" prefix={<SearchOutlined />} value={query} onChange={event => setQuery(event.target.value)} onPressEnter={runSearch} placeholder="例如：上季度项目复盘中的风险" /><Select size="large" value={mode} onChange={setMode} options={[{ value: 'hybrid', label: '混合检索' }, { value: 'name', label: '文件名' }, { value: 'fulltext', label: '全文' }, { value: 'semantic', label: '语义' }]} /><Button type="primary" size="large" icon={<FileSearchOutlined />} loading={searching} onClick={runSearch}>搜索</Button></SearchBar>
     <SectionHeading title="检索结果" meta={`${results.length} 个文件`} />
-    {results.length === 0 ? <GraphicEmpty title="输入一句话开始检索" /> : <ResultList>{results.map(hit => <Result key={hit.file.id} role="button" tabIndex={0} aria-label={`打开 ${hit.file.name} 文件详情`} onClick={() => openResult(hit)} onKeyDown={event => handleResultKeyDown(event, hit)}><div><strong>{hit.file.name}</strong>{hit.citations?.map(citation => <Excerpt key={citation.id}>“{citation.excerpt}” <Tag color="blue">{citation.page_number ? `第 ${citation.page_number} 页` : citation.section || '正文'}</Tag></Excerpt>)}</div><div><strong>{(hit.score || 0).toFixed(3)}</strong><small> relevance</small></div></Result>)}</ResultList>}
+    {results.length === 0 ? <GraphicEmpty title={searching ? '正在检索文件' : searched ? '没有找到匹配的文件' : '输入一句话开始检索'} /> : <ResultList>{results.map(hit => <Result key={hit.file.id} role="button" tabIndex={0} aria-label={`打开 ${hit.file.name} 文件详情`} onClick={() => openResult(hit)} onKeyDown={event => handleResultKeyDown(event, hit)}><div><strong>{hit.file.name}</strong>{hit.citations?.map(citation => <Excerpt key={citation.id}>“{citation.excerpt}” <Tag color="blue">{citation.page_number ? `第 ${citation.page_number} 页` : citation.section || '正文'}</Tag></Excerpt>)}</div><div><strong>{(hit.score || 0).toFixed(3)}</strong><small> relevance</small></div></Result>)}</ResultList>}
     <SearchResultModal hit={selectedHit} open={Boolean(selectedHit)} onClose={() => setSelectedHit(null)} onChanged={runSearch} />
   </ProductPage>;
 };

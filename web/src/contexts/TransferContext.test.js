@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { abortUpload, listActiveUploads, uploadFile } from '../services/drive';
 import { TransferProvider, useTransfers } from './TransferContext';
 
@@ -92,4 +92,18 @@ test('preserves the name-conflict reason for the transfer status', async () => {
   fireEvent.click(screen.getByRole('button', { name: '添加' }));
 
   expect(await screen.findByText('skipped:sample.txt:0')).toHaveAttribute('data-error-code', 'upload.name_conflict');
+});
+
+test.each([false, true])('hydration preserves a newly queued upload (request fails: %s)', async fails => {
+  let resolveList, rejectList;
+  listActiveUploads.mockImplementationOnce(() => new Promise((resolve, reject) => { resolveList = resolve; rejectList = reject; }));
+  uploadFile.mockImplementationOnce(() => new Promise(() => {}));
+  renderTransfers();
+  fireEvent.click(screen.getByRole('button', { name: '添加' }));
+  expect(await screen.findByText('checking:sample.txt:0')).toBeInTheDocument();
+  await act(async () => {
+    if (fails) rejectList(new Error('offline'));
+    else resolveList({ items: [] });
+  });
+  expect(screen.getByText('checking:sample.txt:0')).toBeInTheDocument();
 });

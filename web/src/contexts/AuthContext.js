@@ -1,11 +1,14 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { logoutUser, restoreUserSession } from '../services/auth';
+import { onSessionExpired } from '../services/api';
 
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
+
+  useEffect(() => onSessionExpired(() => setUser(null)), []);
 
   useEffect(() => {
     let active = true;

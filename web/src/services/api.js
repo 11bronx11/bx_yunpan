@@ -1,5 +1,11 @@
 let accessToken = null;
 let refreshPromise = null;
+const sessionExpiredListeners = new Set();
+
+export const onSessionExpired = listener => {
+  sessionExpiredListeners.add(listener);
+  return () => sessionExpiredListeners.delete(listener);
+};
 
 const errorMessages = {
   'auth.unauthorized': '登录状态已失效，请重新登录',
@@ -91,7 +97,11 @@ const refreshAccess = async () => {
       setAccessToken(session.access_token);
       return session;
     }).catch(error => {
-      if (error.code) throw error;
+      if (error.status === 401) {
+        setAccessToken(null);
+        sessionExpiredListeners.forEach(listener => listener());
+      }
+      if (error.status || error.code) throw error;
       throw clientError('client.network');
     }).finally(() => {
       refreshPromise = null;

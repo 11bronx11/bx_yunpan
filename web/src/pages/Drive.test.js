@@ -3,7 +3,7 @@ import { App as AntApp, ConfigProvider } from 'antd';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Drive from './Drive';
-import { deleteFolder, getBreadcrumb, getChildren, getDownloadURL, getPreview, getRoot } from '../services/drive';
+import { createFolder, deleteFolder, getBreadcrumb, getChildren, getDownloadURL, getPreview, getRoot, renameFile } from '../services/drive';
 import { getFileAI } from '../services/ai';
 import { startDownload } from '../utils/download';
 
@@ -171,4 +171,53 @@ test('restarts from page one when a cursor expires without appending stale rows'
   expect(await screen.findByText('fresh.pdf')).toBeInTheDocument();
   expect(screen.queryByText('old.pdf')).not.toBeInTheDocument();
   expect(getChildren).toHaveBeenNthCalledWith(3, 'root', expect.objectContaining({ cursor: '' }));
+});
+
+test('Enter on a folder action does not enter the folder', async () => {
+  renderDrive();
+  const button = await screen.findByRole('button', { name: '管理目录 空目录' });
+  fireEvent.keyDown(button, { key: 'Enter' });
+  expect(getChildren).toHaveBeenCalledTimes(1);
+});
+
+test('Enter on a file action does not open its summary', async () => {
+  getChildren.mockResolvedValue({ items: [pageFile('report.pdf')] });
+  getFileAI.mockResolvedValue({ status: 'indexed', summary: '摘要' });
+  renderDrive();
+  const button = await screen.findByRole('button', { name: '管理 report.pdf' });
+  fireEvent.keyDown(button, { key: 'Enter' });
+  expect(getFileAI).not.toHaveBeenCalled();
+});
+
+test('an opaque file row can receive keyboard focus to reveal desktop actions', async () => {
+  getChildren.mockResolvedValue({ items: [{ ...pageFile('archive.bin'), mime_type: 'application/octet-stream' }] });
+  renderDrive();
+  const row = await screen.findByRole('row', { name: /archive.bin/ });
+  expect(row).toHaveAttribute('tabindex', '0');
+});
+
+test('repeated Enter submits a folder creation only once while it is pending', async () => {
+  createFolder.mockImplementationOnce(() => new Promise(() => {}));
+  renderDrive();
+  fireEvent.click(await screen.findByRole('button', { name: /新建目录/ }));
+  const input = await screen.findByRole('textbox', { name: '目录名称' });
+  fireEvent.change(input, { target: { value: '新目录' } });
+  fireEvent.keyDown(input, { key: 'Enter' });
+  fireEvent.keyUp(input, { key: 'Enter' });
+  fireEvent.keyDown(input, { key: 'Enter' });
+  expect(createFolder).toHaveBeenCalledTimes(1);
+});
+
+test('repeated Enter submits a rename only once while it is pending', async () => {
+  getChildren.mockResolvedValue({ items: [pageFile('report.pdf')] });
+  renameFile.mockImplementationOnce(() => new Promise(() => {}));
+  renderDrive();
+  fireEvent.click(await screen.findByRole('button', { name: '管理 report.pdf' }));
+  fireEvent.click(await screen.findByText('重命名'));
+  const input = await screen.findByRole('textbox', { name: '新文件名' });
+  fireEvent.change(input, { target: { value: 'renamed.pdf' } });
+  fireEvent.keyDown(input, { key: 'Enter' });
+  fireEvent.keyUp(input, { key: 'Enter' });
+  fireEvent.keyDown(input, { key: 'Enter' });
+  expect(renameFile).toHaveBeenCalledTimes(1);
 });
