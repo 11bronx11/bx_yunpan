@@ -116,7 +116,7 @@ test('deleted source history shows only the filename and type without action but
   fireEvent.click(screen.getByRole('tab', { name: '源文件已删除' }));
   const row = await screen.findByRole('row', { name: /history.pdf/ });
   expect(listShares).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'source_deleted', limit: 10 }));
-  expect(within(row).getByText('PDF')).toBeInTheDocument();
+  expect(within(row).getByTitle('PDF')).toBeInTheDocument();
   expect(within(row).queryByRole('button')).not.toBeInTheDocument();
   expect(shareStatus(share('both', { revoked_at: '2026-01-01', source_deleted_at: '2026-01-01' }))).toBe('source_deleted');
 });

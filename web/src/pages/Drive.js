@@ -52,6 +52,9 @@ const CrumbSeparator = styled(RightOutlined)`flex: 0 0 auto; color: var(--text-t
 const Thumb = styled.img`display: block; width: 42px; height: 42px; border: 1px solid var(--divider); border-radius: 10px; object-fit: cover; background: var(--paper);`;
 const NameCell = styled(Space)`min-width: 0; max-width: 100%; .ant-space-item:last-child { min-width: 0; }`;
 const FileName = styled.strong`display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;`;
+const NameColumnTitle = styled.span`padding-inline-start: 4px;`;
+// Align these headings with the dot inside a tag: 1px border + 9px padding.
+const TagColumnTitle = styled.span`padding-inline-start: 10px;`;
 const PreviewShell = styled.div`
   display: grid;
   min-height: 280px;
@@ -302,10 +305,10 @@ const Drive = () => {
   });
 
   const columns = [
-    { title: '名称', key: 'name', render: (_, item) => <NameCell>{previews[item.id]?.url ? <Thumb src={previews[item.id].url} alt="" /> : <FileTypeBadge type={item.type === 'folder' ? 'folder' : item.mime_type} />}<FileName title={item.name}>{item.name}</FileName></NameCell> },
-    { title: '类型', key: 'type', width: 110, responsive: ['md'], render: (_, item) => <StatusTag tone={item.type === 'folder' ? 'blue' : undefined}>{fileTypeLabel(item.type === 'folder' ? 'folder' : item.mime_type)}</StatusTag> },
+    { title: <NameColumnTitle>名称</NameColumnTitle>, key: 'name', render: (_, item) => <NameCell>{previews[item.id]?.url ? <Thumb src={previews[item.id].url} alt="" /> : <FileTypeBadge type={item.type === 'folder' ? 'folder' : item.mime_type} />}<FileName title={item.name}>{item.name}</FileName></NameCell> },
+    { title: <TagColumnTitle>类型</TagColumnTitle>, key: 'type', width: 110, responsive: ['md'], render: (_, item) => <StatusTag tone={item.type === 'folder' ? 'blue' : undefined}>{fileTypeLabel(item.type === 'folder' ? 'folder' : item.mime_type)}</StatusTag> },
     { title: '大小', key: 'size', width: 120, responsive: ['md'], render: (_, item) => item.type === 'folder' ? '-' : formatSize(item.size_bytes) },
-    { title: '索引', key: 'ai', width: 110, responsive: ['lg'], render: (_, item) => item.type === 'folder' ? null : item.ai_status ? <StatusTag tone={aiStatusMeta[item.ai_status]?.tone}>{aiStatusMeta[item.ai_status]?.label || '状态待确认'}</StatusTag> : <span style={{ color: 'var(--text-tertiary)' }}>未建立</span> },
+    { title: <TagColumnTitle>索引</TagColumnTitle>, key: 'ai', width: 110, responsive: ['lg'], render: (_, item) => item.type === 'folder' ? null : item.ai_status ? <StatusTag tone={aiStatusMeta[item.ai_status]?.tone}>{aiStatusMeta[item.ai_status]?.label || '状态待确认'}</StatusTag> : <span style={{ color: 'var(--text-tertiary)' }}>未建立</span> },
     { title: '', key: 'action', width: compactActions ? 68 : 210, render: (_, item) => item.type === 'folder'
       ? compactActions
         ? <Dropdown menu={compactFolderMenu(item)} trigger={['click']}><Button aria-label={`管理目录 ${item.name}`} icon={<MoreOutlined />} onClick={event => event.stopPropagation()} /></Dropdown>

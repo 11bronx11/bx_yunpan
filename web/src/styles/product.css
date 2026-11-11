@@ -127,11 +127,15 @@
 .compact-upload .ant-progress-bg { background: var(--ink) !important; }
 
 .shares-page .ant-tabs-tab-active .ant-tabs-tab-btn { font-weight: 600; text-shadow: none; }
-.shares-page .share-file { overflow-wrap: anywhere; }
-.shares-page .share-mobile-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 8px; color: var(--muted); font-size: 12px; }
-.shares-page .share-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
-.shares-page .share-file .share-actions { margin-top: 12px; }
-.shares-page .share-actions .ant-btn { min-height: 32px; height: 32px; padding-inline: 10px; font-size: 12px; background: var(--white); }
+.shares-page .share-name-heading { padding-inline-start: 4px; }
+.shares-page .share-type-heading { padding-inline-start: 10px; }
+.shares-page .share-file { display: flex; gap: 12px; align-items: center; min-width: 0; }
+.shares-page .share-name { display: flex; flex: 1; gap: 8px; align-items: center; min-width: 0; }
+.shares-page .share-copy { min-width: 0; }
+.shares-page .share-copy strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shares-page .share-mobile-expiry { display: block; overflow: hidden; margin-top: 4px; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.shares-page .share-actions { display: flex; flex: 0 0 auto; justify-content: flex-end; align-items: center; gap: 4px; }
+.shares-page .share-actions .ant-btn { width: 40px; min-width: 40px; min-height: 40px; height: 40px; padding: 0; background: var(--white); }
 .shares-page .share-actions .ant-btn:focus-visible { outline-color: var(--ink); }
 .shares-page .share-actions .ant-btn:active:not(:disabled) { transform: translateY(0); }
 .shares-page .share-actions .ant-btn-dangerous:hover:not(:disabled),
@@ -152,7 +156,7 @@
 }
 
 @media (max-width: 767px) {
-  .shares-page .share-actions .ant-btn { min-height: 44px; height: 44px; }
+  .shares-page .share-actions .ant-btn { width: 44px; min-width: 44px; min-height: 44px; height: 44px; }
 }
 
 @media (max-width: 760px) {

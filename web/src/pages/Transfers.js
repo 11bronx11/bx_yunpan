@@ -8,28 +8,43 @@ import { useTransfers } from '../contexts/TransferContext';
 const Workspace = styled.div`display: grid; gap: 18px; min-width: 0;`;
 const FilterRow = styled.div`display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap;`;
 const QueueMeta = styled.span`color: var(--muted); font-size: 13px;`;
-const TransferList = styled.div`overflow: hidden; border: 1px solid var(--divider-strong); border-radius: var(--radius-control); background: var(--white);`;
+const TransferList = styled.div`
+  --transfer-action-size: 40px;
+  --transfer-action-gap: 6px;
+  --transfer-actions-width: calc(var(--transfer-action-size) * 2 + var(--transfer-action-gap));
+  overflow: hidden;
+  border: 1px solid var(--divider-strong);
+  border-radius: var(--radius-control);
+  background: var(--white);
+  @media (max-width: 760px) { --transfer-action-size: 44px; }
+`;
 const TransferRow = styled.article`
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(220px, 360px) auto;
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 360px) var(--transfer-actions-width);
   gap: 24px;
   align-items: center;
   min-height: 92px;
   padding: 16px 18px;
   border-bottom: 1px solid var(--divider);
   &:last-child { border-bottom: 0; }
-  @media (max-width: 860px) { grid-template-columns: minmax(0, 1fr) auto; gap: 12px 16px; }
-  @media (max-width: 560px) { grid-template-columns: minmax(0, 1fr); padding: 15px; }
+  @media (max-width: 860px) { grid-template-columns: minmax(0, 1fr) var(--transfer-actions-width); gap: 12px 16px; }
+  @media (max-width: 560px) { column-gap: 12px; padding: 15px; }
 `;
-const FileInfo = styled.div`display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 12px; align-items: center; min-width: 0;`;
+const FileInfo = styled.div`
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  @media (max-width: 860px) { grid-column: 1 / -1; }
+`;
 const FileMark = styled.span`display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid var(--divider-strong); border-radius: 10px; background: var(--lime-soft); font-size: 16px;`;
 const FileCopy = styled.div`min-width: 0; strong { display: block; overflow: hidden; margin-bottom: 4px; text-overflow: ellipsis; white-space: nowrap; } span { display: block; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }`;
 const ProgressCell = styled.div`
   display: grid;
   gap: 7px;
   min-width: 0;
-  @media (max-width: 860px) { grid-column: 1 / -1; grid-row: 2; }
-  @media (max-width: 560px) { grid-row: auto; }
+  @media (max-width: 860px) { grid-column: 1; grid-row: 2; }
 `;
 const ProgressMeta = styled.div`
   display: grid;
@@ -44,10 +59,20 @@ const DetailText = styled.span`min-width: 0; justify-self: end; line-height: 1.5
 const FeedbackText = styled(DetailText)`color: ${({ $benign }) => $benign ? 'var(--text-secondary)' : '#a52c26'};`;
 const RowActions = styled.div`
   display: flex;
-  gap: 6px;
+  gap: var(--transfer-action-gap);
   align-items: center;
   justify-content: flex-end;
-  @media (max-width: 560px) { justify-content: flex-start; }
+  min-width: 0;
+  .ant-btn {
+    flex: 0 0 var(--transfer-action-size);
+    width: var(--transfer-action-size);
+    min-width: var(--transfer-action-size);
+    height: var(--transfer-action-size);
+    min-height: var(--transfer-action-size);
+    padding: 0;
+  }
+  .ant-upload-wrapper, .ant-upload { display: inline-flex; }
+  @media (max-width: 860px) { grid-column: 2; grid-row: 2; }
 `;
 
 const unfinishedStatuses = new Set(['queued', 'checking', 'uploading', 'pausing', 'paused', 'verifying', 'verification_pending', 'interrupted']);
@@ -128,7 +153,7 @@ const Transfers = () => {
             </ProgressMeta>
           </ProgressCell>
           <RowActions>
-            {task.status === 'interrupted' && <Upload maxCount={1} showUploadList={false} beforeUpload={file => selectResumeFile(task.id, file)}><Button icon={<FileSearchOutlined />}>选择原文件继续</Button></Upload>}
+            {task.status === 'interrupted' && <Upload maxCount={1} showUploadList={false} beforeUpload={file => selectResumeFile(task.id, file)}><Tooltip title="选择原文件继续"><Button aria-label={`选择原文件继续 ${task.name}`} icon={<FileSearchOutlined />} /></Tooltip></Upload>}
             {canPause && <Tooltip title="暂停"><Button aria-label={`暂停 ${task.name}`} icon={<PauseOutlined />} onClick={() => pauseUpload(task.id)} /></Tooltip>}
             {canResume && <Tooltip title={task.status === 'paused' ? '继续' : '重试'}><Button aria-label={`${task.status === 'paused' ? '继续' : '重试'} ${task.name}`} icon={task.status === 'paused' ? <PlayCircleOutlined /> : <RedoOutlined />} onClick={() => resumeUpload(task.id)} /></Tooltip>}
             {canCancel && <Tooltip title="取消"><Button aria-label={`取消 ${task.name}`} danger icon={<CloseOutlined />} onClick={() => cancelUpload(task.id)} /></Tooltip>}

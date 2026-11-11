@@ -336,17 +336,30 @@ export const ProductToolbar = ({ search, filters, actions, className }) => (
 
 export const StatusTag = ({ children, tone }) => <Tag $tone={tone}>{children}</Tag>;
 
+const knownFileTypes = new Set([
+  'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'avif',
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'md',
+  'zip', 'rar', '7z', 'tar', 'gz', 'js', 'jsx', 'ts', 'tsx', 'cpp', 'c', 'h', 'py',
+]);
+
 const normalizeFileType = type => {
-  const value = (type || '').toLowerCase();
+  const value = (type || '').toLowerCase().split(';')[0].trim();
   if (value === 'folder') return 'folder';
-  if (value.includes('pdf')) return 'pdf';
-  if (value.includes('wordprocessingml') || value.includes('officedocument.word')) return 'docx';
-  if (value.includes('spreadsheetml') || value.includes('officedocument.sheet')) return 'xlsx';
-  if (value.includes('presentationml') || value.includes('officedocument.presentation')) return 'pptx';
-  if (value.includes('msword')) return 'doc';
-  if (value.includes('ms-excel')) return 'xls';
   const subtype = value.includes('/') ? value.split('/').pop() : value;
-  return ({ jpeg: 'jpg', 'svg+xml': 'svg', plain: 'txt', markdown: 'md', 'octet-stream': 'file', 'x-zip-compressed': 'zip' })[subtype] || subtype || 'file';
+  const normalized = ({
+    'vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+    'vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+    'vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+    msword: 'doc', 'vnd.ms-excel': 'xls',
+    jpeg: 'jpg', 'svg+xml': 'svg', plain: 'txt', markdown: 'md', 'x-markdown': 'md',
+    'vnd.ms-powerpoint': 'ppt', 'x-zip-compressed': 'zip', 'vnd.rar': 'rar',
+    'x-rar': 'rar', 'x-rar-compressed': 'rar', 'x-7z-compressed': '7z',
+    'x-tar': 'tar', gzip: 'gz', 'x-gzip': 'gz',
+    javascript: 'js', ecmascript: 'js', 'x-javascript': 'js', typescript: 'ts',
+    'x-python': 'py', 'x-python-code': 'py', 'x-c++': 'cpp', 'x-c++src': 'cpp',
+    'x-c': 'c', 'x-csrc': 'c', 'x-chdr': 'h',
+  })[subtype] || subtype;
+  return knownFileTypes.has(normalized) ? normalized : 'file';
 };
 
 export const fileTypeLabel = type => {

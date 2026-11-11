@@ -1,3 +1,14 @@
+html {
+  scrollbar-gutter: stable;
+}
+
+@supports (scrollbar-gutter: stable) {
+  html body {
+    /* The root gutter already reserves the scrollbar space that modal locks subtract. */
+    width: auto !important;
+  }
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;

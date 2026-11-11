@@ -1,24 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, App, Button, Grid, Space, Table, Tabs } from 'antd';
+import { Alert, App, Button, Grid, Space, Table, Tabs, Tooltip } from 'antd';
 import { CalendarOutlined, StopOutlined } from '@ant-design/icons';
 import { listShares, revokeShare } from '../services/share';
-import { GraphicEmpty, PageHeader, ProductPage } from '../components/design/ProductUI';
+import { FileTypeBadge, fileTypeLabel, GraphicEmpty, PageHeader, ProductPage, StatusTag } from '../components/design/ProductUI';
 import ShareModal, { formatShareExpiry } from '../components/ShareModal';
 
 const PAGE_SIZE = 10;
 const tabs = [
   { key: 'active', label: '分享有效' }, { key: 'expired', label: '分享过期' }, { key: 'revoked', label: '分享撤销' }, { key: 'source_deleted', label: '源文件已删除' },
 ];
-const fileType = share => {
-  const extension = share.file_name?.match(/\.([a-z0-9]{1,12})$/i)?.[1];
-  if (extension) return extension.toUpperCase();
-  const mime = share.mime_type || '';
-  if (mime.startsWith('image/')) return '图片';
-  if (mime.startsWith('video/')) return '视频';
-  if (mime.startsWith('audio/')) return '音频';
-  if (mime.startsWith('text/')) return '文本';
-  return mime === 'application/pdf' ? 'PDF' : '文件';
-};
 export const shareStatus = (share, now = Date.now()) => {
   if (share.source_deleted_at || share.status === 'source_deleted') return 'source_deleted';
   if (share.revoked_at || share.status === 'revoked') return 'revoked';
@@ -30,6 +20,8 @@ export default function Shares() {
   const { message } = App.useApp();
   const screens = Grid.useBreakpoint();
   const compact = !screens.md;
+  // Match Drive's type column position on desktop, keeping room for the date.
+  const expiryWidth = screens.lg ? 332 : 210;
   const [items, setItems] = useState([]);
   const [page, setPage] = useState({});
   const [query, setQuery] = useState({ status: 'active', cursors: [''], index: 0 });
@@ -83,21 +75,23 @@ export default function Shares() {
     finally { pendingRevokes.current.delete(share.id); setRevoking([...pendingRevokes.current]); }
   };
   const renderActions = share => shareStatus(share, now) === 'active' && <div className="share-actions">
-    <Button size="small" icon={<CalendarOutlined />} aria-label="修改有效期" disabled={revoking.includes(share.id)} onClick={() => setEditing(share)}>修改有效期</Button>
-    <Button size="small" icon={<StopOutlined />} aria-label="取消分享" danger loading={revoking.includes(share.id)} onClick={() => revoke(share)}>取消分享</Button>
+    <Tooltip title="修改有效期"><Button shape="circle" icon={<CalendarOutlined />} aria-label="修改有效期" disabled={revoking.includes(share.id)} onClick={() => setEditing(share)} /></Tooltip>
+    <Tooltip title="取消分享"><Button shape="circle" icon={<StopOutlined />} aria-label="取消分享" danger loading={revoking.includes(share.id)} onClick={() => revoke(share)} /></Tooltip>
   </div>;
   const columns = [
-    { title: '文件', dataIndex: 'file_name', render: (name, share) => <div className="share-file">
-      <span>{name || '未知文件'}</span>
-      {compact && <div className="share-mobile-meta"><span>{fileType(share)}</span>{query.status === 'active' && <span>{formatShareExpiry(share.expires_at)}</span>}</div>}
+    { title: <span className="share-name-heading">名称</span>, dataIndex: 'file_name', render: (name, share) => <div className="share-file">
+      <div className="share-name"><FileTypeBadge type={share.mime_type} /><div className="share-copy">
+        <strong title={name || '未知文件'}>{name || '未知文件'}</strong>
+        {compact && query.status === 'active' && <span className="share-mobile-expiry" title={formatShareExpiry(share.expires_at)}>{formatShareExpiry(share.expires_at)}</span>}
+      </div></div>
       {compact && query.status === 'active' && renderActions(share)}
     </div> },
     ...(!compact ? [
-      { title: '类型', dataIndex: 'mime_type', width: 80, render: (_, share) => fileType(share) },
+      { title: <span className="share-type-heading">类型</span>, dataIndex: 'mime_type', width: 110, render: type => <StatusTag>{fileTypeLabel(type)}</StatusTag> },
       ...(query.status === 'active' ? [
-        { title: '有效期', dataIndex: 'expires_at', width: 210, render: formatShareExpiry },
-        { title: '', key: 'actions', width: 228, align: 'right', render: (_, share) => renderActions(share) },
-      ] : []),
+        { title: '有效期', dataIndex: 'expires_at', width: expiryWidth, render: formatShareExpiry },
+        { title: '', key: 'actions', width: 108, align: 'right', render: (_, share) => renderActions(share) },
+      ] : [{ title: '', key: 'spacing', width: expiryWidth + 108, render: () => null }]),
     ] : []),
   ];
   return <ProductPage className="shares-page">
