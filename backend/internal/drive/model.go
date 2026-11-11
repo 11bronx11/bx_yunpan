@@ -40,5 +40,5 @@ type FileView struct {
 	SizeBytes int64
 	MimeType  string
 	SHA256    string
-	AIStatus  *string
+	AIStatus  *string `json:"-"` // Read live; FileResponse adds it to the HTTP response.
 }

@@ -123,6 +123,9 @@ func (s *Service) Children(ownerID, folderID uuid.UUID) ([]Folder, []FileView, e
 			return childrenCache{Folders: folders, Files: files}, err
 		})
 		if err == nil {
+			if err := s.refreshAIStatuses(context.Background(), cached.Files); err != nil {
+				return nil, nil, err
+			}
 			return cached.Folders, cached.Files, nil
 		}
 		if sourceErr, ok := platformcache.SourceLoadCause(err); ok {
@@ -227,6 +230,9 @@ func (s *Service) childrenPage(ctx context.Context, ownerID, folderID uuid.UUID,
 			strconv.FormatInt(epoch.ContentEpoch, 10) + ":" + strconv.FormatInt(epoch.ACLEpoch, 10) + ":" + strconv.Itoa(limit) + ":" + sortName
 		var cached childPage
 		if cacheErr := s.cache.Load(ctx, key, &cached, func() (any, error) { return load() }); cacheErr == nil {
+			if err := s.refreshAIStatuses(ctx, cached.Files); err != nil {
+				return nil, nil, false, "", err
+			}
 			current, epochErr := s.currentEpoch(ctx, ownerID)
 			if epochErr != nil {
 				return nil, nil, false, "", epochErr
@@ -351,6 +357,33 @@ func (s *Service) loadChildren(ownerID, folderID uuid.UUID) ([]Folder, []FileVie
 	        WHERE e.owner_id = ? AND e.folder_id = ? AND e.deleted_at IS NULL
 	        ORDER BY e.name_normalized ASC`, ownerID, folderID).Scan(&files).Error
 	return folders, files, err
+}
+
+// Indexing changes independently of the directory cache. Read all displayed
+// statuses in one query after loading cached metadata, including old payloads.
+func (s *Service) refreshAIStatuses(ctx context.Context, files []FileView) error {
+	if len(files) == 0 {
+		return nil
+	}
+	objectIDs := make([]uuid.UUID, len(files))
+	for i := range files {
+		objectIDs[i] = files[i].ObjectID
+	}
+	var rows []struct {
+		ObjectID uuid.UUID
+		Status   *string
+	}
+	if err := s.db.WithContext(ctx).Table("ai_documents").Select("object_id, status").Where("object_id IN ?", objectIDs).Scan(&rows).Error; err != nil {
+		return err
+	}
+	statuses := make(map[uuid.UUID]*string, len(rows))
+	for _, row := range rows {
+		statuses[row.ObjectID] = row.Status
+	}
+	for i := range files {
+		files[i].AIStatus = statuses[files[i].ObjectID]
+	}
+	return nil
 }
 
 func (s *Service) clearFolder(ownerID, folderID uuid.UUID) {
@@ -679,7 +712,11 @@ func (s *Service) File(ownerID, fileID uuid.UUID) (FileView, error) {
 			if cached.ID == uuid.Nil {
 				return FileView{}, ErrNotFound
 			}
-			return cached, nil
+			files := []FileView{cached}
+			if err := s.refreshAIStatuses(context.Background(), files); err != nil {
+				return FileView{}, err
+			}
+			return files[0], nil
 		}
 		if sourceErr, ok := platformcache.SourceLoadCause(err); ok {
 			return FileView{}, sourceErr

@@ -57,18 +57,30 @@ func (s *EmbeddingStore) Get(ctx context.Context, key string) ([]float32, bool, 
 	if s.redis == nil {
 		return nil, false, nil
 	}
-	raw, err := s.redis.Get(ctx, key).Bytes()
+	pipe := s.redis.Pipeline()
+	valueCmd := pipe.Get(ctx, key)
+	ttlCmd := pipe.PTTL(ctx, key)
+	_, err := pipe.Exec(ctx)
 	if err != nil {
 		if err == redis.Nil {
 			return nil, false, nil
 		}
 		return nil, false, err
 	}
+	remaining := ttlCmd.Val()
+	if remaining <= 0 {
+		return nil, false, nil
+	}
+	raw, err := valueCmd.Bytes()
+	if err != nil {
+		return nil, false, err
+	}
 	var value []float32
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return nil, false, err
 	}
-	s.putLocal(key, value, now.Add(s.ttl))
+	// Promoting a shared value must preserve its remaining lifetime.
+	s.putLocal(key, value, now.Add(remaining))
 	return append([]float32(nil), value...), true, nil
 }
 
