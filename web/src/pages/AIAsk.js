@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { App, Button, Input, Tag } from 'antd';
+import { App, Button, Tag } from 'antd';
+import Input from '../components/IMEInput';
 import { CommentOutlined, SendOutlined } from '@ant-design/icons';
 import styled from '@emotion/styled';
 import { askFiles } from '../services/ai';

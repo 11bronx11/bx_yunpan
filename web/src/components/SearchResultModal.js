@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { App, Button, Input, Modal, Tag } from 'antd';
+import { App, Button, Modal, Tag } from 'antd';
+import Input from './IMEInput';
 import {
   DeleteOutlined,
   DownloadOutlined,

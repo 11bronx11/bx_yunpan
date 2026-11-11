@@ -5,6 +5,7 @@ import AIAsk from './AIAsk';
 import { askFiles } from '../services/ai';
 
 jest.mock('../services/ai', () => ({ askFiles: jest.fn() }));
+beforeEach(() => jest.clearAllMocks());
 
 test('asks indexed files and renders the answer with citations', async () => {
   askFiles.mockResolvedValue({
@@ -21,4 +22,24 @@ test('asks indexed files and renders the answer with citations', async () => {
   await waitFor(() => expect(screen.getByLabelText('向文件提问')).toHaveValue(''));
   expect(await screen.findByText('待跟进事项包括接口联调和上线检查。')).toBeInTheDocument();
   expect(screen.getByText(/项目复盘\.pdf \/ 第 3 页/)).toBeInTheDocument();
+});
+
+test('confirms IME text without asking, keeps Shift+Enter, and submits with a later Enter', async () => {
+  askFiles.mockResolvedValue({ answer: '回答', citations: [] });
+  render(<App><AIAsk /></App>);
+  const input = screen.getByLabelText('向文件提问');
+  fireEvent.compositionStart(input);
+  fireEvent.change(input, { target: { value: 'hello' } });
+  expect(fireEvent.keyDown(input, { key: 'Enter', isComposing: true })).toBe(true);
+  fireEvent.keyUp(input, { key: 'Enter' });
+  expect(askFiles).not.toHaveBeenCalled();
+  expect(input).toHaveValue('hello');
+  fireEvent.compositionEnd(input, { data: 'hello' });
+  expect(fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })).toBe(true);
+  fireEvent.keyUp(input, { key: 'Enter' });
+  expect(askFiles).not.toHaveBeenCalled();
+  fireEvent.keyDown(input, { key: 'Enter' });
+  await waitFor(() => expect(askFiles).toHaveBeenCalledTimes(1));
+  expect(askFiles).toHaveBeenCalledWith('hello');
+  expect(input).toHaveValue('');
 });

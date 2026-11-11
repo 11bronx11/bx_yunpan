@@ -1,4 +1,6 @@
-import { App as AntApp, Button, Form, Input } from 'antd';
+import { App as AntApp, Button, Form } from 'antd';
+import Input from '../components/IMEInput';
+import useIMEGuard from '../utils/useIMEGuard';
 import { LockOutlined, MailOutlined, UserOutlined } from '@ant-design/icons';
 import { useGSAP } from '@gsap/react';
 import { gsap } from 'gsap';
@@ -492,6 +494,7 @@ const SideNote = styled.div`
 `;
 
 const Login = () => {
+  const ime = useIMEGuard();
   const { message } = AntApp.useApp();
   const navigate = useNavigate();
   const { login } = useAuth();
@@ -595,6 +598,8 @@ const Login = () => {
           <PanelTitle>{isRegister ? '创建你的账户' : '欢迎回来'}</PanelTitle>
 
           <StyledForm
+          {...ime.handlers}
+          onSubmitCapture={ime.onSubmitCapture}
           form={form}
           name="login"
           onFinish={onFinish}

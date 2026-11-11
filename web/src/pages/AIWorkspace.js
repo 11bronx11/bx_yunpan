@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { App, Button, Input, Select, Tag } from 'antd';
+import { App, Button, Select, Tag } from 'antd';
+import Input from '../components/IMEInput';
 import { FileSearchOutlined, SearchOutlined } from '@ant-design/icons';
 import { searchFiles } from '../services/ai';
 import { GraphicEmpty, PageHeader, ProductPage, SectionHeading } from '../components/design/ProductUI';

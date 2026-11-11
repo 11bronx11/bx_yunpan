@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, App, Input, Modal, Space } from 'antd';
+import { Alert, App, Modal, Space } from 'antd';
+import Input from './IMEInput';
 import { importShare, resolveShare } from '../services/share';
 import { formatShareExpiry } from './ShareModal';
 
