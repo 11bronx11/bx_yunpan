@@ -97,12 +97,13 @@ test('ignores a late response from a previously selected tab', async () => {
   await waitFor(() => expect(screen.queryByText('stale.pdf')).not.toBeInTheDocument());
 });
 
-test('shows a recoverable list error without informational blue alerts', async () => {
+test('shows a list error without a retry button and clears it when switching tabs', async () => {
   listShares.mockRejectedValueOnce(new Error('网络连接失败')).mockResolvedValueOnce({ items: [], page: {} });
   show();
   expect(await screen.findByText('网络连接失败')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: /重\s*试/ }));
-  expect(await screen.findByText('暂无有效分享')).toBeInTheDocument();
+  expect(within(screen.getByRole('alert')).queryByRole('button')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('tab', { name: '分享过期' }));
+  expect(await screen.findByText('暂无过期分享')).toBeInTheDocument();
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });
 

@@ -58,6 +58,30 @@ test('deletes a folder from the compact row menu after confirmation', async () =
   await waitFor(() => expect(getChildren).toHaveBeenCalledTimes(2));
 });
 
+test.each(['children', 'breadcrumb'])('shows a top message when opening a deleted folder fails in %s', async failure => {
+  renderDrive();
+  const row = await screen.findByRole('row', { name: '进入目录 空目录' });
+  const error = Object.assign(new Error('文件或目录不存在，可能已被删除'), { status: 404, code: 'drive.not_found' });
+  (failure === 'children' ? getChildren : getBreadcrumb).mockRejectedValueOnce(error);
+
+  fireEvent.click(row);
+
+  expect(await screen.findByText(error.message)).toBeInTheDocument();
+  expect(within(screen.getByRole('main')).queryByText(error.message)).not.toBeInTheDocument();
+  expect(within(screen.getByRole('main')).queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /根目录/ })).toHaveAttribute('aria-current', 'page');
+  expect(row).toBeInTheDocument();
+  expect(mockLogout).not.toHaveBeenCalled();
+});
+
+test('keeps an inline error when the first directory cannot be opened', async () => {
+  getChildren.mockRejectedValueOnce(Object.assign(new Error('文件或目录不存在，可能已被删除'), { status: 404, code: 'drive.not_found' }));
+  renderDrive();
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('文件或目录不存在，可能已被删除');
+  expect(screen.getAllByText('文件或目录不存在，可能已被删除')).toHaveLength(1);
+});
+
 test('opens the stored AI summary for an octet-stream source file', async () => {
   getChildren.mockResolvedValue({
     items: [{ id: 'file-1', type: 'file', name: 'main.cpp', mime_type: 'application/octet-stream', size_bytes: 42, version: 1, ai_status: 'indexed' }],

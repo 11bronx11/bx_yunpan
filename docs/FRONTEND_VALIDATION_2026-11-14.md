@@ -116,3 +116,33 @@ CI=true npm test -- --runInBand --watchAll=false --testTimeout=20000 \
 - Chromium 未登录访问受保护路由能够进入登录页；1440px、390px 登录布局无页面横向溢出；检查期间无未捕获 JavaScript 错误和 HTTP 5xx。
 
 本次部署后仅执行上述 smoke，未重新执行此前 32 项完整浏览器流程或全量 Jest。构建、启动、前后容器快照和检查结果保存在 `artifacts/frontend-audit-deploy/`；`deployment.json` 记录旧镜像及启动配置，可用于回退。
+
+## 后续调整：服务不可用提示
+
+按用户要求，将 HTTP 502、503 的默认文案统一为“服务暂时不可用”，去除目录加载错误提示旁的刷新、重试按钮。提示条改用浅色背景、14px 圆角、独立图标底色和统一间距，保留 `role="alert"`。其他错误的原有文案保留。
+
+- API 与 Drive 的两个现有测试文件共 24 项通过；前端 lint、`git diff --check` 通过。
+- Docker 生产构建成功：`main.1ba4f075.js`，镜像 `bx-yunpan-web:service-unavailable-notice-r1` 已部署到 `:24000`。
+- Chromium 使用受控 API 响应验证根目录 502、首次目录内容 503、已打开目录后 502 三种场景，覆盖 1440、390、320px 共 9 项布局检查；文案正确、提示内无按钮、无页面横向溢出和未捕获 JavaScript 错误。切换视口后等待响应式布局完成再测量。
+- Nginx 配置校验通过，页面、`/healthz`、对象存储健康代理均返回 200。
+- 两个 API 容器按用户要求继续停止，其他容器的状态、ID 和启动时间未改变；因此本次未将 Web 的完整依赖健康检查或真实 API 流程记为通过。
+
+原始结果、截图和部署配置保存在 `artifacts/service-unavailable-notice/`。
+
+## 后续调整：按参考图缩小提示框
+
+用户进一步指定采用分享页参考图的浅红背景、红色边框及小红色错误图标，去除重试按钮，提示框仅包住“服务暂时不可用”并左对齐。Drive 与 Shares 共用 `ErrorNotice`，替换上一版全宽提示条。浏览器实测该文案下大小为 146×40px。
+
+Drive、Shares 两个测试文件共 23 项通过，lint 和 `git diff --check` 通过。生产构建为 `main.d4a86268.js`，镜像 `bx-yunpan-web:compact-service-notice-r1` 已更新到 `:24000`。Chromium 使用受控响应检查首次目录 502、已打开目录后 502、分享列表 503，覆盖 1440、390、320px 共 9 项：提示框与内容区左边缘对齐、无按钮、无横向溢出、无未捕获 JavaScript 错误；桌面和窄屏截图已查看。
+
+Nginx 配置、页面、Web 存活及对象存储代理检查通过。两个 API 容器继续停止，其余容器状态未改变；未验证真实 API 业务流程或完整依赖 readiness。证据和回退配置位于 `artifacts/compact-service-notice/`。
+
+## 后续调整：已删除目录使用顶部消息
+
+用户要求将操作已删除目录时的“不存在”错误改成与文件操作一致的顶部短暂消息。已打开网盘后，目录内容或面包屑请求返回 `drive.not_found` 时，改用 `message.error`，保留当前目录内容和导航；首次目录加载失败仍保留页面内错误提示，服务不可用提示也保留原样。删除目录请求本身原已使用顶部消息。
+
+Drive 测试文件 19 项通过；调整测试断言以符合 lint 后，三个新增用例重新通过，前端 lint、`git diff --check` 通过。Docker 生产构建成功，`main.369f9520.js` 已随 `bx-yunpan-web:deleted-folder-message-r1` 部署到 `:24000`。
+
+Chromium 使用受控响应，在 1440、390px 验证打开已删除目录 404、删除已删除目录 404、目录请求 502、首次目录加载 404，共 8 项通过；确认顶部消息位于视口顶部且自动消失，页面内不再保留操作产生的不存在提示。截图等待消息入场后采集并查看，无未捕获 JavaScript 错误。
+
+部署后页面、Web/API readiness、对象存储代理均返回 200，两个 API 副本 healthy，其他容器未重建或重启。本次未改后端删除语义，未执行新的真实数据删除操作；证据及回退配置位于 `artifacts/deleted-folder-message/`。

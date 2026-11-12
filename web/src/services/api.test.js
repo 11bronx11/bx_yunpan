@@ -69,7 +69,7 @@ test('keeps the HTTP error when refresh returns an HTML gateway failure', async 
     .mockResolvedValueOnce({ status: 401 })
     .mockResolvedValueOnce({ status: 502, ok: false, headers: { get: () => 'text/html' }, text: async () => '<html>Bad Gateway</html>' });
   try {
-    await expect(api('/api/v1/folders/root')).rejects.toMatchObject({ status: 502, message: '上游服务暂时不可用，请稍后重试' });
+    await expect(api('/api/v1/folders/root')).rejects.toMatchObject({ status: 502, message: '服务暂时不可用' });
   } finally { fetchMock.mockRestore(); }
 });
 

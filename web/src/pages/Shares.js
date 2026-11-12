@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, App, Button, Grid, Space, Table, Tabs, Tooltip } from 'antd';
+import { App, Button, Grid, Space, Table, Tabs, Tooltip } from 'antd';
 import { CalendarOutlined, StopOutlined } from '@ant-design/icons';
 import { listShares, revokeShare } from '../services/share';
-import { FileTypeBadge, fileTypeLabel, PageHeader, ProductPage, StatusTag } from '../components/design/ProductUI';
+import { ErrorNotice, FileTypeBadge, fileTypeLabel, PageHeader, ProductPage, StatusTag } from '../components/design/ProductUI';
 import ShareModal, { formatShareExpiry } from '../components/ShareModal';
 
 const PAGE_SIZE = 10;
@@ -98,7 +98,7 @@ export default function Shares() {
     <PageHeader title="我的分享" />
     <Tabs activeKey={query.status} items={tabs} onChange={changeTab} tabBarGutter={24} />
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      {error && <Alert type="error" showIcon message={error} action={<Button onClick={load}>重试</Button>} />}
+      {error && <ErrorNotice type="error" showIcon message={error} />}
       <Table className="editorial-ledger" aria-busy={loading} rowKey="id" columns={columns} dataSource={items} pagination={false} loading={loading} tableLayout="fixed" locale={{ emptyText: loading || error ? null : `暂无${query.status === 'source_deleted' ? '源文件已删除的' : tabs.find(tab => tab.key === query.status).label.slice(2)}分享` }} />
       <Space aria-label="分享分页" wrap>
         <Button disabled={loading || query.index === 0} onClick={() => turnPage(-1)}>上一页</Button>

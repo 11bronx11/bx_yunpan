@@ -123,6 +123,10 @@ const Hero = styled.section`
 
 const HeroMask = styled.div`
   overflow: hidden;
+
+  @media (min-width: 761px) {
+    width: max-content;
+  }
 `;
 
 const HeroLine = styled.h1`
