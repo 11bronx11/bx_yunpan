@@ -104,11 +104,13 @@ const Hero = styled.section`
   z-index: 3;
   top: clamp(116px, 15vh, 168px);
   left: clamp(20px, 5vw, 78px);
-  width: min(67vw, 980px);
+  right: calc(clamp(36px, 7vw, 132px) + 440px + 32px);
+  container-type: inline-size;
   pointer-events: none;
 
   @media (max-width: 960px) {
     top: 138px;
+    right: auto;
     width: 64vw;
   }
 
@@ -117,16 +119,13 @@ const Hero = styled.section`
     top: auto;
     left: auto;
     width: auto;
+    container-type: normal;
     margin: 58px 20px 0;
   }
 `;
 
 const HeroMask = styled.div`
   overflow: hidden;
-
-  @media (min-width: 761px) {
-    width: max-content;
-  }
 `;
 
 const HeroLine = styled.h1`
@@ -145,6 +144,14 @@ const HeroLine = styled.h1`
   &:last-child {
     margin-top: 0.1em;
     padding-left: clamp(32px, 12vw, 190px);
+  }
+
+  @media (min-width: 761px) {
+    font-size: clamp(48px, 15.5cqw, 178px);
+
+    &:last-child {
+      padding-left: 0;
+    }
   }
 
   @media (max-width: 760px) {
@@ -580,9 +587,9 @@ const Login = () => {
         <Issue>01 / AUTH</Issue>
       </Topline>
 
-      <Hero aria-label="Your files. Your cloud.">
-        <HeroMask><HeroLine className="hero-reveal">YOUR FILES.</HeroLine></HeroMask>
-        <HeroMask><HeroLine className="hero-reveal">YOUR CLOUD.</HeroLine></HeroMask>
+      <Hero aria-label="Your files, your cloud">
+        <HeroMask><HeroLine className="hero-reveal">YOUR FILES</HeroLine></HeroMask>
+        <HeroMask><HeroLine className="hero-reveal">YOUR CLOUD</HeroLine></HeroMask>
       </Hero>
 
       <BlueBlob className="auth-blob blob-blue" $color="#087FC3" aria-hidden="true" />
