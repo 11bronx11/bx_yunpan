@@ -64,7 +64,8 @@ const Topline = styled.header`
 
   @media (max-width: 760px) {
     padding: 18px 20px;
-    font-size: 9px;
+    font-size: 10px;
+    line-height: 1.4;
   }
 `;
 
@@ -82,20 +83,6 @@ const Brand = styled.div`
     border-radius: 50% 44% 50% 36%;
     background: var(--lime);
     transform: rotate(-18deg);
-  }
-`;
-
-const Issue = styled.div`
-  display: flex;
-  gap: 8px;
-  align-items: center;
-
-  &::before {
-    width: 8px;
-    height: 8px;
-    content: "";
-    border-radius: 50%;
-    background: var(--pink);
   }
 `;
 
@@ -155,12 +142,15 @@ const HeroLine = styled.h1`
   }
 
   @media (max-width: 760px) {
-    font-size: clamp(58px, 18.3vw, 86px);
-    line-height: 0.8;
-    white-space: normal;
+    font-size: clamp(30px, 10.5vw, 72px);
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    transform: none;
+    white-space: nowrap;
 
     &:last-child {
-      padding-left: 12vw;
+      margin-top: 0.12em;
+      padding-left: 4vw;
     }
   }
 `;
@@ -391,6 +381,13 @@ const ModeButton = styled.button`
   text-transform: uppercase;
 
   &:focus-visible { outline: 3px solid var(--pink); outline-offset: 2px; }
+
+  @media (max-width: 760px) {
+    min-height: 44px;
+    font-size: 11px;
+    line-height: 1.4;
+    letter-spacing: 0.02em;
+  }
 `;
 
 const PanelTitle = styled.h2`
@@ -400,6 +397,11 @@ const PanelTitle = styled.h2`
   font-weight: 800;
   line-height: 1.25;
   letter-spacing: 0;
+
+  @media (max-width: 760px) {
+    font-size: 26px;
+    line-height: 1.4;
+  }
 `;
 
 const StyledForm = styled(Form)`
@@ -448,6 +450,18 @@ const StyledForm = styled(Form)`
     border-color: #be123c;
     box-shadow: 3px 3px 0 #ffb3c7;
   }
+
+  @media (max-width: 760px) {
+    .ant-form-item { margin-bottom: 20px; }
+    .ant-form-item-label { padding-bottom: 8px; }
+    .ant-form-item-label > label {
+      font-size: 11px;
+      line-height: 1.6;
+      letter-spacing: 0.06em;
+    }
+    .ant-input-affix-wrapper,
+    .ant-input { font-size: 16px; }
+  }
 `;
 
 const RegisterGrid = styled.div`
@@ -487,21 +501,6 @@ const SubmitButton = styled(Button)`
   }
   &:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
   .anticon { font-size: 19px; }
-`;
-
-const SideNote = styled.div`
-  position: absolute;
-  z-index: 4;
-  bottom: 29px;
-  left: 33px;
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif;
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-
-  @media (max-width: 760px) { display: none; }
 `;
 
 const Login = () => {
@@ -584,7 +583,6 @@ const Login = () => {
     <AuthCanvas ref={canvasRef}>
       <Topline className="auth-micro">
         <Brand className="auth-brand">BX YUNPAN</Brand>
-        <Issue>01 / AUTH</Issue>
       </Topline>
 
       <Hero aria-label="Your files, your cloud">
@@ -596,7 +594,6 @@ const Login = () => {
       <LimeBlob className="auth-blob blob-lime" $color="#C6FF00" aria-hidden="true" />
       <PinkDot className="auth-blob" $color="#FF2864" aria-hidden="true" />
       <CoralBlob className="auth-blob blob-coral" $color="#FF704D" aria-hidden="true" />
-      <SideNote className="auth-micro">PRIVATE STORAGE / SEMANTIC SEARCH / 2026</SideNote>
 
       <PanelWrap $register={isRegister}>
         <Panel ref={panelRef}>

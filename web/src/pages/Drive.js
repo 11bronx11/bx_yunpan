@@ -78,6 +78,7 @@ const formatSize = bytes => {
 };
 
 const aiStatusMeta = {
+  missing: { label: '未建立', tone: undefined },
   pending: { label: '等待构建', tone: 'blue' },
   processing: { label: '正在构建', tone: 'blue' },
   indexed: { label: '已索引', tone: 'mint' },
@@ -312,7 +313,11 @@ const Drive = () => {
     { title: <NameColumnTitle>名称</NameColumnTitle>, key: 'name', render: (_, item) => <NameCell>{previews[item.id]?.url ? <Thumb src={previews[item.id].url} alt="" /> : <FileTypeBadge type={item.type === 'folder' ? 'folder' : item.mime_type} />}<FileName title={item.name}>{item.name}</FileName></NameCell> },
     { title: <TagColumnTitle>类型</TagColumnTitle>, key: 'type', width: 110, responsive: ['md'], render: (_, item) => <StatusTag tone={item.type === 'folder' ? 'blue' : undefined}>{fileTypeLabel(item.type === 'folder' ? 'folder' : item.mime_type)}</StatusTag> },
     { title: '大小', key: 'size', width: 120, responsive: ['md'], render: (_, item) => item.type === 'folder' ? '-' : formatSize(item.size_bytes) },
-    { title: <TagColumnTitle>索引</TagColumnTitle>, key: 'ai', width: 110, responsive: ['lg'], render: (_, item) => item.type === 'folder' ? null : item.ai_status ? <StatusTag tone={aiStatusMeta[item.ai_status]?.tone}>{aiStatusMeta[item.ai_status]?.label || '状态待确认'}</StatusTag> : <span style={{ color: 'var(--text-tertiary)' }}>未建立</span> },
+    { title: <TagColumnTitle>索引</TagColumnTitle>, key: 'ai', width: 110, responsive: ['lg'], render: (_, item) => {
+      if (item.type === 'folder') return null;
+      const meta = aiStatusMeta[item.ai_status || 'missing'];
+      return <StatusTag tone={meta?.tone}>{meta?.label || '状态待确认'}</StatusTag>;
+    } },
     { title: '', key: 'action', width: compactActions ? 68 : 210, render: (_, item) => item.type === 'folder'
       ? compactActions
         ? <Dropdown menu={compactFolderMenu(item)} trigger={['click']}><Button aria-label={`管理目录 ${item.name}`} icon={<MoreOutlined />} onClick={event => event.stopPropagation()} /></Dropdown>
