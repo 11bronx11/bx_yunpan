@@ -3,26 +3,18 @@ package storageops
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/testdb"
 )
 
 func testDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := os.Getenv("TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("TEST_POSTGRES_DSN is not set")
-	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return db
+	return testdb.Business(t)
 }
 
 func TestEnqueueIsIdempotentAndRollbackSafe(t *testing.T) {

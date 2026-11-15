@@ -4,17 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
-	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
-	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
-	"github.com/google/uuid"
-	amqp "github.com/rabbitmq/amqp091-go"
-	"gorm.io/gorm"
 	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	amqp "github.com/rabbitmq/amqp091-go"
+	"gorm.io/gorm"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
+	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 )
 
 func publishedRecoveryRow(t *testing.T, db *gorm.DB, eventType, destination string, published time.Time) Delivery {

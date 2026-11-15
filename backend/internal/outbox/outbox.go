@@ -141,9 +141,7 @@ func EnsureRecovery(tx *gorm.DB, recoveryKey, reason, resourceType string, resou
 	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&event).Error; err != nil {
 		return false, err
 	}
-	if err := addDeliveries(tx, event, true); err != nil {
-		return false, err
-	}
+
 	version := targetVersion
 	result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&Recovery{RecoveryKey: recoveryKey, EventID: eventID, Reason: reason, ResourceType: resourceType, ResourceID: resourceID, TargetVersion: &version, CreatedAt: now, UpdatedAt: now})
 	if result.Error != nil {
@@ -274,20 +272,17 @@ func Add(tx *gorm.DB, first any, legacy ...any) error {
 	if err := tx.Create(&event).Error; err != nil {
 		return err
 	}
-	// Add is the compatibility writer used by existing services. It dual-writes
-	// delivery rows while preserving the legacy event row for old relays.
-	return addDeliveries(tx, event, true)
+	// Compatibility callers also append events without transport fanout.
+	return nil
 }
 
-// AddEnvelope writes a validated typed contract and its delivery rows in the
-// caller's transaction. Event creation and delivery creation therefore commit
-// or roll back together.
+// AddEnvelope appends a validated event in the business transaction.
+// Subscription plans and delivery state live exclusively in the control DB.
 func AddEnvelope(tx *gorm.DB, envelope eventcontract.Envelope) error {
 	return addEnvelopeWithSearch(tx, envelope, false)
 }
 
 func addEnvelopeWithSearch(tx *gorm.DB, envelope eventcontract.Envelope, searchEnabled bool) error {
-
 	if tx == nil {
 		return fmt.Errorf("outbox: nil transaction")
 	}
@@ -320,7 +315,7 @@ func addEnvelopeWithSearch(tx *gorm.DB, envelope eventcontract.Envelope, searchE
 	if err := tx.Create(&event).Error; err != nil {
 		return err
 	}
-	return addDeliveriesWithSearch(tx, event, true, searchEnabled)
+	return nil
 }
 
 func ptr[T any](value T) *T { return &value }
@@ -330,7 +325,6 @@ func addDeliveries(tx *gorm.DB, event Event, aiEnabled bool) error {
 }
 
 func addDeliveriesWithSearch(tx *gorm.DB, event Event, aiEnabled, searchEnabled bool) error {
-
 	now := time.Now().UTC()
 	targets := append(Routes(event.EventType, aiEnabled), SearchRoutes(event.EventType, searchEnabled)...)
 	for _, target := range targets {

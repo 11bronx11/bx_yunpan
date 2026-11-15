@@ -4,7 +4,7 @@ BX YunPan：React 18 + Go（Gin）的私有云盘，带分片上传、秒传、�
 
 ## 先知道这几件事
 
-- **README 有一部分是旧的。** 任务队列在 2026-10-08 从 Asynq 换成了 RabbitMQ，README 的架构图和「Redis/Asynq Worker」等说法没跟上。Redis 现在只做缓存、限流和 dispatcher 选主。按源码整理的现状文档是 `docs/CURRENT_CODE_FACTS_2026-11-03.md` 和 `docs/PROCESS_STARTUP_AND_FLOW_2026-11-03.md`。
+- **README 有一部分是旧的。** 任务队列在 2026-10-08 从 Asynq 换成了 RabbitMQ，README 的架构图和「Redis/Asynq Worker」等说法没跟上。当前异步系统已改成独立控制 PG + 明确计算角色 + committer；Redis 只做缓存与限流，不再负责异步选主。当前入口见 `docs/ASYNC_SYSTEM_IMPLEMENTATION_2026-11-16.md`；两个 11-03 文档保留为旧源码快照。
 - **`docs/` 默认被 `.gitignore` 忽略**，只有白名单里的文件入库；`artifacts/` 整个忽略。新文档要入库，得在 `.gitignore` 加一行 `!docs/<文件名>`。
 - **仓库里没有 CI 配置**（无 `.github/`），格式化、vet、测试都靠本地跑。
 - 写验证报告的惯例：只写实际执行过的结果。单机 smoke、fake provider、静态检查不写成容量或高可用结论。
@@ -29,18 +29,21 @@ HTTP handler 不依赖 `internal/contract` 的生成代码，改接口时要同�
 
 集成测试靠环境变量开启，没设就 skip：
 
-- `TEST_POSTGRES_DSN`：绝大多数集成用例
+- `TEST_POSTGRES_DSN`：专用业务测试库；绝大多数集成用例
+- `TEST_CONTROL_POSTGRES_DSN`：专用独立控制测试库
+- `TEST_ASYNC_CORE=true` + `TEST_POSTGRES_READONLY_DSN`：开启真实 HTTP/MQ/MinIO 核心冒烟，读角色必须无业务写权限
 - `TEST_RABBITMQ_URL` + `TEST_RABBITMQ_MANAGEMENT_URL`
 - `TEST_MINIO_ENDPOINT` / `TEST_MINIO_ACCESS_KEY` / `TEST_MINIO_SECRET_KEY`
 - `TEST_REDIS_ADDR`
 - `TEST_SEARCH_ES_ENDPOINT` / `TEST_SEARCH_QDRANT_ENDPOINT`
 
-夹具的隔离程度不一样：identity、outbox 等包在目标库里建独立 schema（RabbitMQ 用独立 vhost），结束时删除；storageops、recovery 等包直接读写目标库 `public` 下的表，只按自己的 key 清理。outbox 的夹具还用 `CREATE TABLE ... LIKE public.<表>` 克隆表结构。所以要用一个跑过迁移的专用测试库，不要指向开发库。
+夹具的隔离程度不一样：identity、outbox 等包在目标库里建独立 schema（RabbitMQ 用独立 vhost），结束时删除；storageops、recovery、upload 并发、sharing、search 等夹具使用独立迁移 schema；仍有兼容用例读写目标库 `public`，不能据此把整个测试套件指向开发库。outbox 的夹具还用 `CREATE TABLE ... LIKE public.<表>` 克隆表结构。所以要用一个跑过迁移的专用测试库，不要指向开发库。
 
-迁移文件是 `backend/migrations/NNNNNN_name.{up,down}.sql`（golang-migrate，当前到 000031）：
+迁移文件是 `backend/migrations/NNNNNN_name.{up,down}.sql`（golang-migrate，当前到 000034；控制迁移独立放在 `backend/control-migrations/`，当前到 000002）：
 
 ```bash
-./deploy/local-run.sh migrate up        # 还支持 down-one、version
+./deploy/local-run.sh migrate up        # 业务库；还支持 down-one、version
+./deploy/local-run.sh migrate control up # 独立控制库
 ```
 
 前端，在 `web/` 下，要求 Node.js 22+：
@@ -74,52 +77,39 @@ python3 -m unittest parser_worker.test_parsers -v
 只用 Docker 跑基础设施、Go 和 React 跑在宿主机：
 
 ```bash
-./deploy/init-env.sh [--no-ai]    # 生成 deploy/.env，已存在则不动
-./deploy/infra-up.sh              # 只起 postgres、redis、minio
+./deploy/init-env.sh [--no-ai]    # 生成 deploy/.env；已有文件只补缺键，保留现值
+./deploy/infra-up.sh              # postgres、async-postgres、redis、minio、rabbitmq
 ./deploy/local-run.sh migrate up
-./deploy/local-run.sh api         # 也可以是 worker、aisvc、parser-svc
+./deploy/local-run.sh migrate control up
+./deploy/local-run.sh reader-init
+ASYNC_LEGACY_WRITERS_STOPPED=true ./deploy/local-run.sh async-import # 先停旧写者
+./deploy/local-run.sh api         # 各角色在独立终端运行，详见当前启动说明
 ./deploy/local-frontend.sh        # :3000
 ```
 
-`local-run.sh` 和 `local-frontend.sh` 从 `deploy/.env` 派生宿主机地址，不要另外维护一份配置。注意 `infra-up.sh` 不启动 RabbitMQ，`local-env.sh` 也不派生 `RABBITMQ_URL`，而用 `config.Load()` 的业务进程（包括 api）启动时的配置校验都要求它非空。模板 `.env` 里它是空值；变量完全未设置时的默认值 `amqp://guest:guest@127.0.0.1:5672/` 又和 compose 里 RabbitMQ 的默认账号 `yunpan` 对不上。所以宿主机跑业务进程前，要自己用 compose 起 `rabbitmq` 服务，并导出指向 `127.0.0.1:5672` 的 `RABBITMQ_URL`。
-
+`local-run.sh` 和 `local-frontend.sh` 从 `deploy/.env` 派生宿主机地址，包括 RabbitMQ、业务只读 PG 和控制 PG；不要另外维护配置。默认宿主机 metrics 端口由角色分配为 18083–18091，可用调用环境中的 `WORKER_METRICS_ADDR` 覆盖。`worker` 只是 `async-control` 的兼容别名，不再启动计算角色。
 ## 架构
 
 ### 进程与部署形态
 
-`backend/` 是一个 Go module。`cmd/*` 的入口都很薄，真正的装配在 `internal/bootstrap`。业务进程通过 `platform/dependencies.Open` 连同一个 PostgreSQL（一套 GORM 连接池），它是唯一的业务事实源。MinIO 存文件字节，Redis、Elasticsearch、Qdrant 都是可重建的加速层。
+`backend/` 是一个 Go module。`cmd/*` 的入口装配在 `internal/bootstrap`。业务 PG 是唯一业务事实源；独立控制 PG 是唯一任务执行权威。MinIO 保存字节；Redis、Elasticsearch、Qdrant 是可重建的加速层。控制库可以位于独立 PG 实例，测试使用同一实例的两个数据库不等于实例资源隔离。
 
-这是模块化单体，不是微服务。identity、drive、upload、sharing、objectstore 都在 `api` 进程里，靠函数调用和本地事务协作。只有 AI 有真正的进程边界：`aisvc` 走 gRPC（proto 在 `backend/api/proto/ai/v1`），负责建索引和检索。它和核心服务共用数据库，对 drive 的表只读，检索时把 `owner_id` 和目录范围直接下推到 SQL。
+核心默认进程是 `api`、`async-control`、`committer`、`upload-worker`、`object-worker`、`media-worker`、`gc-worker`。`--distributed-workers` 现为默认形态的兼容参数。`--ai-split` 仍拆分查询与索引，`--search-indexer` 启用搜索投影。旧 `worker` / `outbox-relay` 命令只映射控制角色，`maintenance-worker` 只映射 GC；不要与对应新角色一起启动。
 
-同一份代码有几种进程拓扑，由 `deploy/up.sh` 的参数选择 compose profile：
+核心计算进程通过 `dependencies.OpenAsync` 取得控制池、保留控制池及业务只读池，没有业务写池；业务只读角色必须无写权限。`committer` 额外取得业务写池。API 不打开控制 PG 或 broker；其配置校验和 HTTP readiness 不要求二者健康。AI/search 仍有派生数据写连接，这是本轮保留的兼容边界。
 
-| 形态 | 进程 |
-|---|---|
-| 默认 | `worker`（dispatcher、object/media/maintenance/upload 四个队列、周期扫描）和 `aisvc`（gRPC 查询、ai 队列） |
-| `--distributed-workers` | `outbox-relay`（只发布，不消费队列），以及各消费一个队列的 `object-worker`、`media-worker`、`maintenance-worker`（含周期扫描）、`upload-worker` |
-| `--ai-split` | `ai-query` 和 `ai-indexer`，由 `AI_SERVICE_ROLE` 区分 |
-| `--search-indexer` | `search-indexer`，消费 search 队列 |
+### 异步链路与修改入口
 
-两代 worker 不能同时消费同一个队列，`up.sh` 切换形态时会停掉另一代。队列 handler 的注册表有三处：`bootstrap/worker.go`（合并形态）、`bootstrap/roles.go`（拆分形态）、`bootstrap/aisvc.go`（ai 队列）。新增或改名任务类型要一起改。
+1. `outbox.AddTyped` 在事实事务内只追加 `outbox_events`，不写 deliveries，旧 V2/search context 开关不再静默丢弃事实事件。
+2. `asynccontrol.Relay` 用同语句快照的 `xmin` 和 `(event_xid,seq)` 索引读取；inbox、冻结计划、任务/来源、位点在控制库同事务接管。不能改回只按自增号推进。
+3. 任务契约与预算在 `asynccontrol/model.go`，订阅在 `asyncjobs/planner.go`，计算在 `asyncjobs/compute.go`；共享载荷在 `asyncprotocol`。新增类型要同步这些入口与领域提交函数。
+4. 控制库管理有限执行/派发/失租/结果补发预算、owner 公平、背压及模块租约。MQ 拓扑是 `bx.async.v1.work.<queue>`、32 个 `bx.async.v1.result.NN` 和 dead 队列；不使用旧 TTL 重试。结果分片采用 SAC + 成员/模块租约分配。
+5. worker 条件领取、续租并保存类型化结果后可 ACK 工作通知；写进程先提交业务效果与 `async_commit_receipts`，再回报控制库，最后 ACK 结果。computed 结果只补发，不重算。
+6. 领域提交在 upload/objectstore/media 的 `async_commit.go` 或 `async.go`；`asyncjobs.Committer` 组织事务、小批、配额/epoch 合并及逐条回退。事务内不能调用 MinIO。
+7. `storage_operations` 现在保存业务意图/提交结论；旧执行租约与预算只供导入及兼容测试。新启动链不调用旧 dispatcher、taskqueue middleware 或 recovery 巡检。在线业务扫描仅保留 GC 的上传会话到期兜底。
+8. `async-import` 在旧写者全部停止后导入保留事件/操作，继承旧预算、成功及停止结论，逐条持久转移/隔离旧 MQ 消息后 ACK，不 purge。`async-admin inspect` 定位任务，`redo` 校验当前前提并创建留痕子任务；不会重开原停止任务。
 
-### 异步链路：outbox → RabbitMQ → 执行账本
-
-改 `outbox`、`taskqueue`、`recovery`、`storageops` 之前先读这一节。
-
-1. 业务事务里调 `outbox.AddTyped`，在同一个事务里写一行 `outbox_events`，再按路由表给每个目的地写一行 `outbox_deliveries`。事件契约在 `eventcontract/registry.go` 和 `payloads.go`，路由表在 `outbox/routes.go`（`Routes`、`SearchRoutes`）。
-2. `outbox.Dispatcher`（`outbox/dispatcher.go`）靠 Redis 锁选出单个 leader，由 PG `LISTEN/NOTIFY` 唤醒，带退避的轮询兜底。它用 `FOR UPDATE SKIP LOCKED` 加租约 token 领取，逐条发布到 RabbitMQ 并等 confirm，再回写 published。任务 ID 固定为 `<event_id>:<taskType>@<queue>`，重发不变。
-3. `taskqueue/taskqueue.go` 声明六个 quorum 队列：`object`、`media`、`maintenance`、`upload`、`ai`、`search`，各带一个 `.dlq` 和一组固定 TTL 的重试队列（1s、5s、30s、1m、5m）。
-4. 每个 handler 都被 `taskqueue.Store.Middleware` 包住：先在 `task_executions` 里领取并续租，结束后写 `task_results`，终止失败另写 `task_failures`。重复投递据此短路。
-5. 投递语义是 at-least-once。业务幂等靠各 handler 自己的状态机和唯一约束。`event_consumptions`（`outbox.ConsumeOnce`）目前只有 search projector 在用。
-6. 对象存储的副作用走 `storageops`：`storage_operations` 行自带租约、fencing token 和 12 次尝试上限，对 MinIO 的调用都在数据库事务之外。
-7. `recovery.Reconciler` 周期扫描卡在中间态的业务行，通过 `outbox.EnsureRecovery` 补发确定性事件（记在 `outbox_recoveries`，每个恢复族最多 3 个）。它不直接写 broker。
-
-容易踩的地方：
-
-- **事件会被开关静默丢弃。** `OUTBOX_V2_EVENTS_ENABLED`（默认 false）关着时，`file.updated`、`file.deleted`、`folder.*`、`share.created`、`share.updated`、`share.revoked` 的 `AddTyped` 直接返回 nil。search 目的地只在 `SEARCH_INDEX_ENABLED`（默认 false）打开时才生成。这两个开关放在 `context` 里传递（`outbox.WithV2EventsEnabled`、`outbox.WithSearchEnabled`，在各 bootstrap 入口和 HTTP 路由里设置），新入口忘了设就等于关。
-- **同一个 handler 注册了两个名字**：旧的事件类型名和带版本的任务名（见 `outbox.canonicalTaskType`）。这是从 Asynq 迁移留下的兼容窗口。代码里剩下的 `asynq` 字样只用于历史数据和 `cmd/migrate-asynq`。
-- `internal/workflow` 有状态机和对应的表，但没有接进任何进程的启动链路。
-- 这套链路的重构提案在 `docs/ASYNC_CONTROL_PLANE_DESIGN_2026-11-12.md`，状态是待评审、未实现。
+长期输入、结果和执行详情有界维护；终态语义屏障、停止预算和未提交结果保留。`internal/workflow` 仍没有接入启动链，不要引入第二个任务权威。`docs/ASYNC_CONTROL_PLANE_DESIGN_2026-11-12.md` 是历史提案，当前施工基准是根目录施工书。
 
 ### 上传与对象模型
 
@@ -127,13 +117,13 @@ python3 -m unittest parser_worker.test_parsers -v
 
 创建、完成、中止这几个请求只改 PostgreSQL 状态，对 MinIO 的调用都由 worker 完成，所以一次分片上传是被异步任务一步步推进的：
 
-`Create`（会话 `initializing`，登记 `multipart.create` 操作）→ upload 队列建好 multipart → 客户端传分片并确认 → `Complete`（`completing`，登记 `multipart.complete` 操作）→ `verifying`，发出 `object.verify_requested` → object 队列校验 SHA-256，在一个事务里建 entry、加引用、结算配额，并发出 `file.created` 和 `object.ready` → media 队列生成缩略图，ai 队列建索引。
+`Create`（会话 `initializing`，登记 `multipart.create` 操作）→ upload 队列建好 multipart → 客户端传分片并确认 → `Complete`（`completing`，登记 `multipart.complete` 操作）→ `verifying`，发出 `object.verify_requested` → object 队列只校验 SHA-256/大小 → committer 校验前提，必要时登记安全世代复制 → upload 队列复制字节 → committer 建 entry、加引用、结算配额，并发出 `file.created` 和 `object.ready` → media 计算、committer 发布缩略图；AI 角色建索引。
 
-引用归零的对象由 `object.gc_requested` 延迟回收，延迟由 `OBJECT_GC_DELAY` 控制，默认 24h。
+引用归零的对象由 `object.gc_requested` 延迟回收，延迟由 `OBJECT_GC_DELAY` 控制，默认 24h。先由 committer 授权进入 deleting，GC 删除对应世代字节后，再由 committer 提交 deleted。暂存仅对 `staging/` 配过期规则；MinIO 省略 multipart lifecycle 时，使用操作专属 key 的延迟 sweep 和原生 stale-upload 兜底，不给正式 compute 输出设置自动过期。
 
 ### AI、解析与搜索
 
-- `AI_ENABLED=false` 时 API 使用 `ai.DisabledBackend`，搜索、问答、重建索引都返回 `503 ai.unavailable`，dispatcher 也不再扇出 ai 任务。
+- `AI_ENABLED=false` 时 API 使用 `ai.DisabledBackend`，搜索、问答、重建索引都返回 `503 ai.unavailable`，控制订阅计划记录 AI 未订阅。
 - API 调 aisvc 走 etcd 注册、自定义 gRPC resolver（`platform/registry`）和 `round_robin`。Search 和 Ask 走 gRPC；Reprocess 是 core-api 自己的命令，在本地事务里写任务和 outbox。
 - `parser-svc` 是 Go 进程，启动时拉起 Python 子进程 `parser_worker.server`（代码在 `backend/parser_worker/`）做文档解析。
 - 向量维度在迁移里写死为 `vector(1024)`，`AI_EMBEDDING_DIMENSION` 不一致时 `up.sh` 会拒绝启动。
@@ -141,12 +131,12 @@ python3 -m unittest parser_worker.test_parsers -v
 
 ### 缓存与锁
 
-- drive 的读缓存（进程内 L1 加 Redis）的 key 里带着 `owner_content_epochs` 表的 `content_epoch` 和 `acl_epoch`，每次读都先查已提交的版本。跨副本失效靠写路径在业务事务里用 `ownerepoch.BumpContent` / `BumpACL` 推进版本；按 key 删除只是本进程的补充。权限和配额判断始终读事实表。
-- 事务内互斥用 PG advisory lock（`platform/dblock`）。Redis 锁只用于 dispatcher 选主。
+- drive 的读缓存（进程内 L1 加 Redis）的 key 里带着同一 SQL 快照组合的 `owner_content_epochs.content_epoch + owner_async_epochs.content_epoch` 和 ACL epoch，每次读都先查已提交的版本。跨副本失效靠写路径在业务事务里用 `ownerepoch.BumpContent` / `BumpACL` 推进版本；按 key 删除只是本进程的补充。权限和配额判断始终读事实表。
+- 事务内互斥用 PG advisory lock（`platform/dblock`）。新异步模块/扫描/分片租约位于控制 PG；Redis 不参与异步执行权威。配额热行是 `user_quota_usage.occupied_bytes`，身份行不再承接日常占用更新。
 
 ### 配置
 
-所有环境变量在 `platform/config/config.go` 的 `Load()` 里读取，并在启动时由 `Validate()` 校验。`deploy/.env` 是唯一的配置来源，`deploy/compose.yaml` 用 `x-app-environment` 锚点把同一组变量传给各 Go 服务。新增一个变量要改四处：`config.go`、`compose.yaml` 的锚点、`deploy/.env.example`、`deploy/.env.no-ai.example`。两个模板的键必须保持一致。
+环境变量在 `platform/config/config.go` / `async.go` 读取，入口调用 `LoadForRole`，按角色校验。`deploy/.env` 是唯一的配置来源，`deploy/compose.yaml` 用 `x-app-environment` 锚点把同一组变量传给各 Go 服务。新增一个变量要改四处：`config.go`、`compose.yaml` 的锚点、`deploy/.env.example`、`deploy/.env.no-ai.example`。两个模板的键必须保持一致。
 
 ### 前端
 

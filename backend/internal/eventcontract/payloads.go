@@ -330,7 +330,24 @@ func (p StorageOperationRecoverV1) Validate() error {
 }
 
 func (p UploadOperationRecoverV1) Validate() error {
-	return (StorageOperationRecoverV1)(p).Validate()
+	return StorageOperationRecoverV1(p).Validate()
 }
 
 func (p MediaThumbnailRequestedV1) Validate() error { return requireUUID("object_id", p.ObjectID) }
+
+// Upload expiry is a scheduled business coordination request, not a polling job.
+type UploadExpiryRequestedV1 struct {
+	UploadID  uuid.UUID `json:"upload_id"`
+	OwnerID   uuid.UUID `json:"owner_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+func (p UploadExpiryRequestedV1) Validate() error {
+	if err := requireUUID("upload_id", p.UploadID); err != nil {
+		return err
+	}
+	if err := requireUUID("owner_id", p.OwnerID); err != nil {
+		return err
+	}
+	return requireTime("expires_at", p.ExpiresAt)
+}

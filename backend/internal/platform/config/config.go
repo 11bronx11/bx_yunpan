@@ -10,6 +10,8 @@ import (
 )
 
 type Config struct {
+	Role      string
+	Async     Async
 	App       App
 	HTTP      HTTP
 	Postgres  Postgres
@@ -49,7 +51,6 @@ type HTTP struct {
 }
 
 type Postgres struct {
-
 	PrimaryDSN      string
 	DSN             string
 	MaxOpenConns    int
@@ -59,7 +60,6 @@ type Postgres struct {
 }
 
 type Redis struct {
-	
 	Addr                 string
 	Password             string
 	DB                   int
@@ -119,17 +119,16 @@ type Upload struct {
 const maxOutboxBatchSize = 100
 
 type Outbox struct {
-	PollInterval    time.Duration 
-	MaxPollInterval time.Duration 
-	ScanTimeout     time.Duration 
-	NotifyEnabled   bool          
+	PollInterval    time.Duration
+	MaxPollInterval time.Duration
+	ScanTimeout     time.Duration
+	NotifyEnabled   bool
 	BatchSize       int
 	MaxRetry        int
 	TaskTimeout     time.Duration
 	GCDelay         time.Duration
 	V2EventsEnabled bool
 }
-
 
 type TaskQueue struct {
 	URL            string
@@ -138,7 +137,6 @@ type TaskQueue struct {
 	PublishTimeout time.Duration
 	StopTimeout    time.Duration
 }
-
 
 type Search struct {
 	Enabled          bool
@@ -176,7 +174,6 @@ type Tracing struct {
 
 // AIService 描述 aisvc 进程与 API 侧客户端的连接参数。
 type AIService struct {
-
 	Role string
 	// GRPCAddr 是 aisvc 的 gRPC 监听地址。
 	GRPCAddr string
@@ -195,7 +192,6 @@ type AIService struct {
 	BreakerOpenTimeout    time.Duration
 	BreakerHalfOpenProbes int
 }
-
 
 type DocumentParser struct {
 	RemoteEnabled      bool
@@ -265,7 +261,9 @@ type AI struct {
 	RateLimitReprocessPerMinute int
 }
 
-func Load() (Config, error) {
+func Load() (Config, error) { return LoadForRole(env("APP_ROLE", "api")) }
+
+func LoadForRole(role string) (Config, error) {
 	legacyRedisAddr := env("REDIS_ADDR", "127.0.0.1:6379")
 	legacyRedisPassword := os.Getenv("REDIS_PASSWORD")
 	legacyRedisDB := envInt("REDIS_DB", 0)
@@ -274,6 +272,7 @@ func Load() (Config, error) {
 		postgresPrimaryDSN = env("POSTGRES_DSN", "postgres://yunpan:yunpan@127.0.0.1:5432/yunpan?sslmode=disable")
 	}
 	cfg := Config{
+		Role: role, Async: loadAsync(),
 		App: App{
 			Env:        env("APP_ENV", "development"),
 			LogLevel:   env("LOG_LEVEL", "info"),
@@ -474,6 +473,19 @@ func Load() (Config, error) {
 }
 
 func (c Config) Validate() error {
+	switch c.Role {
+	case "async-control", "committer", "gc-worker", "upload-worker", "object-worker", "media-worker", "worker", "maintenance-worker", "outbox-relay", "async-import", "async-admin":
+		return c.validateAsync()
+	case "aisvc", "search-indexer":
+		if c.Role != "aisvc" || c.AIService.Role != "query" {
+			if err := c.validateAsync(); err != nil {
+				return err
+			}
+		}
+	case "", "api", "ai-query", "parser-svc":
+	default:
+		return fmt.Errorf("unknown application role %q", c.Role)
+	}
 	var errs []error
 	if strings.TrimSpace(c.App.InstanceID) == "" {
 		errs = append(errs, errors.New("SERVICE_INSTANCE_ID is required or hostname must be available"))
@@ -554,7 +566,7 @@ func (c Config) Validate() error {
 	if c.Outbox.BatchSize <= 0 || c.Outbox.BatchSize > maxOutboxBatchSize {
 		errs = append(errs, fmt.Errorf("OUTBOX_BATCH_SIZE must be between 1 and %d", maxOutboxBatchSize))
 	}
-	if strings.TrimSpace(c.TaskQueue.URL) == "" || strings.TrimSpace(c.TaskQueue.Exchange) == "" || c.TaskQueue.Prefetch <= 0 || c.TaskQueue.PublishTimeout <= 0 || c.TaskQueue.StopTimeout <= 0 || c.TaskQueue.StopTimeout > time.Minute {
+	if strings.TrimSpace(c.TaskQueue.Exchange) == "" || c.TaskQueue.Prefetch <= 0 || c.TaskQueue.PublishTimeout <= 0 || c.TaskQueue.StopTimeout <= 0 || c.TaskQueue.StopTimeout > time.Minute {
 		errs = append(errs, errors.New("RabbitMQ task queue settings are invalid"))
 	}
 	if c.Search.ShadowSampleRate < 0 || c.Search.ShadowSampleRate > 1 {

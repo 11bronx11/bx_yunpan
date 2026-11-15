@@ -42,6 +42,7 @@ func (f rabbitFixture) request(t *testing.T, method, path string, body []byte) [
 	}
 	return data
 }
+
 func fixture(t *testing.T) rabbitFixture {
 	t.Helper()
 	raw := os.Getenv("TEST_RABBITMQ_URL")
@@ -62,12 +63,14 @@ func fixture(t *testing.T) rabbitFixture {
 	t.Cleanup(func() { f.request(t, "DELETE", "/api/vhosts/"+f.vhost, nil) })
 	return f
 }
+
 func (f rabbitFixture) broker(t *testing.T, n int) *Broker {
 	t.Helper()
 	b := New(Config{URL: f.url, Concurrency: n, Prefetch: 16, TaskTimeout: time.Second, PublishTimeout: 5 * time.Second})
 	t.Cleanup(func() { _ = b.Close() })
 	return b
 }
+
 func (f rabbitFixture) channel(t *testing.T) *amqp.Channel {
 	t.Helper()
 	c, e := amqp.Dial(f.url)
@@ -81,6 +84,7 @@ func (f rabbitFixture) channel(t *testing.T) *amqp.Channel {
 	}
 	return ch
 }
+
 func startConsumer(t *testing.T, b *Broker, q map[string]int, h map[string]HandlerFunc) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -103,6 +107,7 @@ func startConsumer(t *testing.T, b *Broker, q map[string]int, h map[string]Handl
 	t.Cleanup(stop)
 	return stop
 }
+
 func await(t *testing.T, ch <-chan string) string {
 	t.Helper()
 	select {
@@ -113,6 +118,7 @@ func await(t *testing.T, ch <-chan string) string {
 		return ""
 	}
 }
+
 func waitDelivery(t *testing.T, ch *amqp.Channel, q string) amqp.Delivery {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
@@ -129,13 +135,14 @@ func waitDelivery(t *testing.T, ch *amqp.Channel, q string) amqp.Delivery {
 	t.Fatalf("no delivery in %s", q)
 	return amqp.Delivery{}
 }
+
 func TestRabbitMQTransport(t *testing.T) {
-	f := fixture(t)
-	b := f.broker(t, 4)
 	task := func(id, q string) Task {
 		return Task{ID: id, Kind: "test", Queue: q, Body: []byte(`{"ok":true}`), MaxRetry: 2, Timeout: time.Second}
 	}
 	t.Run("confirmed_persistent_all_queues", func(t *testing.T) {
+		f := fixture(t)
+		b := f.broker(t, 4)
 		for i := 0; i < 20*len(queueNames); i++ {
 			q := queueNames[i%len(queueNames)]
 			if e := b.Publish(context.Background(), task(fmt.Sprint(i), q)); e != nil {
@@ -153,6 +160,8 @@ func TestRabbitMQTransport(t *testing.T) {
 		}
 	})
 	t.Run("mandatory_unroutable", func(t *testing.T) {
+		f := fixture(t)
+		b := f.broker(t, 4)
 		if e := b.publish(context.Background(), "does-not-exist", task("unroutable", "object"), ""); e == nil {
 			t.Fatal("returned message accepted")
 		}
@@ -164,6 +173,8 @@ func TestRabbitMQTransport(t *testing.T) {
 		}
 	})
 	t.Run("retry_metadata_and_fixed_delay", func(t *testing.T) {
+		f := fixture(t)
+		b := f.broker(t, 4)
 		got := make(chan string, 2)
 		var calls atomic.Int32
 		start := time.Now()
@@ -186,6 +197,8 @@ func TestRabbitMQTransport(t *testing.T) {
 		}
 	})
 	t.Run("poison_panic_timeout_exhaustion", func(t *testing.T) {
+		f := fixture(t)
+		b := f.broker(t, 4)
 		var recorded atomic.Int32
 		b.FailureRecorder = func(context.Context, Task, error) error { recorded.Add(1); return nil }
 		stop := startConsumer(t, b, map[string]int{"object": 1}, map[string]HandlerFunc{
@@ -216,6 +229,8 @@ func TestRabbitMQTransport(t *testing.T) {
 		}
 	})
 	t.Run("bounded_concurrency_and_shutdown_redelivery", func(t *testing.T) {
+		f := fixture(t)
+		b := f.broker(t, 4)
 		entered := make(chan string, 10)
 		var active, peak atomic.Int32
 		stop := startConsumer(t, b, map[string]int{"object": 4}, map[string]HandlerFunc{"test": func(ctx context.Context, msg *Task) error {
@@ -260,6 +275,8 @@ func TestRabbitMQTransport(t *testing.T) {
 		}
 	})
 	t.Run("reconnect_after_connection_loss", func(t *testing.T) {
+		f := fixture(t)
+		b := f.broker(t, 4)
 		got := make(chan string, 10)
 		stop := startConsumer(t, b, map[string]int{"media": 4}, map[string]HandlerFunc{"test": func(_ context.Context, msg *Task) error { got <- msg.ID; return nil }})
 		defer stop()
@@ -296,6 +313,8 @@ func TestRabbitMQTransport(t *testing.T) {
 		if container == "" {
 			t.Skip("explicit isolated TEST_RABBITMQ_CONTAINER required")
 		}
+		f := fixture(t)
+		b := f.broker(t, 4)
 		for i := 0; i < 20; i++ {
 			if e := b.Publish(context.Background(), task(fmt.Sprint("persist-", i), "search")); e != nil {
 				t.Fatal(e)
@@ -343,6 +362,7 @@ func TestRabbitMQTransport(t *testing.T) {
 		}
 	})
 }
+
 func TestRabbitMQStability(t *testing.T) {
 	duration := os.Getenv("TEST_STABILITY_DURATION")
 	if duration == "" {
@@ -399,7 +419,7 @@ func TestRabbitMQCrashConsumerHelper(t *testing.T) {
 	broker := New(Config{URL: raw, Concurrency: 1, TaskTimeout: time.Minute})
 	defer broker.Close()
 	err := broker.Consume(context.Background(), map[string]int{"object": 1}, map[string]HandlerFunc{"crash": func(ctx context.Context, _ *Task) error {
-		if err := os.WriteFile(os.Getenv("RABBIT_CRASH_READY_FILE"), []byte("processing"), 0600); err != nil {
+		if err := os.WriteFile(os.Getenv("RABBIT_CRASH_READY_FILE"), []byte("processing"), 0o600); err != nil {
 			return err
 		}
 		<-ctx.Done()

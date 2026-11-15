@@ -9,10 +9,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
+	"github.com/11bronx11/bx_yunpan/backend/internal/testdb"
 )
 
 func TestV2EventContextDefaultsClosedAndCanBeEnabled(t *testing.T) {
@@ -53,15 +53,13 @@ func TestUnroutedMetricsExposeBacklogAndOldestAge(t *testing.T) {
 // This opt-in integration probe exercises the actual rollout switch against a
 // migrated PostgreSQL schema. It always rolls back, so the shared database is
 // not modified. Set TEST_POSTGRES_DSN to run it.
-func TestV2FlagControlsTypedDomainEventProduction(t *testing.T) {
+func TestDomainEventsAreSavedRegardlessOfLegacyFlag(t *testing.T) {
 	dsn := os.Getenv("TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("TEST_POSTGRES_DSN is not set")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Business(t)
+	var err error
 	aggregateID, ownerID := uuid.New(), uuid.New()
 	input := eventcontract.EnvelopeInput{
 		EventType: eventcontract.EventFileUpdatedV1, AggregateID: aggregateID, AggregateVersion: 2,
@@ -75,8 +73,8 @@ func TestV2FlagControlsTypedDomainEventProduction(t *testing.T) {
 		if err := tx.Model(&Event{}).Where("aggregate_id = ?", aggregateID).Count(&count).Error; err != nil {
 			return err
 		}
-		if count != 0 {
-			return errors.New("disabled v2 flag wrote a domain event")
+		if count != 1 {
+			return errors.New("domain event was silently suppressed")
 		}
 		if err := AddTyped(WithV2EventsEnabled(context.Background(), true), tx, input); err != nil {
 			return err
@@ -84,8 +82,8 @@ func TestV2FlagControlsTypedDomainEventProduction(t *testing.T) {
 		if err := tx.Model(&Event{}).Where("aggregate_id = ?", aggregateID).Count(&count).Error; err != nil {
 			return err
 		}
-		if count != 1 {
-			return errors.New("enabled v2 flag did not write exactly one domain event")
+		if count != 2 {
+			return errors.New("domain events were not appended")
 		}
 		return errors.New("rollout probe rollback")
 	})
@@ -99,10 +97,8 @@ func TestLegacyRelayBridgePreservesPublishedStateAndAddsExplicitRoutes(t *testin
 	if dsn == "" {
 		t.Skip("TEST_POSTGRES_DSN is not set")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Business(t)
+	var err error
 	pendingID, publishedID := uuid.New(), uuid.New()
 	rollback := errors.New("compatibility probe rollback")
 	err = db.Transaction(func(tx *gorm.DB) error {

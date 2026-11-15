@@ -37,7 +37,7 @@ func TestImportSerializesConcurrentIdempotentRequests(t *testing.T) {
 	ownerID, recipientID := uuid.New(), uuid.New()
 	createUser := func(id uuid.UUID, prefix string) drive.Folder {
 		username := prefix + "-" + id.String()
-		if err := db.Exec(`INSERT INTO users (id, username, username_normalized, password_hash) VALUES (?, ?, ?, ?)`, id, username, username, "test").Error; err != nil {
+		if err := db.Create(&identity.User{ID: id, Username: username, UsernameNormalized: username, PasswordHash: "test", Status: identity.UserStatusActive, QuotaBytes: 10 * 1024 * 1024 * 1024}).Error; err != nil {
 			t.Fatalf("create user: %v", err)
 		}
 		if err := driveService.ProvisionUser(db, id); err != nil {
@@ -94,7 +94,7 @@ func TestImportSerializesConcurrentIdempotentRequests(t *testing.T) {
 		var stored objectstore.Object
 		db.First(&stored, "id = ?", object.ID)
 		var recipient identity.User
-		db.First(&recipient, "id = ?", recipientID)
+		quotaTestUser(db, &recipient, recipientID)
 		if rows != 0 || stored.ReferenceCount != 1 || recipient.UsedLogicalBytes != 0 {
 			t.Fatalf("failed import changed rows=%d refs=%d usage=%d", rows, stored.ReferenceCount, recipient.UsedLogicalBytes)
 		}
@@ -146,7 +146,7 @@ func TestImportSerializesConcurrentIdempotentRequests(t *testing.T) {
 		t.Fatalf("imported files = %d, err = %v", fileCount, err)
 	}
 	var recipient identity.User
-	if err := db.First(&recipient, "id = ?", recipientID).Error; err != nil || recipient.UsedLogicalBytes != object.SizeBytes {
+	if err := quotaTestUser(db, &recipient, recipientID).Error; err != nil || recipient.UsedLogicalBytes != object.SizeBytes {
 		t.Fatalf("logical usage = %d, err = %v", recipient.UsedLogicalBytes, err)
 	}
 	var stored objectstore.Object
@@ -165,3 +165,14 @@ func TestImportSerializesConcurrentIdempotentRequests(t *testing.T) {
 type failedQuota struct{ err error }
 
 func (q failedQuota) AddLogicalUsage(*gorm.DB, uuid.UUID, int64) error { return q.err }
+
+func quotaTestUser(db *gorm.DB, u *identity.User, id uuid.UUID) *gorm.DB {
+	q := db.First(u, "id=?", id)
+	if q.Error != nil {
+		return q
+	}
+	v, err := identity.NewService(db, nil, nil, 0).User(id)
+	q.Error = err
+	*u = v
+	return q
+}

@@ -62,3 +62,14 @@ if [[ "${ETCD_ENDPOINTS:-}" == etcd:* ]]; then
 fi
 export YUNPAN_LOCAL_API_URL="http://${proxy_app_host}:${API_PORT:-8081}"
 export YUNPAN_LOCAL_STORAGE_URL="http://${proxy_infra_host}:${MINIO_PORT:-9000}"
+
+# Host endpoints are derived from the same configuration, including explicit
+# Compose DSNs. Independent external hosts are preserved.
+export POSTGRES_READONLY_DSN="${POSTGRES_READONLY_DSN:-postgres://${POSTGRES_READER_USER:-yunpan_async_reader}:${POSTGRES_READER_PASSWORD:-${POSTGRES_PASSWORD:-yunpan}}@${infra_host}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-yunpan}?sslmode=disable}"
+export ASYNC_CONTROL_DSN="${ASYNC_CONTROL_DSN:-postgres://${ASYNC_POSTGRES_USER:-yunpan_control}:${ASYNC_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD:-yunpan}}@${infra_host}:${ASYNC_POSTGRES_PORT:-5433}/${ASYNC_POSTGRES_DB:-yunpan_control}?sslmode=disable}"
+export RABBITMQ_URL="${RABBITMQ_URL:-amqp://${RABBITMQ_USER:-yunpan}:${RABBITMQ_PASSWORD:-yunpan-dev-secret}@${infra_host}:${RABBITMQ_PORT:-5672}/}"
+export POSTGRES_PRIMARY_DSN="${POSTGRES_PRIMARY_DSN//@postgres:5432/@${infra_host}:${POSTGRES_PORT:-5432}}"
+export POSTGRES_DSN="$POSTGRES_PRIMARY_DSN"
+export POSTGRES_READONLY_DSN="${POSTGRES_READONLY_DSN//@postgres:5432/@${infra_host}:${POSTGRES_PORT:-5432}}"
+export ASYNC_CONTROL_DSN="${ASYNC_CONTROL_DSN//@async-postgres:5432/@${infra_host}:${ASYNC_POSTGRES_PORT:-5433}}"
+export RABBITMQ_URL="${RABBITMQ_URL//@rabbitmq:5672/@${infra_host}:${RABBITMQ_PORT:-5672}}"

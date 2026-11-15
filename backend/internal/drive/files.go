@@ -2,10 +2,14 @@ package drive
 
 import (
 	"context"
+	"errors"
 	"mime"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dblock"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -64,9 +68,24 @@ func (m *FileManager) MoveWithContext(ctx context.Context, ownerID, fileID, targ
 func (m *FileManager) Delete(ctx context.Context, ownerID, fileID uuid.UUID, version int64) error {
 	var folderID uuid.UUID
 	err := m.drive.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var snapshot FileEntry
+		if err := tx.Where("id=? AND owner_id=?", fileID, ownerID).First(&snapshot).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+		var objectIdentity objectstore.Object
+		err := tx.First(&objectIdentity, "id=?", snapshot.ObjectID).Error
+		if err != nil {
+			return err
+		}
+		if err := dblock.Transaction(tx, "upload:object:"+objectIdentity.SHA256+":"+strconv.FormatInt(objectIdentity.SizeBytes, 10)); err != nil {
+			return err
+		}
 		var entry FileEntry
 		// Lock order shared with sharing: source entry, then share rows, then
-		// quota, owner epochs, object. Include tombstones for idempotent retries.
+		// object, owner epochs, quota. Include tombstones for idempotent retries.
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ?", fileID, ownerID).First(&entry).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				return ErrNotFound
@@ -81,7 +100,7 @@ func (m *FileManager) Delete(ctx context.Context, ownerID, fileID uuid.UUID, ver
 			return ErrConflict
 		}
 		folderID = entry.FolderID
-		object, err := m.objects.Get(entry.ObjectID)
+		object, err := m.objects.GetWith(tx, entry.ObjectID)
 		if err != nil {
 			return err
 		}
@@ -97,17 +116,15 @@ func (m *FileManager) Delete(ctx context.Context, ownerID, fileID uuid.UUID, ver
 			now, now, fileID, ownerID).Error; err != nil {
 			return err
 		}
-		// Import/upload take the owner's quota row before its epoch row.
-		// Use that same order when deleting another file for this owner.
-		if err := m.quota.RemoveLogicalUsage(tx, ownerID, object.SizeBytes); err != nil {
+		remaining, err := m.objects.ReleaseReference(tx, entry.ObjectID)
+		if err != nil {
 			return err
 		}
 		epoch, err := ownerepoch.BumpContent(tx, ownerID)
 		if err != nil {
 			return err
 		}
-		remaining, err := m.objects.ReleaseReference(tx, entry.ObjectID)
-		if err != nil {
+		if err := m.quota.RemoveLogicalUsage(tx, ownerID, object.SizeBytes); err != nil {
 			return err
 		}
 		if err := outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{

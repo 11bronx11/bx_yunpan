@@ -1,30 +1,17 @@
 package dbmetrics
 
 import (
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/testdb"
 )
 
 func TestBacklogCollectorTracksDurableWorkAndQueryFailure(t *testing.T) {
-	dsn := os.Getenv("TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("TEST_POSTGRES_DSN is not set")
-	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool, err := db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = pool.Close() })
+	db := testdb.Business(t)
 	tx := db.Begin()
 	t.Cleanup(func() { _ = tx.Rollback().Error })
 	registry := prometheus.NewRegistry()

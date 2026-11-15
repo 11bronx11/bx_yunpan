@@ -8,11 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"gorm.io/gorm"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
@@ -30,7 +31,7 @@ func newDeliveryFixture(t *testing.T) (*gorm.DB, uuid.UUID) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := AddEnvelope(db, envelope); err != nil {
+	if err := legacyFixtureEnvelope(db, envelope); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Delete(&Event{}, "id = ?", id).Error })
@@ -180,7 +181,7 @@ func TestDispatcherThrottlesCompatibilityPreparationButPinsNewDeliveries(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := AddEnvelope(db, envelope); err != nil {
+	if err := legacyFixtureEnvelope(db, envelope); err != nil {
 		t.Fatal(err)
 	}
 
@@ -354,7 +355,7 @@ func TestPostgresWakeupIsDeliveredAfterDeliveryCommit(t *testing.T) {
 	if tx.Error != nil {
 		t.Fatal(tx.Error)
 	}
-	if err := AddEnvelope(tx, envelope); err != nil {
+	if err := legacyFixtureEnvelope(tx, envelope); err != nil {
 		_ = tx.Rollback().Error
 		t.Fatal(err)
 	}
@@ -375,4 +376,17 @@ func TestPostgresWakeupIsDeliveredAfterDeliveryCommit(t *testing.T) {
 		t.Fatal("committed delivery did not wake the listener")
 	}
 	t.Cleanup(func() { _ = db.Delete(&Event{}, "id = ?", envelope.EventID).Error })
+}
+
+// Historical dispatcher tests seed explicit legacy fanout rows. Current
+// AddEnvelope itself must remain append-only.
+func legacyFixtureEnvelope(db *gorm.DB, e eventcontract.Envelope) error {
+	if err := AddEnvelope(db, e); err != nil {
+		return err
+	}
+	var event Event
+	if err := db.First(&event, "id=?", e.EventID).Error; err != nil {
+		return err
+	}
+	return addDeliveries(db, event, true)
 }

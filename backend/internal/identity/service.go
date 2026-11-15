@@ -25,7 +25,7 @@ type Service struct {
 	db                *gorm.DB
 	tokens            *TokenManager
 	provisioner       UserProvisioner
-	defaultQuotaBytes int64        
+	defaultQuotaBytes int64
 }
 
 type UserProvisioner interface {
@@ -206,38 +206,48 @@ func (s *Service) User(userID uuid.UUID) (User, error) {
 	if err := s.db.First(&user, "id = ? AND status = ?", userID, UserStatusActive).Error; err != nil {
 		return User{}, ErrUnauthorized
 	}
-	return user, nil
+	return s.withQuota(s.db, user)
 }
 
+// Quota admission updates its own hot row; user status and quota remain identity facts.
 func (s *Service) ReserveQuota(tx *gorm.DB, userID uuid.UUID, size int64) error {
-	result := tx.Model(&User{}).
-		Where("id = ? AND status = ? AND used_logical_bytes + reserved_bytes + ? <= quota_bytes", userID, UserStatusActive, size).
-		Update("reserved_bytes", gorm.Expr("reserved_bytes + ?", size))
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected != 1 {
-		return ErrConflict
-	}
-	return nil
+	return changeQuota(tx, userID, size, true)
 }
 
 func (s *Service) ReleaseQuota(tx *gorm.DB, userID uuid.UUID, reserved int64) error {
-	return tx.Model(&User{}).Where("id = ?", userID).
-		Update("reserved_bytes", gorm.Expr("GREATEST(reserved_bytes - ?, 0)", reserved)).Error
+	return changeQuota(tx, userID, -reserved, false)
 }
 
 func (s *Service) CommitQuota(tx *gorm.DB, userID uuid.UUID, reserved, logical int64) error {
-	return tx.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
-		"reserved_bytes":     gorm.Expr("GREATEST(reserved_bytes - ?, 0)", reserved),
-		"used_logical_bytes": gorm.Expr("used_logical_bytes + ?", logical),
-	}).Error
+	// Equal-size reservation settlement touches only the session, not the quota row.
+	if reserved == logical {
+		return nil
+	}
+	return changeQuota(tx, userID, logical-reserved, logical > reserved)
 }
 
 func (s *Service) AddLogicalUsage(tx *gorm.DB, userID uuid.UUID, size int64) error {
-	result := tx.Model(&User{}).
-		Where("id = ? AND used_logical_bytes + reserved_bytes + ? <= quota_bytes", userID, size).
-		Update("used_logical_bytes", gorm.Expr("used_logical_bytes + ?", size))
+	return changeQuota(tx, userID, size, true)
+}
+
+func (s *Service) RemoveLogicalUsage(tx *gorm.DB, userID uuid.UUID, size int64) error {
+	return changeQuota(tx, userID, -size, false)
+}
+
+func changeQuota(tx *gorm.DB, userID uuid.UUID, delta int64, admission bool) error {
+	if ok, err := deferQuota(tx, userID, delta); ok {
+		return err
+	}
+	if delta == 0 {
+		return nil
+	}
+	query := `UPDATE user_quota_usage q SET occupied_bytes=q.occupied_bytes+?,updated_at=clock_timestamp() FROM users u WHERE q.owner_id=? AND u.id=q.owner_id AND q.occupied_bytes+?>=0`
+	args := []any{delta, userID, delta}
+	if admission {
+		query += " AND u.status=? AND q.occupied_bytes+?<=u.quota_bytes"
+		args = append(args, UserStatusActive, delta)
+	}
+	result := tx.Exec(query, args...)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -247,12 +257,26 @@ func (s *Service) AddLogicalUsage(tx *gorm.DB, userID uuid.UUID, size int64) err
 	return nil
 }
 
-func (s *Service) RemoveLogicalUsage(tx *gorm.DB, userID uuid.UUID, size int64) error {
-	return tx.Model(&User{}).Where("id = ?", userID).
-		Update("used_logical_bytes", gorm.Expr("GREATEST(used_logical_bytes - ?, 0)", size)).Error
+func (s *Service) withQuota(db *gorm.DB, u User) (User, error) {
+	var usage struct{ OccupiedBytes, ReservedBytes int64 }
+	q := db.Raw(`SELECT q.occupied_bytes,COALESCE((SELECT sum(s.reserved_bytes) FROM upload_sessions s WHERE s.user_id=q.owner_id AND s.reserved_bytes>0),0) AS reserved_bytes FROM user_quota_usage q WHERE q.owner_id=?`, u.ID).Scan(&usage)
+	if q.Error != nil {
+		return User{}, q.Error
+	}
+	if q.RowsAffected != 1 {
+		return User{}, ErrConflict
+	}
+	u.ReservedBytes = usage.ReservedBytes
+	u.UsedLogicalBytes = usage.OccupiedBytes - usage.ReservedBytes
+	return u, nil
 }
 
 func (s *Service) issueSession(db *gorm.DB, user User, familyID uuid.UUID) (Session, error) {
+	var quotaErr error
+	user, quotaErr = s.withQuota(db, user)
+	if quotaErr != nil {
+		return Session{}, quotaErr
+	}
 	accessToken, accessExpiry, err := s.tokens.AccessToken(user.ID)
 	if err != nil {
 		return Session{}, err

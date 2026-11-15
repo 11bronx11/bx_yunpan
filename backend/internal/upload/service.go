@@ -52,7 +52,6 @@ type multipartStorage interface {
 	AbortMultipartUpload(context.Context, string, string, string) error
 }
 
-
 type multipartUploadLister interface {
 	ListMultipartUploads(context.Context, string, string, string, string, string, int) (minio.ListMultipartUploadsResult, error)
 }
@@ -169,6 +168,9 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, input CreateInpu
 			return err
 		}
 
+		if err := dblock.Transaction(tx, "upload:object:"+input.SHA256+":"+strconv.FormatInt(input.SizeBytes, 10)); err != nil {
+			return err
+		}
 		filenameLock := "upload:filename:" + userID.String() + ":" + input.FolderID.String() + ":" + normalized
 		if err := dblock.Transaction(tx, filenameLock); err != nil {
 			return err
@@ -194,19 +196,19 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, input CreateInpu
 
 		object, objectErr := s.objects.FindOwnedWith(tx, userID, input.SHA256, input.SizeBytes)
 		if objectErr == nil {
-			if err := s.quota.AddLogicalUsage(tx, userID, input.SizeBytes); err != nil {
-				return ErrQuotaExceeded
-			}
 			file, err := s.drive.CreateFile(tx, userID, input.FolderID, object.ID, filename)
-			if err != nil {
-				return err
-			}
-			epoch, err := ownerepoch.Current(tx, userID)
 			if err != nil {
 				return err
 			}
 			if err := s.objects.AddReference(tx, object.ID); err != nil {
 				return err
+			}
+			epoch, err := ownerepoch.BumpContent(tx, userID)
+			if err != nil {
+				return err
+			}
+			if err := s.quota.AddLogicalUsage(tx, userID, input.SizeBytes); err != nil {
+				return ErrQuotaExceeded
 			}
 			if err := outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{
 				EventType: eventcontract.EventFileCreatedV1, AggregateID: file.ID, AggregateVersion: file.Version,
@@ -253,6 +255,9 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, input CreateInpu
 			UploadSessionID: &session.ID, SourceBucket: s.bucket, SourceKey: objectKey,
 		})
 		if err != nil {
+			return err
+		}
+		if err := outbox.AddTyped(ctx, tx, eventcontract.EnvelopeInput{EventType: eventcontract.EventUploadExpiryRequestedV1, AggregateID: session.ID, AggregateVersion: 1, Producer: "core-api", Payload: eventcontract.UploadExpiryRequestedV1{UploadID: session.ID, OwnerID: session.UserID, ExpiresAt: session.ExpiresAt}}); err != nil {
 			return err
 		}
 		started = &session
@@ -429,6 +434,9 @@ func (s *Service) Abort(ctx context.Context, userID, sessionID uuid.UUID) error 
 		}).Error; err != nil {
 			return err
 		}
+		if err := enqueueMultipartSweep(tx, session); err != nil {
+			return err
+		}
 		if session.StorageUploadID != "" {
 			_, err := enqueueUploadOperation(tx, storageops.Input{
 				OperationType: storageops.MultipartAbort, IdempotencyKey: "multipart.abort:" + session.ID.String(),
@@ -570,11 +578,11 @@ func (s *Service) Verify(ctx context.Context, sessionID uuid.UUID) error {
 		if err != nil {
 			return err
 		}
-		epoch, err := ownerepoch.Current(tx, session.UserID)
-		if err != nil {
+		if err := s.objects.AddReference(tx, object.ID); err != nil {
 			return err
 		}
-		if err := s.objects.AddReference(tx, object.ID); err != nil {
+		epoch, err := ownerepoch.BumpContent(tx, session.UserID)
+		if err != nil {
 			return err
 		}
 		// AddReference advances the object aggregate version. Reload it before
@@ -1096,15 +1104,7 @@ func (s *Service) recoverExistingMultipartUpload(ctx context.Context, lister mul
 }
 
 func enqueueUploadOperation(tx *gorm.DB, input storageops.Input) (storageops.Operation, error) {
-	op, err := storageops.Enqueue(tx, input)
-	if err != nil {
-		return op, err
-	}
-	key := "upload.operation:" + op.ID.String()
-	_, err = outbox.EnsureRecovery(tx, key, "upload_operation_created", "storage_operation", op.ID, 1,
-		eventcontract.EnvelopeInput{EventType: eventcontract.EventUploadOperationRecoverV1, AggregateID: op.ID, AggregateVersion: 1, Producer: "core-api",
-			Payload: eventcontract.UploadOperationRecoverV1{OperationID: op.ID, OperationType: op.OperationType, RecoveryKey: key}})
-	return op, err
+	return storageops.Enqueue(tx, input)
 }
 
 func (s *Service) reconcileMultipartComplete(ctx context.Context, operation storageops.Operation) error {

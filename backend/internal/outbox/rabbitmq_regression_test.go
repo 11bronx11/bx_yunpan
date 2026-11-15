@@ -4,14 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"gorm.io/gorm"
 	"log/slog"
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
+	"github.com/google/uuid"
+
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
-	"github.com/google/uuid"
 )
 
 func TestPayloadPreservesReprocessBusinessTaskID(t *testing.T) {
@@ -25,6 +27,7 @@ func TestPayloadPreservesReprocessBusinessTaskID(t *testing.T) {
 		t.Fatalf("identity changed: %v", got)
 	}
 }
+
 func TestRabbitGCDelaySurvivesRestartAndConfigurationChange(t *testing.T) {
 	db, id := newDeliveryFixture(t)
 	if err := db.Model(&Delivery{}).Where("event_id = ?", id).Update("destination", TaskObjectGCV1+"@maintenance").Error; err != nil {
@@ -72,6 +75,7 @@ type failingPublisher struct{}
 func (failingPublisher) Publish(context.Context, taskqueue.Task) error {
 	return errors.New("broker down")
 }
+
 func TestRabbitPublishFailureLeavesDurableRetry(t *testing.T) {
 	db, id := newDeliveryFixture(t)
 	d := newDispatcher(db, failingPublisher{}, slog.Default(), config.Outbox{BatchSize: 1})
@@ -86,6 +90,7 @@ func TestRabbitPublishFailureLeavesDurableRetry(t *testing.T) {
 		t.Fatalf("retry state: %+v", row)
 	}
 }
+
 func TestRabbitPreparationPreservesLegacyPublishedOwnership(t *testing.T) {
 	db, id := newDeliveryFixture(t)
 	if err := db.Model(&Delivery{}).Where("event_id = ?", id).Updates(map[string]any{"transport": "asynq", "destination": EventObjectVerifyRequested + "@object", "status": "published"}).Error; err != nil {

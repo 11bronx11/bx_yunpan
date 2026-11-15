@@ -3,6 +3,7 @@ package eventcontract
 import "sort"
 
 const (
+	EventUploadExpiryRequestedV1   = "upload.expiry_requested.v1"
 	EventFileCreatedV1             = "file.created.v1"
 	EventFileUpdatedV1             = "file.updated.v1"
 	EventFileDeletedV1             = "file.deleted.v1"
@@ -35,6 +36,7 @@ type Definition struct {
 }
 
 var definitions = map[string]Definition{
+	EventUploadExpiryRequestedV1:   {EventUploadExpiryRequestedV1, MessageKindCommand, 1, "upload_session", func() any { return &UploadExpiryRequestedV1{} }},
 	EventFileCreatedV1:             {EventFileCreatedV1, MessageKindDomainEvent, 1, "file_entry", func() any { return &FileCreatedV1{} }},
 	EventFileUpdatedV1:             {EventFileUpdatedV1, MessageKindDomainEvent, 1, "file_entry", func() any { return &FileUpdatedV1{} }},
 	EventFileDeletedV1:             {EventFileDeletedV1, MessageKindDomainEvent, 1, "file_entry", func() any { return &FileDeletedV1{} }},

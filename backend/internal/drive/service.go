@@ -253,11 +253,7 @@ func (s *Service) childrenPage(ctx context.Context, ownerID, folderID uuid.UUID,
 }
 
 func (s *Service) currentEpoch(ctx context.Context, ownerID uuid.UUID) (ownerepoch.Epoch, error) {
-	var epoch ownerepoch.Epoch
-	if err := s.db.WithContext(ctx).Select("content_epoch", "acl_epoch").Where("owner_id = ?", ownerID).Take(&epoch).Error; err != nil {
-		return ownerepoch.Epoch{}, err
-	}
-	return epoch, nil
+	return ownerepoch.Current(s.db.WithContext(ctx), ownerID)
 }
 
 func cursorScope(ownerID, folderID uuid.UUID) string {
@@ -401,8 +397,8 @@ func (s *Service) clearFile(ownerID, fileID uuid.UUID) {
 // Read the committed epoch on every lookup. A writer on another API/worker
 // invalidates both cache levels atomically with its business transaction.
 func (s *Service) readCacheKey(ownerID, itemID uuid.UUID, kind string) string {
-	var epoch ownerepoch.Epoch
-	if err := s.db.Select("content_epoch", "acl_epoch").Where("owner_id = ?", ownerID).Take(&epoch).Error; err != nil {
+	epoch, err := ownerepoch.Current(s.db, ownerID)
+	if err != nil {
 		return ""
 	}
 	return "drive:v2:" + kind + ":" + ownerID.String() + ":" + itemID.String() + ":" +
@@ -684,9 +680,6 @@ func (s *Service) CreateFile(tx *gorm.DB, ownerID, folderID, objectID uuid.UUID,
 		if errors.Is(err, gorm.ErrDuplicatedKey) {
 			return FileEntry{}, ErrConflict
 		}
-		return FileEntry{}, err
-	}
-	if _, err := ownerepoch.BumpContent(tx, ownerID); err != nil {
 		return FileEntry{}, err
 	}
 	return entry, nil

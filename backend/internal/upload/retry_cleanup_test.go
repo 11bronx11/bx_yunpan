@@ -8,15 +8,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/minio/minio-go/v7"
+	"gorm.io/gorm"
+
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/identity"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
 	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
-	"github.com/google/uuid"
-	"github.com/minio/minio-go/v7"
-	"gorm.io/gorm"
 )
 
 func TestStoppedUploadSessionReleasesQuotaAndSchedulesCleanupOnce(t *testing.T) {
@@ -29,7 +30,7 @@ func TestStoppedUploadSessionReleasesQuotaAndSchedulesCleanupOnce(t *testing.T) 
 			if err := f.db.Create(&session).Error; err != nil {
 				t.Fatal(err)
 			}
-			if err := f.db.Model(&identity.User{}).Where("id = ?", f.userID).Update("reserved_bytes", session.ReservedBytes).Error; err != nil {
+			if err := f.db.Table("user_quota_usage").Where("owner_id = ?", f.userID).Update("occupied_bytes", session.ReservedBytes).Error; err != nil {
 				t.Fatal(err)
 			}
 			kind := storageops.MultipartCreate
@@ -62,7 +63,7 @@ func TestStoppedUploadSessionReleasesQuotaAndSchedulesCleanupOnce(t *testing.T) 
 				t.Fatalf("session=%+v", stored)
 			}
 			var user identity.User
-			if err := f.db.First(&user, "id = ?", f.userID).Error; err != nil {
+			if err := quotaTestUser(f.db, &user, f.userID).Error; err != nil {
 				t.Fatal(err)
 			}
 			if user.ReservedBytes != 0 {
@@ -88,7 +89,7 @@ func TestMaintenanceFinishesVerificationWhoseTerminalTaskLostDomainUpdate(t *tes
 	if err := f.db.Create(&session).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := f.db.Model(&identity.User{}).Where("id = ?", f.userID).Update("reserved_bytes", session.ReservedBytes).Error; err != nil {
+	if err := f.db.Table("user_quota_usage").Where("owner_id = ?", f.userID).Update("occupied_bytes", session.ReservedBytes).Error; err != nil {
 		t.Fatal(err)
 	}
 	eventID := uuid.New()
@@ -142,7 +143,7 @@ func TestExpiryFailureDoesNotStarveOtherSessions(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := f.db.Model(&identity.User{}).Where("id = ?", f.userID).Update("reserved_bytes", 384).Error; err != nil {
+			if err := f.db.Table("user_quota_usage").Where("owner_id = ?", f.userID).Update("occupied_bytes", 384).Error; err != nil {
 				t.Fatal(err)
 			}
 			if _, err := maintenance.Expire(context.Background(), batch); err == nil {
@@ -188,7 +189,7 @@ func TestGCWaitsForCanonicalCopyReturningAfterVerificationFailure(t *testing.T) 
 	if err := f.db.Create(&session).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := f.db.Model(&identity.User{}).Where("id = ?", f.userID).Update("reserved_bytes", session.ReservedBytes).Error; err != nil {
+	if err := f.db.Table("user_quota_usage").Where("owner_id = ?", f.userID).Update("occupied_bytes", session.ReservedBytes).Error; err != nil {
 		t.Fatal(err)
 	}
 	store.put(session.Bucket, session.ObjectKey, content)

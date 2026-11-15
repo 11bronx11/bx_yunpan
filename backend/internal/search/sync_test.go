@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/testdb"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
-	"github.com/google/uuid"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 type generationIndex struct {
@@ -27,15 +29,19 @@ func (g *generationIndex) write(target string) error {
 	}
 	return nil
 }
+
 func (g *generationIndex) UpsertFile(_ context.Context, value FileProjection) error {
 	return g.write(value.TargetVersion)
 }
+
 func (g *generationIndex) UpsertContent(_ context.Context, value ContentProjection) error {
 	return g.write(value.TargetVersion)
 }
+
 func (g *generationIndex) TombstoneFile(_ context.Context, target string, _ uuid.UUID, _ int64) error {
 	return g.write(target)
 }
+
 func (g *generationIndex) TombstoneObjectContent(_ context.Context, target string, _ uuid.UUID, _ int64) error {
 	return g.write(target)
 }
@@ -43,12 +49,7 @@ func (*generationIndex) Health(context.Context) error { return nil }
 
 func projectionTransaction(t *testing.T, check func(*gorm.DB)) {
 	t.Helper()
-	db, err := gorm.Open(postgres.Open(testPostgresDSN(t)), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sqlDB, _ := db.DB()
-	defer sqlDB.Close()
+	db := testdb.Business(t)
 	tx := db.Begin()
 	if tx.Error != nil {
 		t.Fatal(tx.Error)
@@ -120,6 +121,8 @@ func TestBackfillResumesAfterExternalFailureAndRejectsEarlyActivation(t *testing
 			args []any
 		}{
 			{`INSERT INTO users(id, username, username_normalized, password_hash) VALUES (?, ?, ?, 'test')`, []any{owner, owner.String(), owner.String()}},
+			{`INSERT INTO owner_content_epochs(owner_id) VALUES (?)`, []any{owner}},
+			{`INSERT INTO owner_async_epochs(owner_id) VALUES (?)`, []any{owner}},
 			{`INSERT INTO folders(id, owner_id, name, name_normalized) VALUES (?, ?, '/', '/')`, []any{folder, owner}},
 			{`INSERT INTO file_objects(id, sha256, size_bytes, mime_type, bucket, object_key, status) VALUES (?, ?, 10, 'text/plain', 'test', ?, 'ready')`, []any{object, uuid.NewString(), object.String()}},
 		} {

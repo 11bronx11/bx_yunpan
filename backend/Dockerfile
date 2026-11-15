@@ -28,6 +28,7 @@ ENV TZ=UTC
 ARG TARGET=api
 COPY --from=build --chown=65532:65532 /out/${TARGET} /app/service
 COPY --chown=65532:65532 migrations /app/migrations
+COPY --chown=65532:65532 control-migrations /app/control-migrations
 USER 65532:65532
 EXPOSE 8081 8082
 STOPSIGNAL SIGTERM

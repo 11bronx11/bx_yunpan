@@ -14,6 +14,9 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
+	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 )
 
 const (
@@ -34,8 +37,10 @@ const (
 	MaxAttempts = 12
 )
 
-var ErrInvalidOperation = errors.New("invalid storage operation")
-var ErrExhausted = errors.New("storage operation retry budget exhausted")
+var (
+	ErrInvalidOperation = errors.New("invalid storage operation")
+	ErrExhausted        = errors.New("storage operation retry budget exhausted")
+)
 
 type Operation struct {
 	ID              uuid.UUID `gorm:"type:uuid;primaryKey"`
@@ -113,6 +118,15 @@ func Enqueue(tx *gorm.DB, input Input) (Operation, error) {
 			return Operation{}, err
 		}
 		op = existing
+	}
+	if result.RowsAffected == 1 {
+		err := outbox.AddTyped(tx.Statement.Context, tx, eventcontract.EnvelopeInput{
+			EventType: eventcontract.EventStorageOperationRecoverV1, AggregateID: op.ID, AggregateVersion: 1, Producer: "business-intent",
+			Payload: eventcontract.StorageOperationRecoverV1{OperationID: op.ID, OperationType: op.OperationType, RecoveryKey: op.IdempotencyKey},
+		})
+		if err != nil {
+			return op, err
+		}
 	}
 	return op, nil
 }

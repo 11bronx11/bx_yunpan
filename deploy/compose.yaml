@@ -13,6 +13,40 @@ x-app-environment: &app-environment
   # writer endpoint; POSTGRES_DSN remains for older binaries.
   POSTGRES_PRIMARY_DSN: ${POSTGRES_PRIMARY_DSN:-${POSTGRES_DSN:-postgres://${POSTGRES_USER:-yunpan}:${POSTGRES_PASSWORD:-yunpan}@postgres:5432/${POSTGRES_DB:-yunpan}?sslmode=disable}}
   POSTGRES_DSN: ${POSTGRES_DSN:-${POSTGRES_PRIMARY_DSN:-postgres://${POSTGRES_USER:-yunpan}:${POSTGRES_PASSWORD:-yunpan}@postgres:5432/${POSTGRES_DB:-yunpan}?sslmode=disable}}
+  POSTGRES_READONLY_DSN: ${POSTGRES_READONLY_DSN:-postgres://${POSTGRES_READER_USER:-yunpan_async_reader}:${POSTGRES_READER_PASSWORD:-${POSTGRES_PASSWORD:-yunpan}}@postgres:5432/${POSTGRES_DB:-yunpan}?sslmode=disable}
+  ASYNC_BROKER_PREFIX: ${ASYNC_BROKER_PREFIX:-bx.async.v1}
+  ASYNC_MAX_ATTEMPTS: ${ASYNC_MAX_ATTEMPTS:-12}
+  ASYNC_MAX_DISPATCHES: ${ASYNC_MAX_DISPATCHES:-20}
+  ASYNC_MAX_RECOVERIES: ${ASYNC_MAX_RECOVERIES:-12}
+  ASYNC_MAX_RESULT_SENDS: ${ASYNC_MAX_RESULT_SENDS:-20}
+  ASYNC_TASK_LIFETIME: ${ASYNC_TASK_LIFETIME:-24h}
+  ASYNC_STAGING_DAYS: ${ASYNC_STAGING_DAYS:-14}
+  ASYNC_CONTROL_DSN: ${ASYNC_CONTROL_DSN:-postgres://${ASYNC_POSTGRES_USER:-yunpan_control}:${ASYNC_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD:-yunpan}}@async-postgres:5432/${ASYNC_POSTGRES_DB:-yunpan_control}?sslmode=disable}
+  ASYNC_CONTROL_MAX_OPEN_CONNS: ${ASYNC_CONTROL_MAX_OPEN_CONNS:-8}
+  ASYNC_CONTROL_MAX_IDLE_CONNS: ${ASYNC_CONTROL_MAX_IDLE_CONNS:-2}
+  ASYNC_CONTROL_CRITICAL_CONNS: ${ASYNC_CONTROL_CRITICAL_CONNS:-2}
+  ASYNC_RELAY_ROWS: ${ASYNC_RELAY_ROWS:-200}
+  ASYNC_RELAY_BYTES: ${ASYNC_RELAY_BYTES:-1048576}
+  ASYNC_POLL_MIN: ${ASYNC_POLL_MIN:-100ms}
+  ASYNC_POLL_MAX: ${ASYNC_POLL_MAX:-2s}
+  ASYNC_LEASE: ${ASYNC_LEASE:-30s}
+  ASYNC_RESULT_SHARDS: ${ASYNC_RESULT_SHARDS:-32}
+  ASYNC_WORKER_CONCURRENCY: ${ASYNC_WORKER_CONCURRENCY:-2}
+  ASYNC_QUEUE_INFLIGHT: ${ASYNC_QUEUE_INFLIGHT:-8}
+  ASYNC_OWNER_INFLIGHT: ${ASYNC_OWNER_INFLIGHT:-2}
+  ASYNC_RESULT_HIGH: ${ASYNC_RESULT_HIGH:-256}
+  ASYNC_GC_SCAN_INTERVAL: ${ASYNC_GC_SCAN_INTERVAL:-5m}
+  ASYNC_GC_SCAN_BATCH: ${ASYNC_GC_SCAN_BATCH:-100}
+  ASYNC_RETRY_BASE: ${ASYNC_RETRY_BASE:-5s}
+  ASYNC_RETRY_CAP: ${ASYNC_RETRY_CAP:-5m}
+  ASYNC_COMMIT_WINDOW: ${ASYNC_COMMIT_WINDOW:-24h}
+  ASYNC_OUTPUT_SAFETY: ${ASYNC_OUTPUT_SAFETY:-1h}
+  ASYNC_DETAIL_RETENTION: ${ASYNC_DETAIL_RETENTION:-168h}
+  ASYNC_WRITE_CONCURRENCY: ${ASYNC_WRITE_CONCURRENCY:-8}
+  ASYNC_WRITE_RATE: ${ASYNC_WRITE_RATE:-128}
+  ASYNC_COMMIT_BATCH_ROWS: ${ASYNC_COMMIT_BATCH_ROWS:-32}
+  ASYNC_COMMIT_BATCH_BYTES: ${ASYNC_COMMIT_BATCH_BYTES:-1048576}
+  ASYNC_COMMIT_BATCH_WAIT: ${ASYNC_COMMIT_BATCH_WAIT:-5ms}
   POSTGRES_MAX_OPEN_CONNS: ${POSTGRES_MAX_OPEN_CONNS:-32}
   POSTGRES_MAX_IDLE_CONNS: ${POSTGRES_MAX_IDLE_CONNS:-8}
   POSTGRES_CONN_MAX_LIFETIME: ${POSTGRES_CONN_MAX_LIFETIME:-30m}
@@ -60,7 +94,7 @@ x-app-environment: &app-environment
   OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-20}
   OUTBOX_TASK_MAX_RETRY: ${OUTBOX_TASK_MAX_RETRY:-8}
   OUTBOX_TASK_TIMEOUT: ${OUTBOX_TASK_TIMEOUT:-30m}
-  # New typed event writes stay opt-in until the compatibility relay is deployed.
+  # Legacy compatibility value; the new outbox always appends fact events.
   OUTBOX_V2_EVENTS_ENABLED: ${OUTBOX_V2_EVENTS_ENABLED:-false}
   OBJECT_GC_DELAY: ${OBJECT_GC_DELAY:-24h}
   WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-8}
@@ -139,7 +173,7 @@ x-app-environment: &app-environment
   ETCD_LEASE_TTL: ${ETCD_LEASE_TTL:-10s}
   # 留空则用容器 hostname + 监听端口，--scale 时每个副本自动注册自己的地址。
   AISVC_ADVERTISE_ADDR: ${AISVC_ADVERTISE_ADDR:-}
-  # Outbox dispatcher 多副本选主，避免同一批 outbox 行被重复投递。
+  # Legacy dispatcher compatibility; new modules hold leases in control PG.
   OUTBOX_LEADER_LOCK_ENABLED: ${OUTBOX_LEADER_LOCK_ENABLED:-true}
   OUTBOX_LEADER_LOCK_KEY: ${OUTBOX_LEADER_LOCK_KEY:-yunpan:outbox:dispatcher:leader}
   OUTBOX_LEADER_LOCK_TTL: ${OUTBOX_LEADER_LOCK_TTL:-15s}
@@ -191,6 +225,146 @@ x-parser-environment: &parser-environment
   ETCD_LEASE_TTL: ${ETCD_LEASE_TTL:-10s}
 
 services:
+
+  async-postgres:
+    profiles: ["app"]
+    image: ${DOCKER_REGISTRY:-docker.io}/library/postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${ASYNC_POSTGRES_USER:-yunpan_control}
+      POSTGRES_PASSWORD: ${ASYNC_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD:-yunpan}}
+      POSTGRES_DB: ${ASYNC_POSTGRES_DB:-yunpan_control}
+    ports: ["${INFRA_BIND_IP:-127.0.0.1}:${ASYNC_POSTGRES_PORT:-5433}:5432"]
+    volumes: ["async-postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate-control:
+    profiles: ["app"]
+    image: bx-yunpan-migrate:${APP_IMAGE_TAG:-local}
+    command: ["control", "up"]
+    environment: *app-environment
+    depends_on:
+      async-postgres: {condition: service_healthy}
+    restart: "no"
+
+  async-reader-init:
+    profiles: ["app"]
+    image: ${DOCKER_REGISTRY:-docker.io}/library/postgres:17-alpine
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-yunpan}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-yunpan}
+      PGDATABASE: ${POSTGRES_DB:-yunpan}
+      READER: ${POSTGRES_READER_USER:-yunpan_async_reader}
+      READER_PASSWORD: ${POSTGRES_READER_PASSWORD:-${POSTGRES_PASSWORD:-yunpan}}
+    volumes: ["./async-reader-init.sql:/reader.sql:ro"]
+    entrypoint: ["/bin/sh", "-ec"]
+    command: ['exec psql -X -q -v ON_ERROR_STOP=1 -v reader="$$READER" -v reader_password="$$READER_PASSWORD" -f /reader.sql']
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    restart: "no"
+
+  async-import:
+    profiles: ["app"]
+    image: bx-yunpan-async-import:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args: {TARGET: async-import, GO_VERSION: "${GO_VERSION:-1.25.13}"}
+    environment:
+      <<: *app-environment
+      ASYNC_LEGACY_WRITERS_STOPPED: ${ASYNC_LEGACY_WRITERS_STOPPED:-false}
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+      minio-init: {condition: service_completed_successfully}
+      migrate-control: {condition: service_completed_successfully}
+      async-reader-init: {condition: service_completed_successfully}
+    restart: "no"
+
+  async-control:
+    profiles: ["app"]
+    image: bx-yunpan-async-control:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args:
+        TARGET: async-control
+        GO_VERSION: ${GO_VERSION:-1.25.13}
+    environment:
+      <<: *app-environment
+      APP_ROLE: async-control
+      POSTGRES_PRIMARY_DSN: ""
+      POSTGRES_DSN: ""
+    depends_on:
+      async-import: {condition: service_completed_successfully}
+      rabbitmq: {condition: service_healthy}
+      minio-init: {condition: service_completed_successfully}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8083/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+
+  committer:
+    profiles: ["app"]
+    image: bx-yunpan-committer:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args:
+        TARGET: committer
+        GO_VERSION: ${GO_VERSION:-1.25.13}
+    environment:
+      <<: *app-environment
+      APP_ROLE: committer
+    depends_on:
+      async-import: {condition: service_completed_successfully}
+      rabbitmq: {condition: service_healthy}
+      minio-init: {condition: service_completed_successfully}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8083/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+
+  gc-worker:
+    profiles: ["app"]
+    image: bx-yunpan-gc-worker:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args:
+        TARGET: gc-worker
+        GO_VERSION: ${GO_VERSION:-1.25.13}
+    environment:
+      <<: *app-environment
+      APP_ROLE: gc-worker
+      POSTGRES_PRIMARY_DSN: ""
+      POSTGRES_DSN: ""
+    depends_on:
+      async-import: {condition: service_completed_successfully}
+      rabbitmq: {condition: service_healthy}
+      minio-init: {condition: service_completed_successfully}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8083/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+
   rabbitmq:
     image: ${RABBITMQ_IMAGE:-rabbitmq:4.1-management-alpine}
     hostname: rabbitmq
@@ -328,6 +502,8 @@ services:
     image: coollabsio/minio:RELEASE.2025-10-15T17-29-55Z
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
+      MINIO_API_STALE_UPLOADS_EXPIRY: ${MINIO_API_STALE_UPLOADS_EXPIRY:-336h}
+      MINIO_API_STALE_UPLOADS_CLEANUP_INTERVAL: ${MINIO_API_STALE_UPLOADS_CLEANUP_INTERVAL:-1h}
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-yunpan}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-yunpan-dev-secret}
     ports:
@@ -436,7 +612,7 @@ services:
     stop_grace_period: 15s
 
   worker:
-    profiles: ["app"]
+    profiles: ["legacy-aliases"]
     image: bx-yunpan-worker:${APP_IMAGE_TAG:-local}
     build:
       context: ../backend
@@ -465,7 +641,7 @@ services:
   # P2 distributed roles. They are opt-in so the legacy combined worker stays
   # the default local profile and remains the rollback path.
   outbox-relay:
-    profiles: ["distributed"]
+    profiles: ["legacy-aliases"]
     image: bx-yunpan-outbox-relay:${APP_IMAGE_TAG:-local}
     build:
       context: ../backend
@@ -488,7 +664,7 @@ services:
     stop_grace_period: 15s
 
   object-worker:
-    profiles: ["distributed"]
+    profiles: ["app"]
     image: bx-yunpan-object-worker:${APP_IMAGE_TAG:-local}
     build:
       context: ../backend
@@ -499,9 +675,15 @@ services:
         GO_BUILD_PARALLELISM: ${GO_BUILD_PARALLELISM:-1}
         GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
         TARGET: object-worker
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      POSTGRES_PRIMARY_DSN: ""
+      POSTGRES_DSN: ""
     expose: ["8083"]
     depends_on:
+      migrate-control: {condition: service_completed_successfully}
+      async-reader-init: {condition: service_completed_successfully}
+      async-import: {condition: service_completed_successfully}
       rabbitmq: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
       minio-init: {condition: service_completed_successfully}
@@ -510,8 +692,15 @@ services:
     init: true
     stop_grace_period: 30s
 
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8083/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+
   media-worker:
-    profiles: ["distributed"]
+    profiles: ["app"]
     image: bx-yunpan-media-worker:${APP_IMAGE_TAG:-local}
     build:
       context: ../backend
@@ -522,9 +711,15 @@ services:
         GO_BUILD_PARALLELISM: ${GO_BUILD_PARALLELISM:-1}
         GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
         TARGET: media-worker
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      POSTGRES_PRIMARY_DSN: ""
+      POSTGRES_DSN: ""
     expose: ["8083"]
     depends_on:
+      migrate-control: {condition: service_completed_successfully}
+      async-reader-init: {condition: service_completed_successfully}
+      async-import: {condition: service_completed_successfully}
       rabbitmq: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
       minio-init: {condition: service_completed_successfully}
@@ -533,8 +728,15 @@ services:
     init: true
     stop_grace_period: 30s
 
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8083/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+
   maintenance-worker:
-    profiles: ["distributed"]
+    profiles: ["legacy-aliases"]
     image: bx-yunpan-maintenance-worker:${APP_IMAGE_TAG:-local}
     build:
       context: ../backend
@@ -557,7 +759,7 @@ services:
     stop_grace_period: 30s
 
   upload-worker:
-    profiles: ["distributed"]
+    profiles: ["app"]
     image: bx-yunpan-upload-worker:${APP_IMAGE_TAG:-local}
     build:
       context: ../backend
@@ -568,9 +770,15 @@ services:
         GO_BUILD_PARALLELISM: ${GO_BUILD_PARALLELISM:-1}
         GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
         TARGET: upload-worker
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      POSTGRES_PRIMARY_DSN: ""
+      POSTGRES_DSN: ""
     expose: ["8083"]
     depends_on:
+      migrate-control: {condition: service_completed_successfully}
+      async-reader-init: {condition: service_completed_successfully}
+      async-import: {condition: service_completed_successfully}
       rabbitmq: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
       minio-init: {condition: service_completed_successfully}
@@ -578,6 +786,13 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
+
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8083/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
 
   # Opt-in single-node derived search backends. They are for rebuild, shadow,
   # and failure-recovery rehearsal; PostgreSQL remains the authority.
@@ -631,6 +846,7 @@ services:
     environment: *app-environment
     expose: ["8083"]
     depends_on:
+      async-import: {condition: service_completed_successfully}
       rabbitmq: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
       minio-init: {condition: service_completed_successfully}
@@ -689,6 +905,7 @@ services:
         TARGET: aisvc
     environment: *app-environment
     depends_on:
+      async-import: {condition: service_completed_successfully}
       rabbitmq: {condition: service_healthy}
       migrate:
         condition: service_completed_successfully
@@ -743,6 +960,7 @@ services:
       AI_SERVICE_ROLE: indexer
     expose: ["8083"]
     depends_on:
+      async-import: {condition: service_completed_successfully}
       rabbitmq: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
       minio-init: {condition: service_completed_successfully}
@@ -824,6 +1042,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  async-postgres-data:
   rabbitmq-data:
   postgres-data:
   redis-data:

@@ -113,7 +113,7 @@ func TestConsumeOnceMarkerRollsBackWithEffectFailure(t *testing.T) {
 	}
 }
 
-func TestAddEnvelopeEventAndDeliveriesRollbackTogether(t *testing.T) {
+func TestAppendOnlyEnvelopeRollsBackWithBusinessTransaction(t *testing.T) {
 	dsn := os.Getenv("TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("TEST_POSTGRES_DSN is not set")
@@ -145,7 +145,7 @@ func TestAddEnvelopeEventAndDeliveriesRollbackTogether(t *testing.T) {
 		if err := tx.Model(&Delivery{}).Where("event_id = ?", eventID).Count(&deliveries).Error; err != nil {
 			return err
 		}
-		if deliveries != 2 {
+		if deliveries != 0 {
 			return errors.New("unexpected delivery count inside transaction")
 		}
 		return errors.New("rollback probe")
@@ -287,7 +287,7 @@ func TestEnsureRecoveryConcurrentInsertIsIdempotent(t *testing.T) {
 	if err := db.Table("outbox_deliveries").Where("event_id = ?", eventID).Count(&deliveryCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if recoveryCount != 1 || eventCount != 1 || deliveryCount != 1 {
+	if recoveryCount != 1 || eventCount != 1 || deliveryCount != 0 {
 		t.Fatalf("rows = recovery:%d event:%d delivery:%d", recoveryCount, eventCount, deliveryCount)
 	}
 }

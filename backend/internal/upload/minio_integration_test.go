@@ -169,7 +169,7 @@ func TestRealMinioUploadRecoversAfterCompleteDatabaseFailure(t *testing.T) {
 		t.Fatalf("worker commit left stale API cache: files=%v error=%v", files, err)
 	}
 	var user identity.User
-	if err := f.db.First(&user, "id = ?", f.userID).Error; err != nil || user.ReservedBytes != 0 || user.UsedLogicalBytes != int64(len(content)) {
+	if err := quotaTestUser(f.db, &user, f.userID).Error; err != nil || user.ReservedBytes != 0 || user.UsedLogicalBytes != int64(len(content)) {
 		t.Fatalf("quota after duplicate verification: user=%+v error=%v", user, err)
 	}
 	object, err := f.service.objects.Get(*session.CompletedObjectID)

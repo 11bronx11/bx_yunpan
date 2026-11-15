@@ -74,11 +74,11 @@ done
 
 targets=("$@")
 if ((${#targets[@]} == 0)); then
-	targets=(migrate api worker aisvc parser-svc web)
+	targets=(migrate api async-import async-control committer upload-worker object-worker media-worker gc-worker aisvc parser-svc web)
 fi
 for target in "${targets[@]}"; do
   case "$target" in
-		migrate|migrate-asynq|api|worker|aisvc|parser-svc|outbox-relay|object-worker|media-worker|maintenance-worker|upload-worker|search-indexer|web) ;;
+		migrate|migrate-asynq|async-admin|async-import|async-control|committer|gc-worker|api|worker|aisvc|parser-svc|outbox-relay|object-worker|media-worker|maintenance-worker|upload-worker|search-indexer|web) ;;
     *) echo "Unsupported build target: $target" >&2; exit 2 ;;
   esac
 done

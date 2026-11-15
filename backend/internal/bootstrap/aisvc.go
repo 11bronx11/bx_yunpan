@@ -9,11 +9,12 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai"
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcserver"
@@ -114,10 +115,10 @@ func runCombinedAISvc(ctx context.Context, cfg config.Config, logger *slog.Logge
 	workerDone := make(chan struct{})
 	defer func() { stopWorker(); <-workerDone }()
 	aiQueues := map[string]int{platformworker.QueueAI: cfg.Worker.Queues[platformworker.QueueAI]}
-	workerMetrics := platformworker.NewMetrics(metricsRegistry, platformworker.Role("aisvc"), aiQueues)
+	_ = platformworker.NewMetrics(metricsRegistry, platformworker.Role("aisvc"), aiQueues)
 	go func() {
 		defer close(workerDone)
-		workerErr <- platformworker.RunQueuesWithMetrics(workerCtx, cfg, aiQueues, logger, aiWorkerHandlers(aiService, logger), workerMetrics, deps.GORM)
+		workerErr <- runAsyncAI(workerCtx, cfg, logger, aiService)
 	}()
 
 	select {
@@ -193,9 +194,9 @@ func RunAIIndexer(ctx context.Context, cfg config.Config, logger *slog.Logger) e
 	service := ai.NewServiceWithCache(deps.GORM, drive.NewService(deps.GORM), objectstore.NewService(deps.GORM), deps.Storage, cfg.AI, nil).
 		WithParser(parser).WithParserProfileVersion(cfg.Parser.ProfileVersion).WithPipelineVersion(indexPipelineVersion(cfg))
 	aiQueues := map[string]int{platformworker.QueueAI: cfg.Worker.Queues[platformworker.QueueAI]}
-	workerMetrics := platformworker.NewMetrics(metricsRegistry, platformworker.Role("ai-indexer"), aiQueues)
+	_ = platformworker.NewMetrics(metricsRegistry, platformworker.Role("ai-indexer"), aiQueues)
 	go serveWorkerMetrics(ctx, cfg.Worker.MetricsAddr, metricsRegistry, logger)
-	return platformworker.RunQueuesWithMetrics(ctx, cfg, aiQueues, logger, aiWorkerHandlers(service, logger), workerMetrics, deps.GORM)
+	return runAsyncAI(ctx, cfg, logger, service)
 }
 
 func newQueryEmbeddingCache(cfg config.Config, deps *dependencies.Set) ai.QueryEmbeddingCache {

@@ -9,7 +9,6 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 )
 
-
 type v2EventsContextKey struct{}
 
 type searchEnabledContextKey struct{}
@@ -90,8 +89,5 @@ func AddTyped(ctx context.Context, tx *gorm.DB, input eventcontract.EnvelopeInpu
 // AddEnvelopeContext is the context-aware writer used by service boundaries.
 // AddEnvelope remains unconditional for legacy callers during expand/contract.
 func AddEnvelopeContext(ctx context.Context, tx *gorm.DB, envelope eventcontract.Envelope) error {
-	if IsV2Event(envelope.EventType) && !V2EventsEnabled(ctx) {
-		return nil
-	}
 	return addEnvelopeWithSearch(tx, envelope, SearchEnabled(ctx))
 }

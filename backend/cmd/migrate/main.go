@@ -15,8 +15,17 @@ func main() {
 	dsn := env("POSTGRES_PRIMARY_DSN", env("POSTGRES_DSN", "postgres://yunpan:yunpan@127.0.0.1:5432/yunpan?sslmode=disable"))
 	source := env("MIGRATIONS_SOURCE", "file://migrations")
 	command := "up"
-	if len(os.Args) > 1 {
-		command = os.Args[1]
+	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "control" {
+		dsn = os.Getenv("ASYNC_CONTROL_DSN")
+		source = env("CONTROL_MIGRATIONS_SOURCE", "file://control-migrations")
+		args = args[1:]
+		if dsn == "" {
+			fail("ASYNC_CONTROL_DSN is required", nil)
+		}
+	}
+	if len(args) > 0 {
+		command = args[0]
 	}
 
 	migrator, err := migrate.New(source, dsn)
@@ -43,7 +52,7 @@ func main() {
 			fmt.Printf("version=%d dirty=%t\n", version, dirty)
 		}
 	default:
-		fail("usage: migrate [up|down-one|version]", nil)
+		fail("usage: migrate [control] [up|down-one|version]", nil)
 	}
 	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		fail("run migration", err)

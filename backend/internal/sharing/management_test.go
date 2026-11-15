@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -16,15 +15,16 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/drive"
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
+	"github.com/11bronx11/bx_yunpan/backend/internal/identity"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/httpapi"
+	"github.com/11bronx11/bx_yunpan/backend/internal/testdb"
 )
 
 type shareFixture struct {
@@ -34,24 +34,20 @@ type shareFixture struct {
 	file  drive.FileEntry
 }
 
-func seedShare(t *testing.T, committed bool) shareFixture {
+func seedShare(t *testing.T, committed bool, reuse ...*gorm.DB) shareFixture {
 	t.Helper()
-	dsn := os.Getenv("TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("TEST_POSTGRES_DSN is not set")
+	var db *gorm.DB
+	if len(reuse) > 0 {
+		db = reuse[0]
+	} else {
+		db = testdb.Business(t)
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{TranslateError: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool, _ := db.DB()
-	t.Cleanup(func() { _ = pool.Close() })
 	if !committed {
 		db = db.Begin()
 		t.Cleanup(func() { db.Rollback() })
 	}
 	owner, objectID := uuid.New(), uuid.New()
-	if err := db.Exec("INSERT INTO users(id, username, username_normalized, password_hash) VALUES (?, ?, ?, 'test')", owner, owner.String(), owner.String()).Error; err != nil {
+	if err := db.Create(&identity.User{ID: owner, Username: owner.String(), UsernameNormalized: owner.String(), PasswordHash: "test", Status: identity.UserStatusActive, QuotaBytes: 10 * 1024 * 1024 * 1024}).Error; err != nil {
 		t.Fatal(err)
 	}
 	d := drive.NewService(db)

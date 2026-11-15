@@ -1,5 +1,7 @@
 # BX YunPan 当前源码事实报告
 
+> 历史快照：当前双库、进程和执行链路见 [异步系统实现与启动](ASYNC_SYSTEM_IMPLEMENTATION_2026-11-16.md)。下文保留 11-03 原始证据，不代表新链路。
+
 > 基准日期：2026-11-03，Asia/Shanghai。基准提交：`ef0fc2362a286976848c8bf3640113f841cd6473`。
 >
 > 本报告重新从当前工作区的 Go、SQL migration、Proto、JavaScript、CSS、Dockerfile、Nginx 和部署脚本梳理，未引用既有 README、设计文档、交接报告、历史测试产物或历史记忆。文中的“当前”指该源码快照，不代表正在运行的容器或线上环境。

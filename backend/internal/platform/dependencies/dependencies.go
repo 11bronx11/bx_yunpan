@@ -20,12 +20,10 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/health"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/storageurl"
-	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 )
 
 type Set struct {
 	Redis             *redis.Client
-	Tasks             *taskqueue.Broker
 	RedisCoordination *redis.Client
 	RedisCache        *redis.Client
 	Storage           *minio.Client
@@ -38,8 +36,10 @@ type Set struct {
 func Open(ctx context.Context, cfg config.Config) (*Set, error) {
 	redisCoordination := newRedisClient(cfg.Redis.CoordinationAddr, cfg.Redis.CoordinationPassword, cfg.Redis.CoordinationDB)
 	redisCache := platformcache.NewRedisClient(cfg.Redis.CacheAddr, cfg.Redis.CachePassword, cfg.Redis.CacheDB)
-	tasks := taskqueue.New(taskqueue.Config{URL: cfg.TaskQueue.URL, Exchange: cfg.TaskQueue.Exchange, PublishTimeout: cfg.TaskQueue.PublishTimeout})
-	closeRedis := func() { _ = redisCoordination.Close(); _ = redisCache.Close(); _ = tasks.Close() }
+	closeRedis := func() {
+		_ = redisCoordination.Close()
+		_ = redisCache.Close()
+	}
 	storageClient, err := minio.New(cfg.Storage.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.Storage.AccessKey, cfg.Storage.SecretKey, ""),
 		Secure: cfg.Storage.Secure,
@@ -62,7 +62,6 @@ func Open(ctx context.Context, cfg config.Config) (*Set, error) {
 
 	return &Set{
 		Redis:             redisCoordination,
-		Tasks:             tasks,
 		RedisCoordination: redisCoordination,
 		RedisCache:        redisCache,
 		Storage:           storageClient,
@@ -105,9 +104,6 @@ func openPostgres(ctx context.Context, cfg config.Config) (*gorm.DB, *sql.DB, er
 }
 
 func (s *Set) Close() {
-	if s.Tasks != nil {
-		_ = s.Tasks.Close()
-	}
 	if s.RedisCoordination != nil {
 		_ = s.RedisCoordination.Close()
 	}
@@ -135,10 +131,8 @@ func (s *Set) Probes() []health.Probe {
 	}
 }
 
-
 func (s *Set) AdvisoryProbes() []health.Probe {
 	return []health.Probe{
-		health.ProbeFunc{ProbeName: "rabbitmq", Func: s.Tasks.Health},
 		health.ProbeFunc{ProbeName: "redis_coordination", Func: func(ctx context.Context) error { return s.RedisCoordination.Ping(ctx).Err() }},
 		health.ProbeFunc{ProbeName: "redis_cache", Func: func(ctx context.Context) error { return s.RedisCache.Ping(ctx).Err() }},
 	}

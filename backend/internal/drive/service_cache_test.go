@@ -6,9 +6,45 @@ import (
 	"testing"
 	"time"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/ownerepoch"
 	platformcache "github.com/11bronx11/bx_yunpan/backend/internal/platform/cache"
 	"github.com/google/uuid"
 )
+
+func TestCachedPagesObserveBackgroundContentEpoch(t *testing.T) {
+	f := seedPageFixture(t)
+	ctx := context.Background()
+	reader := NewServiceWithCache(f.db, platformcache.NewJSONStore(nil, time.Hour, 16))
+	if _, files, err := reader.Children(f.ownerID, f.source.ID); err != nil || len(files) != 1 {
+		t.Fatalf("prime children: files=%v err=%v", files, err)
+	}
+	if _, files, _, _, err := reader.ChildrenPage(ctx, f.ownerID, f.source.ID, "", 50, ""); err != nil || len(files) != 1 {
+		t.Fatalf("prime page: files=%v err=%v", files, err)
+	}
+	_, _, more, cursor, err := reader.ChildrenPage(ctx, f.ownerID, f.target.ID, "", 3, "")
+	if err != nil || !more || cursor == "" {
+		t.Fatalf("prime cursor: more=%v cursor=%q err=%v", more, cursor, err)
+	}
+	// The committer writes the independent background counter. An API cache
+	// primed before that commit must observe the new entry immediately.
+	background := f.db.WithContext(ownerepoch.Background(ctx))
+	created, err := f.service.CreateFile(background, f.ownerID, f.source.ID, createMoveObject(t, background), "background.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ownerepoch.BumpContent(background, f.ownerID); err != nil {
+		t.Fatal(err)
+	}
+	if _, files, err := reader.Children(f.ownerID, f.source.ID); err != nil || len(files) != 2 {
+		t.Fatalf("background entry %s missing from cached children: files=%v err=%v", created.ID, files, err)
+	}
+	if _, files, _, _, err := reader.ChildrenPage(ctx, f.ownerID, f.source.ID, "", 50, ""); err != nil || len(files) != 2 {
+		t.Fatalf("background entry missing from cached page: files=%v err=%v", files, err)
+	}
+	if _, _, _, _, err := reader.ChildrenPage(ctx, f.ownerID, f.target.ID, cursor, 3, ""); !errors.Is(err, ErrCursorStale) {
+		t.Fatalf("background commit left old cursor valid: %v", err)
+	}
+}
 
 func TestCachedReadsUseCurrentAIStatus(t *testing.T) {
 	f := newMoveFixture(t)

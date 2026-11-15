@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
-	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
+	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
+	"github.com/11bronx11/bx_yunpan/backend/internal/testdb"
 )
 
 // Stop after the actual provider has accepted bytes but before the application
@@ -51,12 +51,7 @@ func TestThumbnailWriteCleanupRaces(t *testing.T) {
 	if dsn == "" || endpoint == "" {
 		t.Skip("isolated PostgreSQL and MinIO required")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool, _ := db.DB()
-	t.Cleanup(func() { _ = pool.Close() })
+	db := testdb.Business(t)
 	newClient := func(transport http.RoundTripper) *minio.Client {
 		t.Helper()
 		client, err := minio.New(endpoint, &minio.Options{

@@ -18,7 +18,7 @@ fi
 docker compose \
   --env-file "$env_file" \
   -f "$deploy_dir/compose.yaml" \
-  up -d --wait --wait-timeout 120 postgres redis minio
+  up -d --wait --wait-timeout 120 postgres redis minio rabbitmq async-postgres
 
 docker compose \
   --env-file "$env_file" \

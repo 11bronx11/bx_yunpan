@@ -3,30 +3,43 @@ package recovery
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
 	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
+	"github.com/11bronx11/bx_yunpan/backend/internal/testdb"
 )
 
 func recoveryDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := os.Getenv("TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("TEST_POSTGRES_DSN is not set")
-	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
+	db := testdb.Business(t)
+	// Archived scanner tests start from legacy persisted delivery fixtures. This
+	// callback exists only in tests; current business writers remain append-only.
+	if err := db.Callback().Create().After("gorm:create").Register("fixture:legacy-fanout", func(tx *gorm.DB) {
+		if tx.Statement.Table != "outbox_events" || tx.Error != nil {
+			return
+		}
+		e, ok := tx.Statement.Dest.(*outbox.Event)
+		if !ok {
+			return
+		}
+		if e.Producer != nil && *e.Producer == "business-intent" {
+			tx.AddError(tx.Session(&gorm.Session{NewDB: true}).Delete(&outbox.Event{}, "id=?", e.ID).Error)
+			return
+		}
+		for _, r := range outbox.Routes(e.EventType, true) {
+			tx.AddError(tx.Session(&gorm.Session{NewDB: true}).Create(&outbox.Delivery{EventID: e.ID, Transport: r.Transport, Destination: r.Destination, Status: "pending", AvailableAt: time.Now().UTC()}).Error)
+		}
+	}); err != nil {
 		t.Fatal(err)
 	}
+
 	return db
 }
 

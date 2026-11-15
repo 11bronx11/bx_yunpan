@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -247,6 +248,9 @@ func (s *Service) Import(ctx context.Context, userID, shareID, targetFolderID uu
 		if err := dblock.Transaction(tx, lockKey); err != nil {
 			return err
 		}
+		if err := dblock.Transaction(tx, "upload:object:"+object.SHA256+":"+strconv.FormatInt(object.SizeBytes, 10)); err != nil {
+			return err
+		}
 		var sourceEntry drive.FileEntry
 		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ? AND owner_id = ? AND deleted_at IS NULL", share.FileEntryID, share.OwnerID).First(&sourceEntry).Error; err != nil {
 			return lookupError(err)
@@ -275,22 +279,22 @@ func (s *Service) Import(ctx context.Context, userID, shareID, targetFolderID uu
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
-		if err := s.quota.AddLogicalUsage(tx, userID, object.SizeBytes); err != nil {
-			if errors.Is(err, identity.ErrConflict) {
-				return ErrQuotaExceeded
-			}
-			return err
-		}
 		entry, err := s.drive.CreateFile(tx, userID, targetFolderID, object.ID, sourceEntry.Name)
-		if err != nil {
-			return err
-		}
-		epoch, err := ownerepoch.Current(tx, userID)
 		if err != nil {
 			return err
 		}
 		importedID = entry.ID
 		if err := s.objects.AddReference(tx, object.ID); err != nil {
+			return err
+		}
+		epoch, err := ownerepoch.BumpContent(tx, userID)
+		if err != nil {
+			return err
+		}
+		if err := s.quota.AddLogicalUsage(tx, userID, object.SizeBytes); err != nil {
+			if errors.Is(err, identity.ErrConflict) {
+				return ErrQuotaExceeded
+			}
 			return err
 		}
 		row := Import{ID: uuid.Must(uuid.NewV7()), ShareID: share.ID, UserID: userID, TargetFolderID: targetFolderID, ImportedEntryID: entry.ID, IdempotencyKey: idempotencyKey}

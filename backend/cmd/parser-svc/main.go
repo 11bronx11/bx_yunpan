@@ -8,18 +8,19 @@ import (
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai/pb"
 	"github.com/11bronx11/bx_yunpan/backend/internal/bootstrap"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/logging"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/tracing"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
 func main() {
-	cfg, err := config.Load()
+	cfg, err := config.LoadForRole("parser-svc")
 	if err != nil {
 		slog.Error("load config", "error", err)
 		os.Exit(1)

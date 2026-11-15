@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 const (
@@ -38,3 +39,11 @@ type RefreshSession struct {
 }
 
 func (RefreshSession) TableName() string { return "refresh_sessions" }
+
+// Provision acceleration and quota rows in the user's creation transaction.
+func (u *User) AfterCreate(tx *gorm.DB) error {
+	if err := tx.Exec("INSERT INTO user_quota_usage(owner_id,occupied_bytes) VALUES(?,?)", u.ID, u.UsedLogicalBytes+u.ReservedBytes).Error; err != nil {
+		return err
+	}
+	return tx.Exec("INSERT INTO owner_async_epochs(owner_id) VALUES(?)", u.ID).Error
+}

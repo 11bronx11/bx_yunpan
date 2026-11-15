@@ -3,9 +3,12 @@ package sharing
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dblock"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -21,12 +24,13 @@ func fileManager(db *gorm.DB, quota drive.LogicalUsage) *drive.FileManager {
 	d := drive.NewService(db)
 	return drive.NewFileManager(d, objectstore.NewService(db), quota, nil, nil, 0)
 }
-func deleteFixture(t *testing.T) (shareFixture, *drive.FileManager) {
+
+func deleteFixture(t *testing.T, reuse ...*gorm.DB) (shareFixture, *drive.FileManager) {
 	t.Helper()
-	f := seedShare(t, true)
+	f := seedShare(t, true, reuse...)
 	quota := identity.NewService(f.db, nil, f.s.drive, 10*1024*1024*1024)
 	f.s.quota = quota
-	if err := f.db.Model(&identity.User{}).Where("id = ?", f.owner).Update("used_logical_bytes", 128).Error; err != nil {
+	if err := f.db.Table("user_quota_usage").Where("owner_id = ?", f.owner).Update("occupied_bytes", 128).Error; err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -35,10 +39,11 @@ func deleteFixture(t *testing.T) (shareFixture, *drive.FileManager) {
 	})
 	return f, fileManager(f.db, quota)
 }
+
 func recipient(t *testing.T, f shareFixture) (uuid.UUID, uuid.UUID) {
 	t.Helper()
 	id := uuid.New()
-	if err := f.db.Exec("INSERT INTO users(id, username, username_normalized, password_hash) VALUES (?, ?, ?, 'test')", id, id.String(), id.String()).Error; err != nil {
+	if err := f.db.Create(&identity.User{ID: id, Username: id.String(), UsernameNormalized: id.String(), PasswordHash: "test", Status: identity.UserStatusActive, QuotaBytes: 10 * 1024 * 1024 * 1024}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := f.s.drive.ProvisionUser(f.db, id); err != nil {
@@ -55,6 +60,7 @@ func recipient(t *testing.T, f shareFixture) (uuid.UUID, uuid.UUID) {
 	})
 	return id, root.ID
 }
+
 func TestSourceDeletionPreservesIndependentShareHistory(t *testing.T) {
 	f, manager := deleteFixture(t)
 	ctx := context.Background()
@@ -194,7 +200,7 @@ func TestConcurrentRepeatedSourceDeletionIsIdempotent(t *testing.T) {
 		}
 	}
 	var used int64
-	if err := f.db.Raw("SELECT used_logical_bytes FROM users WHERE id = ?", f.owner).Scan(&used).Error; err != nil || used != 0 {
+	if err := f.db.Raw("SELECT occupied_bytes FROM user_quota_usage WHERE owner_id = ?", f.owner).Scan(&used).Error; err != nil || used != 0 {
 		t.Fatalf("quota after delete=%d err=%v", used, err)
 	}
 	if err := manager.Delete(ctx, uuid.New(), f.file.ID, f.file.Version); !errors.Is(err, drive.ErrNotFound) {
@@ -217,6 +223,15 @@ func TestSourceDeletionLockOrderAgainstShareOperations(t *testing.T) {
 			user, folder := recipient(t, f)
 			tx := f.db.Begin()
 			defer tx.Rollback()
+			if operation == "import" {
+				var o objectstore.Object
+				if err := tx.First(&o, "id=?", f.file.ObjectID).Error; err != nil {
+					t.Fatal(err)
+				}
+				if err := dblock.Transaction(tx, "upload:object:"+o.SHA256+":"+strconv.FormatInt(o.SizeBytes, 10)); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err := tx.Exec("SELECT 1 FROM file_entries WHERE id = ? FOR UPDATE", f.file.ID).Error; err != nil {
 				t.Fatal(err)
 			}
@@ -237,7 +252,11 @@ func TestSourceDeletionLockOrderAgainstShareOperations(t *testing.T) {
 				}
 				done <- err
 			}()
-			waitForRowLock(t, f.db, "file_entries")
+			if operation == "import" {
+				waitForRowLock(t, f.db, "pg_advisory")
+			} else {
+				waitForRowLock(t, f.db, "file_entries")
+			}
 			// A waiting mutation must not hold a share lock needed by deletion.
 			manager := fileManager(tx, identity.NewService(tx, nil, drive.NewService(tx), 10*1024*1024*1024))
 			if err := manager.Delete(ctx, f.owner, f.file.ID, f.file.Version); err != nil {
@@ -270,7 +289,7 @@ func TestSourceDeletionWaitsForImportAndPreservesRecipient(t *testing.T) {
 	user, folder := recipient(t, f)
 	tx := f.db.Begin()
 	defer tx.Rollback()
-	if err := tx.Exec("SELECT 1 FROM users WHERE id = ? FOR UPDATE", user).Error; err != nil {
+	if err := tx.Exec("SELECT 1 FROM user_quota_usage WHERE owner_id = ? FOR UPDATE", user).Error; err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -282,10 +301,10 @@ func TestSourceDeletionWaitsForImportAndPreservesRecipient(t *testing.T) {
 		imported <- file
 		imports <- err
 	}()
-	waitForRowLock(t, f.db, "users")
+	waitForRowLock(t, f.db, "user_quota_usage")
 	deleted := make(chan error, 1)
 	go func() { deleted <- manager.Delete(ctx, f.owner, f.file.ID, f.file.Version) }()
-	waitForRowLock(t, f.db, "file_entries")
+	waitForRowLock(t, f.db, "pg_advisory")
 	if err := tx.Commit().Error; err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +349,7 @@ func (q gatedImportQuota) AddLogicalUsage(tx *gorm.DB, user uuid.UUID, size int6
 func TestDeletingAnotherFileCannotDeadlockRecipientImport(t *testing.T) {
 	// Register the source first so the recipient's entries are cleaned first.
 	source := seedShare(t, true)
-	f, manager := deleteFixture(t)
+	f, manager := deleteFixture(t, source.db)
 	t.Cleanup(func() { f.db.Exec("DELETE FROM share_imports WHERE user_id = ?", f.owner) })
 	root, err := f.s.drive.Root(f.owner)
 	if err != nil {
@@ -368,7 +387,7 @@ func TestDeletingAnotherFileCannotDeadlockRecipientImport(t *testing.T) {
 	deleted := make(chan error, 1)
 	go func() { deleted <- manager.Delete(ctx, f.owner, f.file.ID, f.file.Version) }()
 	// Delete now waits for the recipient quota without retaining an epoch lock.
-	waitForRowLock(t, f.db, "users")
+	waitForRowLock(t, f.db, "owner_content_epochs")
 	release()
 	if err := <-imported; err != nil {
 		t.Fatalf("import/delete quota inversion: %v", err)
@@ -377,7 +396,7 @@ func TestDeletingAnotherFileCannotDeadlockRecipientImport(t *testing.T) {
 		t.Fatalf("delete/import quota inversion: %v", err)
 	}
 	var used int64
-	if err := f.db.Raw("SELECT used_logical_bytes FROM users WHERE id = ?", f.owner).Scan(&used).Error; err != nil || used != 128 {
+	if err := f.db.Raw("SELECT occupied_bytes FROM user_quota_usage WHERE owner_id = ?", f.owner).Scan(&used).Error; err != nil || used != 128 {
 		t.Fatalf("quota must retain only imported file: %d %v", used, err)
 	}
 }

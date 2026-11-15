@@ -11,7 +11,6 @@ import (
 	"github.com/minio/minio-go/v7"
 	"gorm.io/gorm"
 
-	"github.com/11bronx11/bx_yunpan/backend/internal/identity"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
 	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
 )
@@ -53,7 +52,7 @@ func TestAuditObjectCanBeCollectedAndReuploadedTwice(t *testing.T) {
 		if err := f.db.Create(&session).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := f.db.Model(&identity.User{}).Where("id = ?", f.userID).Update("reserved_bytes", session.ReservedBytes).Error; err != nil {
+		if err := f.db.Table("user_quota_usage").Where("owner_id = ?", f.userID).Update("occupied_bytes", session.ReservedBytes).Error; err != nil {
 			t.Fatal(err)
 		}
 		store.put(session.Bucket, session.ObjectKey, content)
@@ -111,7 +110,7 @@ func TestAuditVerificationCleanupIsAtomic(t *testing.T) {
 			if err := f.db.Create(&s).Error; err != nil {
 				t.Fatal(err)
 			}
-			if err := f.db.Model(&identity.User{}).Where("id = ?", f.userID).Update("reserved_bytes", s.ReservedBytes).Error; err != nil {
+			if err := f.db.Table("user_quota_usage").Where("owner_id = ?", f.userID).Update("occupied_bytes", s.ReservedBytes).Error; err != nil {
 				t.Fatal(err)
 			}
 			store.put(s.Bucket, s.ObjectKey, content)

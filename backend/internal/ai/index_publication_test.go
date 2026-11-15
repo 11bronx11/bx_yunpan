@@ -11,13 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/minio/minio-go/v7"
+	"gorm.io/gorm"
+
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
-	"github.com/google/uuid"
-	"github.com/minio/minio-go/v7"
-	"gorm.io/gorm"
 )
 
 func publicationFixture(t *testing.T) (*gorm.DB, *Service, uuid.UUID) {
@@ -100,8 +101,8 @@ func TestIndexPublicationEmitsDurableSearchNotification(t *testing.T) {
 	if err := db.Where("event_id = ?", events[1].ID).Find(&deliveries).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(deliveries) != 1 || deliveries[0].Destination != outbox.TaskSearchProjectV1+"@search" {
-		t.Fatalf("completion must only project search: %#v", deliveries)
+	if len(deliveries) != 0 {
+		t.Fatalf("business publication must not fan out deliveries: %#v", deliveries)
 	}
 }
 

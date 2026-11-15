@@ -15,7 +15,7 @@ import (
 )
 
 func main() {
-	cfg, err := config.Load()
+	cfg, err := config.LoadForRole("outbox-relay")
 	if err != nil {
 		slog.Error("load config", "error", err)
 		os.Exit(1)

@@ -65,6 +65,9 @@ func identityFixture(t *testing.T) (*Service, *gorm.DB) {
 	if err := db.Exec(string(migration)).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Exec(`CREATE TABLE user_quota_usage(owner_id uuid PRIMARY KEY,occupied_bytes bigint NOT NULL,updated_at timestamptz DEFAULT clock_timestamp()); CREATE TABLE owner_async_epochs(owner_id uuid PRIMARY KEY,content_epoch bigint DEFAULT 0,updated_at timestamptz DEFAULT clock_timestamp()); CREATE TABLE upload_sessions(user_id uuid,reserved_bytes bigint);`).Error; err != nil {
+		t.Fatal(err)
+	}
 	tokens := NewTokenManager(config.Auth{Issuer: "identity-test", SigningSeed: "identity-test-seed", AccessTTL: time.Minute, RefreshTTL: time.Hour})
 	return NewService(db, tokens, nil, 1024*1024), db
 }

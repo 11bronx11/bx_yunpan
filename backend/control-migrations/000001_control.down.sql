@@ -1,0 +1,1 @@
+DROP TABLE control_settings,scan_positions,write_permits,write_budget,committer_members,queue_budgets,quarantines,results,executions,task_sources,tasks,event_inbox,relay_positions,module_leases;

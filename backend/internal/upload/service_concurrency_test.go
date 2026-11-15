@@ -7,14 +7,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/drive"
@@ -23,6 +21,7 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
+	"github.com/11bronx11/bx_yunpan/backend/internal/testdb"
 )
 
 type fakeUploadStorage struct {
@@ -148,26 +147,13 @@ type concurrencyFixture struct {
 
 func newConcurrencyFixture(t *testing.T) concurrencyFixture {
 	t.Helper()
-	dsn := os.Getenv("TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("TEST_POSTGRES_DSN is not set")
-	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{TranslateError: true})
-	if err != nil {
-		t.Fatalf("open postgres: %v", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("load postgres pool: %v", err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
+	db := testdb.Business(t)
 	userID := uuid.New()
 	username := "upload-concurrency-" + userID.String()
-	if err := db.Exec(`
-		INSERT INTO users (id, username, username_normalized, password_hash)
-		VALUES (?, ?, ?, ?)`, userID, username, username, "test").Error; err != nil {
-		t.Fatalf("create user: %v", err)
+	if err := db.Create(&identity.User{ID: userID, Username: username, UsernameNormalized: username, PasswordHash: "test", Status: identity.UserStatusActive, QuotaBytes: 10 * 1024 * 1024 * 1024}).Error; err != nil {
+		t.Fatal(err)
 	}
+
 	driveService := drive.NewService(db)
 	if err := driveService.ProvisionUser(db, userID); err != nil {
 		t.Fatalf("provision root: %v", err)
@@ -328,7 +314,7 @@ func TestAbortReleasesQuotaOnceUnderConcurrency(t *testing.T) {
 	if err := fixture.db.Create(&session).Error; err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if err := fixture.db.Model(&identity.User{}).Where("id = ?", fixture.userID).Update("reserved_bytes", 256).Error; err != nil {
+	if err := fixture.db.Table("user_quota_usage").Where("owner_id = ?", fixture.userID).Update("occupied_bytes", 256).Error; err != nil {
 		t.Fatalf("reserve quota: %v", err)
 	}
 
@@ -351,7 +337,7 @@ func TestAbortReleasesQuotaOnceUnderConcurrency(t *testing.T) {
 	}
 
 	var user identity.User
-	if err := fixture.db.First(&user, "id = ?", fixture.userID).Error; err != nil || user.ReservedBytes != 128 {
+	if err := quotaTestUser(fixture.db, &user, fixture.userID).Error; err != nil || user.ReservedBytes != 0 || user.UsedLogicalBytes != 128 {
 		t.Fatalf("reserved bytes = %d, err = %v", user.ReservedBytes, err)
 	}
 	if fixture.storage.abortCount() != 0 {
@@ -371,7 +357,7 @@ func TestExpireReleasesQuotaAndMarksSession(t *testing.T) {
 	if err := fixture.db.Create(&session).Error; err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if err := fixture.db.Model(&identity.User{}).Where("id = ?", fixture.userID).Update("reserved_bytes", session.ReservedBytes).Error; err != nil {
+	if err := fixture.db.Table("user_quota_usage").Where("owner_id = ?", fixture.userID).Update("occupied_bytes", session.ReservedBytes).Error; err != nil {
 		t.Fatalf("reserve quota: %v", err)
 	}
 
@@ -391,7 +377,7 @@ func TestExpireReleasesQuotaAndMarksSession(t *testing.T) {
 		t.Fatalf("expired storage upload id = %q, err = %v", stored.StorageUploadID, err)
 	}
 	var user identity.User
-	if err := fixture.db.First(&user, "id = ?", fixture.userID).Error; err != nil || user.ReservedBytes != 0 {
+	if err := quotaTestUser(fixture.db, &user, fixture.userID).Error; err != nil || user.ReservedBytes != 0 {
 		t.Fatalf("reserved bytes = %d, err = %v", user.ReservedBytes, err)
 	}
 }
@@ -402,7 +388,7 @@ func TestConcurrentExpiryScansReleaseQuotaAndEnqueueAbortOnce(t *testing.T) {
 	if err := fixture.db.Create(&session).Error; err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if err := fixture.db.Model(&identity.User{}).Where("id = ?", fixture.userID).Update("reserved_bytes", session.ReservedBytes).Error; err != nil {
+	if err := fixture.db.Table("user_quota_usage").Where("owner_id = ?", fixture.userID).Update("occupied_bytes", session.ReservedBytes).Error; err != nil {
 		t.Fatalf("reserve quota: %v", err)
 	}
 
@@ -455,11 +441,11 @@ func TestConcurrentExpiryScansReleaseQuotaAndEnqueueAbortOnce(t *testing.T) {
 		Where("op.upload_session_id = ? AND d.destination = ?", session.ID, outbox.TaskUploadOperationRecoverV1+"@upload").Count(&deliveries).Error; err != nil {
 		t.Fatal(err)
 	}
-	if deliveries != 1 {
-		t.Fatalf("upload recovery deliveries = %d, want 1", deliveries)
+	if deliveries != 0 {
+		t.Fatalf("business writer created legacy deliveries: %d", deliveries)
 	}
 	var user identity.User
-	if err := fixture.db.First(&user, "id = ?", fixture.userID).Error; err != nil || user.ReservedBytes != 0 {
+	if err := quotaTestUser(fixture.db, &user, fixture.userID).Error; err != nil || user.ReservedBytes != 0 {
 		t.Fatalf("reserved bytes = %d, err = %v", user.ReservedBytes, err)
 	}
 }
@@ -579,8 +565,7 @@ func TestVerifyHashMismatchRemovesStagingBeforeFailingSession(t *testing.T) {
 	if err := fixture.db.Create(&session).Error; err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if err := fixture.db.Model(&identity.User{}).Where("id = ?", fixture.userID).
-		Update("reserved_bytes", session.ReservedBytes).Error; err != nil {
+	if err := fixture.db.Table("user_quota_usage").Where("owner_id = ?", fixture.userID).Update("occupied_bytes", session.ReservedBytes).Error; err != nil {
 		t.Fatalf("reserve quota: %v", err)
 	}
 	storage.put(session.Bucket, session.ObjectKey, content)
@@ -596,7 +581,7 @@ func TestVerifyHashMismatchRemovesStagingBeforeFailingSession(t *testing.T) {
 		t.Fatalf("failed session = %#v, err = %v", stored, err)
 	}
 	var user identity.User
-	if err := fixture.db.First(&user, "id = ?", fixture.userID).Error; err != nil || user.ReservedBytes != 0 {
+	if err := quotaTestUser(fixture.db, &user, fixture.userID).Error; err != nil || user.ReservedBytes != 0 {
 		t.Fatalf("reserved bytes = %d, err = %v", user.ReservedBytes, err)
 	}
 }
@@ -615,8 +600,7 @@ func TestVerifyConcurrentSameHashKeepsCommittedCanonicalObject(t *testing.T) {
 	if err := fixture.db.Create(&second).Error; err != nil {
 		t.Fatalf("create second session: %v", err)
 	}
-	if err := fixture.db.Model(&identity.User{}).Where("id = ?", fixture.userID).
-		Update("reserved_bytes", first.ReservedBytes+second.ReservedBytes).Error; err != nil {
+	if err := fixture.db.Table("user_quota_usage").Where("owner_id = ?", fixture.userID).Update("occupied_bytes", first.ReservedBytes+second.ReservedBytes).Error; err != nil {
 		t.Fatalf("reserve quota: %v", err)
 	}
 	storage.put(first.Bucket, first.ObjectKey, content)
@@ -697,4 +681,18 @@ func testActiveSession(fixture concurrencyFixture, expiresAt time.Time) Session 
 		Bucket: "test", ObjectKey: "staging/abort", StorageUploadID: "fake-upload-id", PartSize: 128, PartCount: 1,
 		Status: StatusUploading, IdempotencyKey: uuid.NewString(), ExpiresAt: expiresAt, Version: 1,
 	}
+}
+
+func quotaTestUser(db *gorm.DB, u *identity.User, id uuid.UUID) *gorm.DB {
+	q := db.First(u, "id=?", id)
+	if q.Error != nil {
+		return q
+	}
+	current, err := identity.NewService(db, nil, nil, 0).User(id)
+	if err != nil {
+		q.Error = err
+		return q
+	}
+	*u = current
+	return q
 }

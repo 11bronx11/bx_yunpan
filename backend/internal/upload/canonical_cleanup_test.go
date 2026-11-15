@@ -13,7 +13,6 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
-	"github.com/11bronx11/bx_yunpan/backend/internal/identity"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
@@ -142,7 +141,7 @@ func TestRealMinioCanonicalFailureCleanup(t *testing.T) {
 		if err := f.db.Create(&s).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := f.db.Model(&identity.User{}).Where("id = ?", f.userID).Update("reserved_bytes", s.ReservedBytes).Error; err != nil {
+		if err := f.db.Table("user_quota_usage").Where("owner_id = ?", f.userID).Update("occupied_bytes", s.ReservedBytes).Error; err != nil {
 			t.Fatal(err)
 		}
 		if _, err := client.PutObject(ctx, bucket, s.ObjectKey, bytes.NewReader(content), int64(len(content)), minio.PutObjectOptions{}); err != nil {

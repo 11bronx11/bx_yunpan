@@ -17,19 +17,22 @@ import (
 )
 
 type Object struct {
-	ID             uuid.UUID `gorm:"type:uuid;primaryKey"`
-	SHA256         string
-	SizeBytes      int64
-	MimeType       string
-	Bucket         string
-	ObjectKey      string
-	Status         string
-	ReferenceCount int64
-	Version        int64
-	VerifiedAt     *time.Time
-	DeletedAt      *time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ContentGeneration int64 `gorm:"default:1"`
+	GCGeneration      int64
+	GCEligibleAt      *time.Time
+	ID                uuid.UUID `gorm:"type:uuid;primaryKey"`
+	SHA256            string
+	SizeBytes         int64
+	MimeType          string
+	Bucket            string
+	ObjectKey         string
+	Status            string
+	ReferenceCount    int64
+	Version           int64
+	VerifiedAt        *time.Time
+	DeletedAt         *time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 type GCStorage interface {
@@ -286,9 +289,10 @@ func (s *Service) FindOwnedWith(db *gorm.DB, ownerID uuid.UUID, sha256 string, s
 	return object, nil
 }
 
-func (s *Service) Get(objectID uuid.UUID) (Object, error) {
+func (s *Service) Get(objectID uuid.UUID) (Object, error) { return s.GetWith(s.db, objectID) }
+func (s *Service) GetWith(db *gorm.DB, objectID uuid.UUID) (Object, error) {
 	var object Object
-	if err := s.db.Where("id = ? AND status = 'ready'", objectID).First(&object).Error; err != nil {
+	if err := db.Where("id = ? AND status = 'ready'", objectID).First(&object).Error; err != nil {
 		return Object{}, err
 	}
 	return object, nil
@@ -336,7 +340,7 @@ func (s *Service) CreateOrGet(tx *gorm.DB, object Object) (Object, error) {
 				Updates(map[string]any{
 					"mime_type": object.MimeType, "bucket": object.Bucket, "object_key": object.ObjectKey,
 					"status": "ready", "verified_at": object.VerifiedAt, "deleted_at": nil,
-					"version": gorm.Expr("version + 1"), "updated_at": now,
+					"version": gorm.Expr("version + 1"), "content_generation": gorm.Expr("content_generation+1"), "updated_at": now,
 				})
 			if result.Error != nil {
 				return Object{}, result.Error
@@ -377,7 +381,7 @@ func (s *Service) AddReference(tx *gorm.DB, objectID uuid.UUID) error {
 
 func (s *Service) ReleaseReference(tx *gorm.DB, objectID uuid.UUID) (int64, error) {
 	if err := tx.Model(&Object{}).Where("id = ? AND reference_count > 0", objectID).
-		Updates(map[string]any{"reference_count": gorm.Expr("reference_count - 1"), "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()}).Error; err != nil {
+		Updates(map[string]any{"reference_count": gorm.Expr("reference_count - 1"), "gc_generation": gorm.Expr("gc_generation+CASE WHEN reference_count=1 THEN 1 ELSE 0 END"), "gc_eligible_at": gorm.Expr("CASE WHEN reference_count=1 THEN clock_timestamp() ELSE gc_eligible_at END"), "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()}).Error; err != nil {
 		return 0, err
 	}
 	var object Object
