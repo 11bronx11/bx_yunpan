@@ -2,6 +2,7 @@ package aisystem
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -16,12 +17,47 @@ import (
 // Cross-store inspection happens before the local publication transaction.
 // Accepted results are immutable and their generations cannot be reopened.
 func (p *Publisher) collectableArtifacts(ctx context.Context, i aiprotocol.Intent) ([]uuid.UUID, bool, error) {
+	ids, safe, _, err := p.collectableArtifactBatch(ctx, i)
+	return ids, safe, err
+}
+
+type artifactScanCursor struct {
+	CreatedAt  time.Time
+	ArtifactID uuid.UUID
+}
+
+func (p *Publisher) collectableArtifactBatch(ctx context.Context, i aiprotocol.Intent) ([]uuid.UUID, bool, artifactScanCursor, error) {
+	var cursor artifactScanCursor
+	var previous struct{ PublishedRefs json.RawMessage }
+	// The cursor is part of the last committed GC receipt, not a second lease
+	// or scheduling authority. Protected rows are revisited when a pass wraps.
+	if err := p.DB.WithContext(ctx).Table("ai_commit_receipts r").Select("r.published_refs").Joins("JOIN ai_artifact_manifests a ON a.task_id=r.task_id AND a.generation=r.generation").Where("a.object_id=? AND a.content_generation=? AND r.effect_kind='ai.artifact.gc'", i.ObjectID, i.ContentGeneration).Order("r.committed_at DESC,r.result_id DESC").Limit(1).Find(&previous).Error; err != nil {
+		return nil, false, cursor, err
+	}
+	if len(previous.PublishedRefs) > 0 {
+		var refs struct {
+			Cursor artifactScanCursor `json:"gc_scan_cursor"`
+		}
+		if err := json.Unmarshal(previous.PublishedRefs, &refs); err != nil {
+			return nil, false, cursor, err
+		}
+		cursor = refs.Cursor
+	}
 	var rows []Artifact
-	if err := p.DB.WithContext(ctx).Select("artifact_id,task_id,generation").Where("object_id=? AND content_generation=? AND created_at<?", i.ObjectID, i.ContentGeneration, time.Now().Add(-8*24*time.Hour)).Order("created_at").Limit(100).Find(&rows).Error; err != nil {
-		return nil, false, err
+	query := p.DB.WithContext(ctx).Select("artifact_id,task_id,generation,created_at").Where("object_id=? AND content_generation=? AND created_at<?", i.ObjectID, i.ContentGeneration, time.Now().Add(-8*24*time.Hour))
+	if !cursor.CreatedAt.IsZero() && cursor.ArtifactID != uuid.Nil {
+		query = query.Where("(created_at,artifact_id)>(?,?)", cursor.CreatedAt, cursor.ArtifactID)
+	}
+	if err := query.Order("created_at,artifact_id").Limit(100).Find(&rows).Error; err != nil {
+		return nil, false, cursor, err
+	}
+	next := artifactScanCursor{}
+	if len(rows) == 100 {
+		last := rows[len(rows)-1]
+		next = artifactScanCursor{last.CreatedAt, last.ArtifactID}
 	}
 	if p.Control == nil {
-		return nil, false, errors.New("control proof required for artifact GC")
+		return nil, false, next, errors.New("control proof required for artifact GC")
 	}
 	out := []uuid.UUID{}
 	for _, a := range rows {
@@ -32,7 +68,7 @@ func (p *Publisher) collectableArtifacts(ctx context.Context, i aiprotocol.Inten
 		}
 		res := p.Control.DB.WithContext(ctx).Raw(`SELECT t.resource_key,t.state,t.generation,EXISTS(SELECT 1 FROM results r WHERE r.task_id=t.id AND r.generation=? AND r.committed_at IS NULL) AS pending FROM tasks t WHERE t.id=?`, a.Generation, a.TaskID).Scan(&task)
 		if res.Error != nil {
-			return nil, false, res.Error
+			return nil, false, next, res.Error
 		}
 		if res.RowsAffected != 1 || task.ResourceKey != fmt.Sprintf("object:%s:%d", i.ObjectID, i.ContentGeneration) || task.Pending {
 			continue
@@ -46,9 +82,9 @@ func (p *Publisher) collectableArtifacts(ctx context.Context, i aiprotocol.Inten
 	// retirement grace exceeds the maximum processing authorization lifetime;
 	// accepted results are retained until their receipt has been acknowledged.
 	if err := p.Control.DB.WithContext(ctx).Raw(`SELECT count(*) FROM tasks t WHERE t.resource_key=? AND t.kind<>'ai.artifact.gc' AND (t.state NOT IN ('succeeded','superseded','rejected','failed','quarantined','needs_attention') OR EXISTS(SELECT 1 FROM results r WHERE r.task_id=t.id AND r.committed_at IS NULL))`, fmt.Sprintf("object:%s:%d", i.ObjectID, i.ContentGeneration)).Scan(&pending).Error; err != nil {
-		return nil, false, err
+		return nil, false, next, err
 	}
-	return out, pending == 0, nil
+	return out, pending == 0, next, nil
 }
 func (p *Publisher) cleanArtifacts(tx *gorm.DB, i aiprotocol.Intent, ids []uuid.UUID, versionsSafe bool) (bool, error) {
 	if len(ids) > 0 {

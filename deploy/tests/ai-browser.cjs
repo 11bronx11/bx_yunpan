@@ -10,7 +10,7 @@ async function main() {
   const output = path.resolve(process.argv[2]);
   const ready = path.join(output, 'browser-fixture.json');
   const fixture = JSON.parse(await fs.readFile(ready));
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, ...(process.env.AI_CHROMIUM_EXECUTABLE ? { executablePath: process.env.AI_CHROMIUM_EXECUTABLE } : {}) });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
   await context.tracing.start({ screenshots: true, snapshots: true });
   const page = await context.newPage();

@@ -53,8 +53,9 @@ func (p *Publisher) Publish(ctx context.Context, t asynccontrol.Task, r asynccon
 	}
 	var gcIDs []uuid.UUID
 	var gcVersionsSafe bool
+	var gcCursor artifactScanCursor
 	if t.Kind == "ai.artifact.gc" {
-		gcIDs, gcVersionsSafe, err = p.collectableArtifacts(ctx, in.Intent)
+		gcIDs, gcVersionsSafe, gcCursor, err = p.collectableArtifactBatch(ctx, in.Intent)
 		if err != nil {
 			return outcome, err
 		}
@@ -192,7 +193,11 @@ func (p *Publisher) Publish(ctx context.Context, t asynccontrol.Task, r asynccon
 				return asynccontrol.ErrInvalid
 			}
 		}
-		receipt := Receipt{ResultID: r.ID, TaskID: t.ID, Generation: r.Generation, InputDigest: t.InputDigest, ResultDigest: r.ResultDigest, ArtifactHash: out.ArtifactHash, EffectKind: t.Kind, Outcome: outcome, PublishedRefs: jsonValue(map[string]any{"output_id": out.OutputID}), Revision: 1, CommittedAt: time.Now().UTC()}
+		refs := map[string]any{"output_id": out.OutputID}
+		if t.Kind == "ai.artifact.gc" {
+			refs["gc_scan_cursor"] = gcCursor
+		}
+		receipt := Receipt{ResultID: r.ID, TaskID: t.ID, Generation: r.Generation, InputDigest: t.InputDigest, ResultDigest: r.ResultDigest, ArtifactHash: out.ArtifactHash, EffectKind: t.Kind, Outcome: outcome, PublishedRefs: jsonValue(refs), Revision: 1, CommittedAt: time.Now().UTC()}
 		return tx.Create(&receipt).Error
 	})
 	return outcome, err
@@ -325,7 +330,7 @@ func publishContent(tx *gorm.DB, kind string, in aiprotocol.Input, out aiprotoco
 		if err != nil {
 			return err
 		}
-		if d.ProcessedBlocks != d.SourceBlocks || int64(d.SourceBlocks) != a.RowCount {
+		if d.SourceBlocks < 1 || d.ProcessedBlocks != d.SourceBlocks || int64(d.SourceBlocks) != a.RowCount || strings.TrimSpace(d.Insight.Summary) == "" {
 			return asynccontrol.ErrConflict
 		}
 		common["source_id"] = in.SourceID

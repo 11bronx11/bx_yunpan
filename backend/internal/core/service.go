@@ -268,7 +268,7 @@ func (s *Service) GetObjectForProcessing(ctx context.Context, r *pb.ProcessingRe
 		Bucket, ObjectKey, SHA256, MimeType string
 		SizeBytes                           int64
 	}
-	q := s.DB.WithContext(ctx).Table("file_objects").Select("bucket,object_key,sha256,mime_type,size_bytes").Where("id=? AND content_generation=? AND sha256=? AND status='ready'", g.ObjectID, g.ContentGeneration, g.ContentHash).Take(&o)
+	q := s.DB.WithContext(ctx).Table("file_objects").Select("bucket,object_key,sha256,mime_type,size_bytes").Where("id=? AND content_generation=? AND sha256=? AND status='ready' AND reference_count>0", g.ObjectID, g.ContentGeneration, g.ContentHash).Take(&o)
 	if q.Error != nil {
 		return nil, invalidScope()
 	}

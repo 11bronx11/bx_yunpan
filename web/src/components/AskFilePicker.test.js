@@ -59,12 +59,13 @@ test('loads nested directory filters from the real items and page contract', asy
   getChildren.mockImplementation((id, { cursor }) => Promise.resolve(cursor
     ? { items: [{ id: 'nested', name: '项目文档', type: 'folder' }], page: { has_more: false } }
     : { items: [{ id: 'file', name: '不是目录.txt', type: 'file' }], page: { has_more: true, next_cursor: 'directories' } }));
-  const view = render(<AskFilePicker open selected={[]} onApply={jest.fn()} onCancel={jest.fn()} />);
-  fireEvent.mouseDown(screen.getByRole('combobox', { name: '按目录筛选' }).closest('.ant-select').querySelector('.ant-select-selector'));
-  const root = await screen.findByText('根目录');
-  fireEvent.click(root.closest('.ant-select-tree-treenode').querySelector('.ant-select-tree-switcher'));
+  render(<AskFilePicker open selected={[]} onApply={jest.fn()} onCancel={jest.fn()} />);
+  const directory = screen.getByRole('combobox', { name: '按目录筛选' });
+  fireEvent.keyDown(directory, { key: 'ArrowDown', keyCode: 40, which: 40 });
+  await screen.findByText('根目录');
+  fireEvent.click(screen.getByRole('img', { name: 'caret-down' }));
   fireEvent.click(await screen.findByText('项目文档'));
   await waitFor(() => expect(listAskableFiles).toHaveBeenCalledWith(expect.objectContaining({ folder_id: 'nested' })));
   expect(getChildren).toHaveBeenCalledWith('root', expect.objectContaining({ cursor: 'directories' }));
-  expect(view.container).not.toHaveTextContent('不是目录.txt');
+  expect(screen.queryByText('不是目录.txt')).not.toBeInTheDocument();
 });

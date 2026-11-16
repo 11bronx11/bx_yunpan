@@ -140,9 +140,10 @@ func (m *Migrator) Plan(ctx context.Context, run uuid.UUID) (MigrationReport, er
 	var rows []struct {
 		ID                       uuid.UUID
 		ContentGeneration        int64
+		ReferenceCount           int64
 		SHA256, Status, MimeType string
 	}
-	if err := m.Read.WithContext(ctx).Table("file_objects").Select("id,content_generation,sha256,status,mime_type").Where("id>?::uuid", cursor).Order("id").Limit(batch).Find(&rows).Error; err != nil {
+	if err := m.Read.WithContext(ctx).Table("file_objects").Select("id,content_generation,sha256,status,mime_type,reference_count").Where("id>?::uuid", cursor).Order("id").Limit(batch).Find(&rows).Error; err != nil {
 		return report, err
 	}
 	for n := range rows {
@@ -157,6 +158,8 @@ func (m *Migrator) Plan(ctx context.Context, run uuid.UUID) (MigrationReport, er
 			conclusion := "rebuild"
 			if row.Status != "ready" {
 				conclusion = "skip_deleted"
+			} else if row.ReferenceCount <= 0 {
+				conclusion = "skip_unreferenced"
 			} else if !supportedText(row.MimeType) {
 				conclusion = "skip_unsupported"
 			}
@@ -257,16 +260,21 @@ func (m *Migrator) Enqueue(ctx context.Context, run uuid.UUID) (MigrationReport,
 			continue
 		}
 
+		skipUnreferenced := false
 		err := m.IntentWriter.WithContext(outbox.WithAIProfile(ctx, m.Profile.ID, m.Profile.Revision)).Transaction(func(tx *gorm.DB) error {
 			var o struct {
-				Status, SHA256, MimeType              string
-				ContentGeneration, Version, SizeBytes int64
+				Status, SHA256, MimeType                              string
+				ContentGeneration, Version, SizeBytes, ReferenceCount int64
 			}
 			if err := tx.Table("file_objects").Where("id=?", item.ObjectID).Take(&o).Error; err != nil {
 				return err
 			}
 			if o.ContentGeneration != item.ContentGeneration || o.SHA256 != item.SourceHash || o.Status != "ready" {
 				return errors.New("migration resource changed")
+			}
+			if o.ReferenceCount <= 0 {
+				skipUnreferenced = true
+				return nil
 			}
 			mediaType, err := outbox.AIResourceMediaType(tx, item.ObjectID, o.MimeType)
 			if err != nil {
@@ -306,10 +314,16 @@ func (m *Migrator) Enqueue(ctx context.Context, run uuid.UUID) (MigrationReport,
 		if err != nil {
 			return report, err
 		}
-		if err := m.AI.WithContext(ctx).Exec("UPDATE ai_migration_items SET conclusion='queued',updated_at=clock_timestamp() WHERE run_id=? AND object_id=? AND content_generation=? AND conclusion='rebuild'", run, item.ObjectID, item.ContentGeneration).Error; err != nil {
+		conclusion := "queued"
+		if skipUnreferenced {
+			conclusion = "skip_unreferenced"
+		}
+		if err := m.AI.WithContext(ctx).Exec("UPDATE ai_migration_items SET conclusion=?,updated_at=clock_timestamp() WHERE run_id=? AND object_id=? AND content_generation=? AND conclusion='rebuild'", conclusion, run, item.ObjectID, item.ContentGeneration).Error; err != nil {
 			return report, err
 		}
-		report.Queued++
+		if !skipUnreferenced {
+			report.Queued++
+		}
 	}
 	var pending int64
 	_ = m.AI.WithContext(ctx).Table("ai_migration_items").Where("run_id=? AND conclusion='rebuild'", run).Count(&pending)
@@ -548,7 +562,7 @@ func (m *Migrator) CutoverCheck(ctx context.Context, run uuid.UUID) (MigrationRe
 		return r, errors.New("planning, task handoff and message transfer must complete before cutover")
 	}
 	var missing int64
-	if err := m.AI.WithContext(ctx).Table("ai_migration_items").Where("run_id=? AND conclusion NOT IN ('verified','skip_deleted','skip_unsupported','stopped_preserved')", run).Count(&missing).Error; err != nil {
+	if err := m.AI.WithContext(ctx).Table("ai_migration_items").Where("run_id=? AND conclusion NOT IN ('verified','skip_deleted','skip_unreferenced','skip_unsupported','stopped_preserved')", run).Count(&missing).Error; err != nil {
 		return r, err
 	}
 	if missing > 0 {

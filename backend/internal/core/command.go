@@ -8,6 +8,8 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -81,7 +83,10 @@ func RequestReprocess(ctx context.Context, db *gorm.DB, owner, file uuid.UUID, k
 			SHA256, MimeType                      string
 		}
 		if err := tx.Table("file_entries e").Select("o.id AS object_id,o.content_generation,o.size_bytes,o.version,o.sha256,o.mime_type").Joins("JOIN file_objects o ON o.id=e.object_id").Where("e.id=? AND e.owner_id=? AND e.deleted_at IS NULL AND o.status='ready'", file, owner).Take(&o).Error; err != nil {
-			return invalidScope()
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return status.Error(codes.NotFound, "file unavailable")
+			}
+			return err
 		}
 		mediaType, err := outbox.AIResourceMediaType(tx, o.ObjectID, o.MimeType)
 		if err != nil {

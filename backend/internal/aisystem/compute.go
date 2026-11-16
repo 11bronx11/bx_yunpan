@@ -191,6 +191,9 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.
 			if err != nil {
 				return nil, errors.New("summary.unavailable")
 			}
+			if strings.TrimSpace(insight.Summary) == "" {
+				return nil, errors.New("ai.summary.empty")
+			}
 			summaries = append(summaries, insight.Summary)
 		}
 		if len(summaries) > 1 {
@@ -201,6 +204,9 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.
 			insight, err = c.Summary.Enrich(ctx, combined)
 			if err != nil {
 				return nil, errors.New("summary.unavailable")
+			}
+			if strings.TrimSpace(insight.Summary) == "" {
+				return nil, errors.New("ai.summary.empty")
 			}
 		}
 		var sourceCoverage string
