@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -16,12 +17,32 @@ func main() {
 	source := env("MIGRATIONS_SOURCE", "file://migrations")
 	command := "up"
 	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "archive" {
+		source = env("AI_ARCHIVE_MIGRATIONS_SOURCE", "file://archive-migrations")
+		args = args[1:]
+		u, e := url.Parse(dsn)
+		if e != nil {
+			fail("invalid business DSN", nil)
+		}
+		q := u.Query()
+		q.Set("x-migrations-table", "ai_archive_migrations")
+		u.RawQuery = q.Encode()
+		dsn = u.String()
+	}
 	if len(args) > 0 && args[0] == "control" {
 		dsn = os.Getenv("ASYNC_CONTROL_DSN")
 		source = env("CONTROL_MIGRATIONS_SOURCE", "file://control-migrations")
 		args = args[1:]
 		if dsn == "" {
 			fail("ASYNC_CONTROL_DSN is required", nil)
+		}
+	}
+	if len(args) > 0 && args[0] == "ai" {
+		dsn = os.Getenv("AI_MIGRATION_DSN")
+		source = env("AI_MIGRATIONS_SOURCE", "file://ai-migrations")
+		args = args[1:]
+		if dsn == "" {
+			fail("AI_MIGRATION_DSN is required", nil)
 		}
 	}
 	if len(args) > 0 {
@@ -52,7 +73,7 @@ func main() {
 			fmt.Printf("version=%d dirty=%t\n", version, dirty)
 		}
 	default:
-		fail("usage: migrate [control] [up|down-one|version]", nil)
+		fail("usage: migrate [control|ai|archive] [up|down-one|version]", nil)
 	}
 	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		fail("run migration", err)

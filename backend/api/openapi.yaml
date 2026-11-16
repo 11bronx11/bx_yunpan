@@ -749,10 +749,11 @@ paths:
       tags: [Search]
       summary: Search authorized files and chunks
       description: |
-        Searches only files visible to the authenticated user. Name mode ranks exact and
-        prefix matches ahead of fuzzy matches. Hybrid mode combines PostgreSQL full-text
-        and pgvector semantic rankings with Reciprocal Rank Fusion. Results default to the
-        20 highest-ranked files and contain at most three evidence excerpts per file.
+        Name search reads core business facts and remains available without AI.
+        Content search filters authorized active versions before ranking. Fulltext
+        prefers complete Elasticsearch projections and falls back to AI PG FTS.
+        Semantic uses a compatible query embedding and Qdrant/pgvector; hybrid
+        combines independent branches and reports degradation.
       operationId: search
       requestBody:
         required: true
@@ -773,6 +774,29 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/ai/files:
+    get:
+      tags: [AI]
+      summary: List currently authorized text-ready files for questions
+      operationId: listAskableFiles
+      parameters:
+        - {name: q, in: query, schema: {type: string, maxLength: 512}}
+        - {name: folder_id, in: query, schema: {$ref: '#/components/schemas/UUID'}}
+        - {name: include_subfolders, in: query, schema: {type: boolean, default: true}}
+        - {name: mime_types, in: query, schema: {type: array, items: {type: string}}}
+        - {name: sort, in: query, schema: {type: string, enum: [name_asc, updated_desc], default: name_asc}}
+        - {name: cursor, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 30}}
+        - {name: eligibility, in: query, schema: {type: string, enum: [askable], default: askable}}
+      responses:
+        '200':
+          description: Cursor advances past the last scanned business candidate; an incomplete scan may return an empty page with has_more=true.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AskableFilePage'}
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/files/{fileId}/ai:
     get:
       tags: [AI]
@@ -797,6 +821,19 @@ paths:
       parameters:
         - $ref: '#/components/parameters/FileId'
         - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                targets:
+                  type: array
+                  items: {type: string, enum: [all, source, text, vectors, summary, projection_text, projection_vector]}
+                  default: [all]
+                profile: {type: string}
+      description: Idempotency-Key binds the canonical request to one business-local job. Acceptance does not require AI, control PG or MQ health.
       responses:
         '202':
           description: AI task accepted
@@ -813,10 +850,10 @@ paths:
       tags: [AI]
       summary: Ask a question over authorized files
       description: |
-        Retrieves at most eight authorized evidence chunks, with at most two chunks from
-        each file. The model returns a structured grounding decision and evidence IDs;
-        the backend removes duplicate or unknown IDs before exposing citations. When the
-        available evidence does not support an answer, citations is an empty array.
+        Uses authorized parent/child evidence with a common token budget. Selected
+        files never widen to all on failure. Core revalidates evidence before model
+        invocation. Vector or summary failures do not block text-based answers.
+        Bounded retrieval does not promise exhaustive review of every paragraph.
       operationId: askFiles
       requestBody:
         required: true
@@ -1099,6 +1136,16 @@ components:
               additionalProperties: true
         request_id:
           type: string
+        invalid_files:
+          type: array
+          maxItems: 50
+          description: Present for ai.scope_invalid. Contains only IDs from the submitted selection, without permission or ownership details.
+          items:
+            type: object
+            required: [file_id, reason]
+            properties:
+              file_id: {$ref: '#/components/schemas/UUID'}
+              reason: {type: string, enum: [unavailable, text_unavailable]}
     PageInfo:
       type: object
       required: [has_more]
@@ -1630,6 +1677,67 @@ components:
           $ref: '#/components/schemas/UUID'
         imported_file:
           $ref: '#/components/schemas/FileEntry'
+    AIScope:
+      type: object
+      required: [mode]
+      description: Explicit selected requires 1..50 unique file IDs. New scope cannot be combined with legacy file_ids/folder_id.
+      properties:
+        mode: {type: string, enum: [all, folder, selected]}
+        file_ids: {type: array, maxItems: 50, items: {$ref: '#/components/schemas/UUID'}}
+        folder_id: {$ref: '#/components/schemas/NullableUUID'}
+        include_subfolders: {type: boolean}
+        snapshot_id: {type: string, readOnly: true}
+    AICapability:
+      type: object
+      properties:
+        supported: {type: boolean}
+        available: {type: boolean}
+        version_id: {type: string}
+        freshness: {type: string, enum: [current, previous]}
+        coverage: {type: string, enum: [complete, partial, none]}
+        latest_build:
+          type: object
+          properties:
+            state: {type: string, enum: [pending, succeeded, failed, superseded, unknown]}
+            error_code: {type: string}
+            observed_at: {type: string}
+    AICapabilities:
+      type: object
+      properties:
+        askable: {type: boolean}
+        source: {$ref: '#/components/schemas/AICapability'}
+        text: {$ref: '#/components/schemas/AICapability'}
+        vector: {$ref: '#/components/schemas/AICapability'}
+        summary: {$ref: '#/components/schemas/AICapability'}
+    AIRetrieval:
+      type: object
+      properties:
+        text_backend: {type: string}
+        vector_backend: {type: string}
+        degraded: {type: boolean}
+        reasons: {type: array, items: {type: string}}
+        evidence_tokens: {type: integer}
+        token_count_is_estimate: {type: boolean}
+        text_target: {type: string}
+        vector_target: {type: string}
+    AICoverage:
+      type: object
+      properties:
+        mode: {type: string, enum: [source, retrieved]}
+        exhaustive: {type: boolean}
+        missing_evidence_file_ids: {type: array, items: {$ref: '#/components/schemas/UUID'}}
+    AskableFilePage:
+      type: object
+      required: [items, page, scan_incomplete]
+      properties:
+        items:
+          type: array
+          items:
+            allOf:
+              - {$ref: '#/components/schemas/FileEntry'}
+              - {type: object, properties: {capabilities: {$ref: '#/components/schemas/AICapabilities'}}}
+        page: {$ref: '#/components/schemas/PageInfo'}
+        scan_incomplete: {type: boolean}
     SearchRequest:
       type: object
       description: Search defaults to the 20 highest-ranked matching files.
@@ -1669,6 +1777,11 @@ components:
           $ref: '#/components/schemas/UUID'
         file_name:
           type: string
+        content_generation: {type: integer, format: int64}
+        source_version_id: {$ref: '#/components/schemas/UUID'}
+        content_version_id: {$ref: '#/components/schemas/UUID'}
+        parent_id: {$ref: '#/components/schemas/UUID'}
+        child_id: {$ref: '#/components/schemas/UUID'}
         page_number:
           type: integer
           nullable: true
@@ -1697,6 +1810,8 @@ components:
       type: object
       required: [hits, page]
       properties:
+        retrieval: {$ref: '#/components/schemas/AIRetrieval'}
+        coverage: {$ref: '#/components/schemas/AICoverage'}
         hits:
           type: array
           items:
@@ -1705,8 +1820,15 @@ components:
           $ref: '#/components/schemas/PageInfo'
     AIDocument:
       type: object
-      required: [file_id, status, pipeline_version, model_version]
+      required: [file_id, capabilities, preview]
       properties:
+        capabilities: {$ref: '#/components/schemas/AICapabilities'}
+        preview:
+          type: object
+          properties:
+            kind: {type: string, enum: [image_thumbnail, document_summary, none]}
+            state: {type: string, enum: [available, pending, failed, unsupported, unknown]}
+        coverage: {$ref: '#/components/schemas/AICoverage'}
         file_id:
           $ref: '#/components/schemas/UUID'
         status:
@@ -1737,6 +1859,8 @@ components:
           type: string
           minLength: 1
           maxLength: 2000
+        scope:
+          $ref: '#/components/schemas/AIScope'
         folder_id:
           $ref: '#/components/schemas/NullableUUID'
         file_ids:
@@ -1750,6 +1874,9 @@ components:
       required: [answer, grounded, citations]
       description: Citations contain only model-selected evidence IDs validated against the retrieved authorized chunks.
       properties:
+        retrieval: {$ref: '#/components/schemas/AIRetrieval'}
+        coverage: {$ref: '#/components/schemas/AICoverage'}
+        scope: {$ref: '#/components/schemas/AIScope'}
         answer:
           type: string
         grounded:
@@ -1775,7 +1902,7 @@ components:
           $ref: '#/components/schemas/NullableUUID'
         status:
           type: string
-          enum: [pending, running, succeeded, failed, canceled]
+          enum: [pending, running, succeeded, partial_success, failed, superseded, canceled, needs_attention]
         poll_after_ms:
           type: integer
           minimum: 1

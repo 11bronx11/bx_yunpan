@@ -1,0 +1,62 @@
+package dependencies
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
+	"gorm.io/gorm"
+	"time"
+)
+
+// OpenRoleDB opens exactly one explicitly supplied DSN. It never falls back
+// to a business connection when an AI setting is absent.
+func OpenRoleDB(ctx context.Context, cfg config.Config, dsn string, readonly bool) (*gorm.DB, *sql.DB, error) {
+	if dsn == "" {
+		return nil, nil, errors.New("explicit role DSN required")
+	}
+	var err error
+	if readonly {
+		dsn, err = readOnlyDSN(dsn)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	cfg.Postgres.PrimaryDSN = dsn
+	cfg.Postgres.DSN = dsn
+	if cfg.Postgres.MaxOpenConns < 1 || cfg.Postgres.MaxOpenConns > 6 {
+		cfg.Postgres.MaxOpenConns = 6
+	}
+	cfg.Postgres.MaxIdleConns = min(2, cfg.Postgres.MaxOpenConns)
+	cfg.Postgres.ConnMaxLifetime = 30 * time.Minute
+	cfg.Postgres.ConnMaxIdleTime = 5 * time.Minute
+	return openPostgres(ctx, cfg)
+}
+func OpenAI(ctx context.Context, cfg config.Config, role string) (*gorm.DB, *sql.DB, error) {
+	dsn := cfg.AISplit.ComputeDSN
+	if role == "ai-query" {
+		dsn = cfg.AISplit.QueryDSN
+	}
+	if role == "ai-committer" {
+		dsn = cfg.AISplit.CommitDSN
+	}
+	db, sqlDB, err := OpenRoleDB(ctx, cfg, dsn, role == "ai-query")
+	if err != nil {
+		return nil, nil, err
+	}
+	fail := func(e error) (*gorm.DB, *sql.DB, error) { _ = sqlDB.Close(); return nil, nil, e }
+	var canWrite, canStage, canReadStage bool
+	if err := db.Raw(`SELECT has_table_privilege(current_user,'ai_objects','INSERT,UPDATE,DELETE') OR has_table_privilege(current_user,'ai_commit_receipts','INSERT,UPDATE,DELETE'),has_table_privilege(current_user,'ai_artifact_manifests','INSERT'),has_table_privilege(current_user,'ai_artifact_manifests','SELECT')`).Row().Scan(&canWrite, &canStage, &canReadStage); err != nil {
+		return fail(err)
+	}
+	if role == "ai-query" && (canWrite || canStage || canReadStage) {
+		return fail(errors.New("AI query role has excess privileges"))
+	}
+	if role != "ai-query" && role != "ai-committer" && (canWrite || !canStage) {
+		return fail(errors.New("AI compute requires staging-only write privileges"))
+	}
+	if role == "ai-committer" && !canWrite {
+		return fail(errors.New("AI committer requires publication privileges"))
+	}
+	return db, sqlDB, nil
+}

@@ -11,16 +11,17 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/aiprotocol"
 	"github.com/11bronx11/bx_yunpan/backend/internal/asynccontrol"
 	"github.com/11bronx11/bx_yunpan/backend/internal/asyncprotocol"
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
-	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
 	"github.com/11bronx11/bx_yunpan/backend/internal/upload"
 )
 
 type Planner struct {
+	AIIntent     func(aiprotocol.Intent) (asynccontrol.Spec, error)
 	Read         *gorm.DB
 	AI, Search   bool
 	GCDelay      time.Duration
@@ -43,6 +44,37 @@ func (p *Planner) Plan(ctx context.Context, e asynccontrol.Event) ([]asynccontro
 	var tasks []asynccontrol.Spec
 	db := p.Read.WithContext(ctx)
 	switch e.EventType {
+	case aiprotocol.IntentEvent:
+		if !p.AI {
+			return nil, nil
+		}
+		var intent aiprotocol.Intent
+		if json.Unmarshal(e.Payload, &intent) != nil || p.AIIntent == nil {
+			return nil, asynccontrol.ErrInvalid
+		}
+		spec, err := p.AIIntent(intent)
+		return []asynccontrol.Spec{spec}, err
+	case aiprotocol.TombstoneEvent:
+		if !p.AI {
+			return nil, nil
+		}
+		var tomb aiprotocol.Tombstone
+		if json.Unmarshal(e.Payload, &tomb) != nil {
+			return nil, asynccontrol.ErrInvalid
+		}
+		var o objectstore.Object
+		if err := db.First(&o, "id=?", tomb.ObjectID).Error; err != nil {
+			return nil, err
+		}
+		intent := aiprotocol.Intent{Version: 2, RequestedAt: e.CreatedAt.Unix(), RequestID: e.ID, ObjectID: o.ID, ContentGeneration: tomb.ContentGeneration, ContentHash: o.SHA256, Size: o.SizeBytes, MediaType: o.MimeType, LifecycleRevision: tomb.LifecycleRevision}
+		spec, err := p.AIIntent(intent)
+		if err != nil {
+			return nil, err
+		}
+		spec.Kind = "ai.object.tombstone"
+		spec.SemanticKey = "ai.v2.tombstone:" + e.ID.String()
+		return []asynccontrol.Spec{spec}, nil
+
 	case eventcontract.EventStorageOperationRecoverV1, eventcontract.EventUploadOperationRecoverV1:
 		var payload eventcontract.StorageOperationRecoverV1
 		if err := json.Unmarshal(e.Payload, &payload); err != nil {
@@ -143,31 +175,15 @@ func (p *Planner) Plan(ctx context.Context, e asynccontrol.Event) ([]asynccontro
 			if e.EventType != eventcontract.EventAIIndexRequestedV1 {
 				tasks = append(tasks, pack("thumbnail", "thumbnail:"+key+":v1", "", resource, in))
 			}
-			if p.AI && e.EventType != eventcontract.EventMediaThumbnailRequestedV1 {
-				in.OriginalPayload, _ = json.Marshal(eventcontract.AIIndexRequestedV1{ObjectID: o.ID})
-				tasks = append(tasks, pack("ai.index", "ai.index:"+key+":v1", "", resource, in))
-			}
+
 		}
-	case eventcontract.EventAIReprocessRequestedV1:
-		if p.AI {
-			var in eventcontract.AIReprocessRequestedV1
-			if err := json.Unmarshal(e.Payload, &in); err != nil {
-				return nil, fmt.Errorf("%w: ai reprocess", asynccontrol.ErrInvalid)
-			}
-			var owner struct{ OwnerID uuid.UUID }
-			if err := db.Table("async_tasks").Select("owner_id").Where("id=?", in.TaskID).Scan(&owner).Error; err != nil {
-				return nil, missingResource(err)
-			}
-			tasks = append(tasks, pack("ai.reprocess", "ai.reprocess:"+in.TaskID.String(), "owner:"+owner.OwnerID.String(), "object:"+in.ObjectID.String(), asyncprotocol.Input{ObjectID: in.ObjectID, OwnerID: owner.OwnerID, EventID: in.TaskID, OriginalPayload: e.Payload}))
-		}
+	case eventcontract.EventAIReprocessRequestedV1: // Retired online; retained only by the offline importer.
 	default:
 		if _, ok := eventcontract.Lookup(e.EventType); !ok {
 			return nil, fmt.Errorf("%w: unknown event %s", asynccontrol.ErrInvalid, e.EventType)
 		}
 	}
-	if len(outbox.SearchRoutes(e.EventType, p.Search)) > 0 {
-		tasks = append(tasks, pack("search.project", "search.project:"+e.ID.String(), "", "event:"+e.AggregateID.String(), asyncprotocol.Input{EventID: e.ID, EventType: e.EventType, OriginalPayload: searchPayload(e), ObjectID: e.AggregateID}))
-	}
+
 	return tasks, nil
 }
 
@@ -191,4 +207,31 @@ func missingResource(err error) error {
 		return fmt.Errorf("%w: referenced business resource no longer exists", asynccontrol.ErrInvalid)
 	}
 	return err
+}
+
+// legacyAIPlan is used only by the offline importer to preserve original
+// semantic identities, consumed budgets and durable results for AI migration.
+func (p *Planner) legacyAIPlan(ctx context.Context, e asynccontrol.Event, tasks []asynccontrol.Spec) ([]asynccontrol.Spec, error) {
+	if p.AI && (e.EventType == eventcontract.EventObjectReadyV1 || e.EventType == eventcontract.EventAIIndexRequestedV1) {
+		var o objectstore.Object
+		if err := p.Read.WithContext(ctx).First(&o, "id=?", e.AggregateID).Error; err != nil {
+			return nil, err
+		}
+		if o.Status == "ready" {
+			in := asyncprotocol.Input{ObjectID: o.ID, ContentGeneration: o.ContentGeneration, Bucket: o.Bucket, Key: o.ObjectKey, SHA256: o.SHA256, Size: o.SizeBytes, Mime: o.MimeType}
+			tasks = append(tasks, pack("ai.index", fmt.Sprintf("ai.index:%s:%d:v1", o.ID, o.ContentGeneration), "", "object:"+o.ID.String(), in))
+		}
+	}
+	if p.AI && e.EventType == eventcontract.EventAIReprocessRequestedV1 {
+		var v eventcontract.AIReprocessRequestedV1
+		if json.Unmarshal(e.Payload, &v) != nil {
+			return nil, asynccontrol.ErrInvalid
+		}
+		var owner struct{ OwnerID uuid.UUID }
+		if err := p.Read.WithContext(ctx).Table("async_tasks").Select("owner_id").Where("id=?", v.TaskID).Scan(&owner).Error; err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, pack("ai.reprocess", "ai.reprocess:"+v.TaskID.String(), "owner:"+owner.OwnerID.String(), "object:"+v.ObjectID.String(), asyncprotocol.Input{ObjectID: v.ObjectID, OwnerID: owner.OwnerID, EventID: v.TaskID, OriginalPayload: e.Payload}))
+	}
+	return tasks, nil
 }

@@ -1,0 +1,22 @@
+syntax = "proto3";
+package yunpan.core.v1;
+option go_package = "github.com/11bronx11/bx_yunpan/backend/internal/core/pb;pb";
+service CoreReadService {
+ rpc OpenRetrievalScope(OpenScopeRequest) returns (ScopeResponse);
+ rpc StreamScopeMembers(ScopeMembersRequest) returns (ScopeMembersResponse);
+ rpc ValidateEvidence(ValidateEvidenceRequest) returns (ValidateEvidenceResponse);
+ rpc GetObjectForProcessing(ProcessingRequest) returns (ProcessingResponse);
+ rpc BatchGetFileRefs(FileRefsRequest) returns (FileRefsResponse);
+}
+message FileRef { string file_id=1; string object_id=2; int64 content_generation=3; int64 entry_version=4; string name=5; string path=6; string mime_type=7; int64 size=8; string updated_at=9; string folder_id=10; }
+message OpenScopeRequest { string grant=1; }
+message ScopeResponse { string snapshot_id=1; int64 content_epoch=2; int64 acl_epoch=3; int64 expires_at=4; }
+message ScopeMembersRequest { string grant=1; string cursor=2; int32 limit=3; string query=4; repeated string mime_types=5; string sort=6; }
+message ScopeMembersResponse { repeated FileRef files=1; string next_cursor=2; bool has_more=3; }
+message EvidenceRef { string file_id=1; string object_id=2; int64 content_generation=3; int64 entry_version=4; }
+message ValidateEvidenceRequest { string grant=1; repeated EvidenceRef refs=2; }
+message ValidateEvidenceResponse { repeated FileRef files=1; string snapshot_id=2; }
+message ProcessingRequest { string grant=1; string input_identity=2; string intent_id=3; string object_id=4; int64 content_generation=5; }
+message ProcessingResponse { string object_id=1; int64 content_generation=2; string sha256=3; int64 size=4; string mime_type=5; string read_url=6; int64 expires_at=7; }
+message FileRefsRequest { string grant=1; repeated string file_ids=2; }
+message FileRefsResponse { repeated FileRef files=1; }

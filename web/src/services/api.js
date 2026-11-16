@@ -32,6 +32,15 @@ const errorMessages = {
   'share.conflict': '网盘中已存在该文件，无法重复导入',
   'share.inactive': '分享已失效，仅可查看，请刷新列表',
   'share.version_conflict': '分享已被其他操作修改，请刷新后重试',
+  'ai.invalid_scope': '请选择 1 到 50 个有效文件',
+  'ai.scope_invalid': '部分文件已删除或尚未准备好，请更新选择后重试',
+  'ai.scope_changed': '文件范围已变化，请更新选择后重试',
+  'ai.semantic_unavailable': '语义检索暂不可用，可使用全文检索',
+  'ai.answer_unavailable': '回答服务暂不可用，请稍后重试',
+  'ai.query_timeout': '本次查询超时，请稍后重试',
+  'ai.scope_too_large': '本次文件范围过大，请选择更小的范围',
+  'ai.capability_disabled': '当前配置未启用此能力',
+  'ai.capability_unsupported': '当前文件类型不支持此能力',
   'ai.not_found': '没有找到对应的 AI 处理结果',
   'ai.invalid_request': '检索或提问内容不符合要求',
   'ai.quota_exhausted': '功能暂时不可用',
@@ -83,6 +92,8 @@ const parseResponse = async response => {
     const error = new Error(errorMessage(code, response.status));
     error.status = response.status;
     error.code = code;
+    error.details = data?.error?.details;
+    error.invalidFiles = data?.invalid_files || [];
     throw error;
   }
   return data;

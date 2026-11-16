@@ -64,6 +64,13 @@ func (s *Store) WritePermit(ctx context.Context, shard int) (uuid.UUID, bool, er
 }
 
 func (s *Store) RunCommitters(ctx context.Context, b *Broker, holder string, commit func(context.Context, Notice) error, logger *slog.Logger) error {
+	return s.RunCommittersFor(ctx, b, EffectCore, holder, commit, logger)
+}
+
+func (s *Store) RunCommittersFor(ctx context.Context, b *Broker, target, holder string, commit func(context.Context, Notice) error, logger *slog.Logger) error {
+	if target != EffectCore && target != EffectAI {
+		return ErrInvalid
+	}
 	type shardRun struct {
 		cancel context.CancelFunc
 		done   chan struct{}
@@ -71,7 +78,7 @@ func (s *Store) RunCommitters(ctx context.Context, b *Broker, holder string, com
 	defer func() {
 		release, c := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 		defer c()
-		_ = s.DB.WithContext(release).Exec("UPDATE committer_members SET lease_until=clock_timestamp() WHERE id=?", holder).Error
+		_ = s.DB.WithContext(release).Exec("UPDATE committer_members SET lease_until=clock_timestamp() WHERE id=? AND effect_target=?", holder, target).Error
 	}()
 	active := map[int]shardRun{}
 	var mu sync.Mutex
@@ -86,7 +93,7 @@ func (s *Store) RunCommitters(ctx context.Context, b *Broker, holder string, com
 		}
 	}()
 	for ctx.Err() == nil {
-		q := s.DB.WithContext(ctx).Exec(`INSERT INTO committer_members(id,lease_until) VALUES(?,clock_timestamp()+(?*interval '1 millisecond')) ON CONFLICT(id) DO UPDATE SET lease_until=EXCLUDED.lease_until,updated_at=clock_timestamp()`, holder, s.Lease.Milliseconds())
+		q := s.DB.WithContext(ctx).Exec(`INSERT INTO committer_members(id,effect_target,lease_until) VALUES(?,?,clock_timestamp()+(?*interval '1 millisecond')) ON CONFLICT(id,effect_target) DO UPDATE SET lease_until=EXCLUDED.lease_until,updated_at=clock_timestamp()`, holder, target, s.Lease.Milliseconds())
 		if q.Error != nil {
 			mu.Lock()
 			for shard, run := range active {
@@ -101,7 +108,7 @@ func (s *Store) RunCommitters(ctx context.Context, b *Broker, holder string, com
 			continue
 		}
 		var members []string
-		if err := s.DB.WithContext(ctx).Table("committer_members").Where("lease_until>clock_timestamp()").Order("id").Pluck("id", &members).Error; err != nil {
+		if err := s.DB.WithContext(ctx).Table("committer_members").Where("lease_until>clock_timestamp() AND effect_target=?", target).Order("id").Pluck("id", &members).Error; err != nil {
 			return err
 		}
 		index := slices.Index(members, holder)
@@ -134,13 +141,13 @@ func (s *Store) RunCommitters(ctx context.Context, b *Broker, holder string, com
 			active[shard] = shardRun{cancel, done}
 			go func(shard int) {
 				defer close(done)
-				_ = s.RunModule(live, fmt.Sprintf("committer:%d", shard), holder, func(ownedCtx context.Context, token uuid.UUID) error {
+				_ = s.RunModule(live, fmt.Sprintf("committer:%s:%d", target, shard), holder, func(ownedCtx context.Context, token uuid.UUID) error {
 					logger.Info("async result shard acquired", "shard", shard, "holder", holder)
-					return b.ConsumeBatchesOnce(ownedCtx, b.ResultQueue(shard), max(1, s.BatchRows), max(1024, s.BatchBytes), s.BatchWait, func(ctx context.Context, deliveries []Delivery) error {
+					return b.ConsumeBatchesOnce(ownedCtx, b.ResultQueueFor(target, shard), max(1, s.BatchRows), max(1024, s.BatchBytes), s.BatchWait, func(ctx context.Context, deliveries []Delivery) error {
 						var notices []Notice
 						var accepted []Delivery
 						for _, d := range deliveries {
-							if !d.Notice.validWire() || d.Notice.ResultID == nil || d.Notice.Shard != shard {
+							if !d.Notice.validWire() || d.Notice.ResultID == nil || d.Notice.Shard != shard || (target == EffectAI && d.Notice.EffectTarget != target) || (target == EffectCore && d.Notice.EffectTarget == EffectAI) {
 								if err := s.QuarantineMessage(ctx, d.Raw, "invalid result notice"); err != nil {
 									return err
 								}
@@ -157,7 +164,7 @@ func (s *Store) RunCommitters(ctx context.Context, b *Broker, holder string, com
 						}
 						var permit uuid.UUID
 						for ctx.Err() == nil {
-							p, ok, err := s.WritePermit(ctx, shard)
+							p, ok, err := s.WritePermit(ctx, shard+map[string]int{EffectAI: s.Shards}[target])
 							if err != nil {
 								return err
 							}

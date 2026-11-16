@@ -15,7 +15,7 @@ proto:
 
 # 防 proto 改了忘生成。
 proto-check: proto
-	git diff --exit-code -- internal/ai/pb
+	git diff --exit-code -- internal/ai/pb internal/ai/pbv2 internal/core/pb
 
 fmt:
 	gofumpt -w cmd internal api

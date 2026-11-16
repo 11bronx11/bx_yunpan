@@ -1,6 +1,46 @@
 name: bx-yunpan
 
 x-app-environment: &app-environment
+  AI_ASK_ENABLED: "${AI_ASK_ENABLED:-true}"
+  AI_PROJECTION_NAMESPACE: "${AI_PROJECTION_NAMESPACE:-bx-ai}"
+  AI_TEXT_INDEX_EPOCH: "${AI_TEXT_INDEX_EPOCH:-${SEARCH_INDEX_EPOCH:-v1}}"
+  AI_VECTOR_INDEX_EPOCH: "${AI_VECTOR_INDEX_EPOCH:-${SEARCH_INDEX_EPOCH:-v1}}"
+  INTERNAL_GRPC_TLS_CA: "${INTERNAL_GRPC_TLS_CA:-}"
+  INTERNAL_GRPC_TLS_CERT: "${INTERNAL_GRPC_TLS_CERT:-}"
+  INTERNAL_GRPC_TLS_KEY: "${INTERNAL_GRPC_TLS_KEY:-}"
+  INTERNAL_GRPC_TLS_SERVER_NAME: "${INTERNAL_GRPC_TLS_SERVER_NAME:-}"
+  AI_QUERY_DSN: ${AI_QUERY_DSN:-postgres://yunpan_ai_query:${AI_QUERY_PASSWORD}@ai-postgres:5432/${AI_POSTGRES_DB:-yunpan_ai}?sslmode=disable}
+  AI_COMPUTE_DSN: ${AI_COMPUTE_DSN:-postgres://yunpan_ai_compute:${AI_COMPUTE_PASSWORD}@ai-postgres:5432/${AI_POSTGRES_DB:-yunpan_ai}?sslmode=disable}
+  AI_COMMIT_DSN: ${AI_COMMIT_DSN:-postgres://yunpan_ai_commit:${AI_COMMIT_PASSWORD}@ai-postgres:5432/${AI_POSTGRES_DB:-yunpan_ai}?sslmode=disable}
+  AI_MIGRATION_DSN: ""
+  CORE_INTERNAL_GRPC_ADDR: "${CORE_INTERNAL_GRPC_ADDR:-:51053}"
+  CORE_INTERNAL_ADVERTISE_ADDR: "${CORE_INTERNAL_ADVERTISE_ADDR:-core-internal:51053}"
+  CORE_INTERNAL_TARGET: "${CORE_INTERNAL_TARGET:-core-internal:51053}"
+  AI_QUERY_GRPC_ADDR: "${AI_QUERY_GRPC_ADDR:-:51054}"
+  AI_QUERY_ADVERTISE_ADDR: "${AI_QUERY_ADVERTISE_ADDR:-ai-query:51054}"
+  AI_QUERY_TARGET: "${AI_QUERY_TARGET:-ai-query:51054}"
+  CORE_INTERNAL_SERVICE_TOKEN: "${CORE_INTERNAL_SERVICE_TOKEN:-}"
+  AI_QUERY_SERVICE_TOKEN: "${AI_QUERY_SERVICE_TOKEN:-}"
+  PARSER_SERVICE_TOKEN: "${PARSER_SERVICE_TOKEN:-}"
+  AI_SCOPE_SIGNING_SEED: "${AI_SCOPE_SIGNING_SEED:-}"
+  AI_SCOPE_PUBLIC_KEY: "${AI_SCOPE_PUBLIC_KEY:-}"
+  AI_PROCESSING_SIGNING_SEED: "${AI_PROCESSING_SIGNING_SEED:-}"
+  AI_PROCESSING_PUBLIC_KEY: "${AI_PROCESSING_PUBLIC_KEY:-}"
+  AI_PROFILE_ID: "${AI_PROFILE_ID:-default}"
+  AI_PROFILE_REVISION: "${AI_PROFILE_REVISION:-v1}"
+  AI_EMBEDDING_REVISION: "${AI_EMBEDDING_REVISION:-config-v1}"
+  AI_SUMMARY_REVISION: "${AI_SUMMARY_REVISION:-config-v1}"
+  AI_SUMMARY_PROMPT_VERSION: "${AI_SUMMARY_PROMPT_VERSION:-overview-v1}"
+  AI_VECTORS_ENABLED: "${AI_VECTORS_ENABLED:-true}"
+  AI_SUMMARY_ENABLED: "${AI_SUMMARY_ENABLED:-true}"
+  AI_QUERY_TIMEOUT: "${AI_QUERY_TIMEOUT:-10s}"
+  AI_ASK_TIMEOUT: "${AI_ASK_TIMEOUT:-60s}"
+  CORE_INTERNAL_TIMEOUT: "${CORE_INTERNAL_TIMEOUT:-5s}"
+  AI_SCOPE_MAX_FILES: "${AI_SCOPE_MAX_FILES:-10000}"
+  AI_SUMMARY_MAX_CALLS: "${AI_SUMMARY_MAX_CALLS:-128}"
+  AI_CONTROL_MIGRATION_DSN: ""
+  AI_INTENT_MIGRATION_DSN: ""
+  AI_LEGACY_WRITERS_STOPPED: "false"
   APP_ENV: ${APP_ENV:-development}
   LOG_LEVEL: ${LOG_LEVEL:-info}
   HTTP_MAX_BODY_BYTES: ${HTTP_MAX_BODY_BYTES:-1048576}
@@ -194,6 +234,11 @@ x-app-environment: &app-environment
   SEARCH_EXTERNAL_FALLBACK: ${SEARCH_EXTERNAL_FALLBACK:-true}
 
 x-parser-environment: &parser-environment
+  INTERNAL_GRPC_TLS_CA: "${INTERNAL_GRPC_TLS_CA:-}"
+  INTERNAL_GRPC_TLS_CERT: "${INTERNAL_GRPC_TLS_CERT:-}"
+  INTERNAL_GRPC_TLS_KEY: "${INTERNAL_GRPC_TLS_KEY:-}"
+  INTERNAL_GRPC_TLS_SERVER_NAME: "${INTERNAL_GRPC_TLS_SERVER_NAME:-}"
+  PARSER_SERVICE_TOKEN: "${PARSER_SERVICE_TOKEN:-}"
   APP_ENV: ${APP_ENV:-development}
   LOG_LEVEL: ${LOG_LEVEL:-info}
   AI_ENABLED: "false"
@@ -225,6 +270,329 @@ x-parser-environment: &parser-environment
   ETCD_LEASE_TTL: ${ETCD_LEASE_TTL:-10s}
 
 services:
+  ai-postgres:
+    profiles: ["ai-split"]
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: ${AI_POSTGRES_USER:-yunpan_ai}
+      POSTGRES_PASSWORD: ${AI_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${AI_POSTGRES_DB:-yunpan_ai}
+    ports: ["${INFRA_BIND_IP:-127.0.0.1}:${AI_POSTGRES_PORT:-5434}:5432"]
+    volumes: ["ai-postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate-ai:
+    profiles: ["ai-split"]
+    image: bx-yunpan-migrate:${APP_IMAGE_TAG:-local}
+    environment:
+      <<: *app-environment
+      AI_MIGRATION_DSN: ${AI_MIGRATION_DSN:-postgres://${AI_POSTGRES_USER:-yunpan_ai}:${AI_POSTGRES_PASSWORD}@ai-postgres:5432/${AI_POSTGRES_DB:-yunpan_ai}?sslmode=disable}
+    command: ["ai", "up"]
+    depends_on:
+      ai-postgres: {condition: service_healthy}
+    restart: "no"
+
+  ai-migrate:
+    profiles: ["ai-split", "migration"]
+    image: bx-yunpan-ai-migrate:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args:
+        DOCKER_REGISTRY: ${DOCKER_REGISTRY:-docker.io}
+        GO_VERSION: ${GO_VERSION:-1.25.13}
+        GO_PROXY: ${GO_PROXY:-https://proxy.golang.org,direct}
+        GO_BUILD_PARALLELISM: ${GO_BUILD_PARALLELISM:-1}
+        GO_BUILD_MAX_PROCS: ${GO_BUILD_MAX_PROCS:-2}
+        TARGET: ai-migrate
+    environment:
+      <<: *app-environment
+      AI_MIGRATION_DSN: ${AI_MIGRATION_DSN:-postgres://${AI_POSTGRES_USER:-yunpan_ai}:${AI_POSTGRES_PASSWORD}@ai-postgres:5432/${AI_POSTGRES_DB:-yunpan_ai}?sslmode=disable}
+      AI_LEGACY_WRITERS_STOPPED: "${AI_LEGACY_WRITERS_STOPPED:-false}"
+      AI_CONTROL_MIGRATION_DSN: ${AI_CONTROL_MIGRATION_DSN:-${ASYNC_CONTROL_DSN:-postgres://${ASYNC_POSTGRES_USER:-yunpan_control}:${ASYNC_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD:-yunpan}}@async-postgres:5432/${ASYNC_POSTGRES_DB:-yunpan_control}?sslmode=disable}}
+      AI_INTENT_MIGRATION_DSN: ${AI_INTENT_MIGRATION_DSN:-${POSTGRES_PRIMARY_DSN:-${POSTGRES_DSN:-postgres://${POSTGRES_USER:-yunpan}:${POSTGRES_PASSWORD:-yunpan}@postgres:5432/${POSTGRES_DB:-yunpan}?sslmode=disable}}}
+    command: ["inspect"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      migrate-control: {condition: service_completed_successfully}
+      migrate-ai: {condition: service_completed_successfully}
+      async-reader-init: {condition: service_completed_successfully}
+      rabbitmq: {condition: service_healthy}
+    restart: "no"
+
+  ai-role-init:
+    profiles: ["ai-split"]
+    image: ${DOCKER_REGISTRY:-docker.io}/library/postgres:17-alpine
+    environment:
+      AI_MIGRATION_DSN: ${AI_MIGRATION_DSN:-postgres://${AI_POSTGRES_USER:-yunpan_ai}:${AI_POSTGRES_PASSWORD}@ai-postgres:5432/${AI_POSTGRES_DB:-yunpan_ai}?sslmode=disable}
+      AI_QUERY_PASSWORD: ${AI_QUERY_PASSWORD}
+      AI_COMPUTE_PASSWORD: ${AI_COMPUTE_PASSWORD}
+      AI_COMMIT_PASSWORD: ${AI_COMMIT_PASSWORD}
+    volumes: ["./ai-role-init.sql:/ai-role-init.sql:ro"]
+    entrypoint: ["sh", "-ec", 'exec psql -X -q "$${AI_MIGRATION_DSN}" -f /ai-role-init.sql']
+    depends_on:
+      migrate-ai: {condition: service_completed_successfully}
+    restart: "no"
+
+  core-internal:
+    profiles: ["ai-split"]
+    image: bx-yunpan-core-internal:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args: {TARGET: core-internal, GO_VERSION: "${GO_VERSION:-1.25.13}"}
+    environment:
+      <<: *app-environment
+      DASHSCOPE_API_KEY: ""
+      AI_INTENT_MIGRATION_DSN: ""
+      AI_CONTROL_MIGRATION_DSN: ""
+      AI_COMMIT_DSN: ""
+      AI_COMPUTE_DSN: ""
+      AI_QUERY_DSN: ""
+      APP_ROLE: core-internal
+      POSTGRES_PRIMARY_DSN: ""
+      POSTGRES_DSN: ""
+      AI_MIGRATION_DSN: ""
+      AI_SCOPE_SIGNING_SEED: ""
+      AI_PROCESSING_SIGNING_SEED: ""
+    depends_on:
+      async-reader-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8083/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+  ai-query:
+    profiles: ["ai-split"]
+    image: bx-yunpan-ai-query:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args: {TARGET: ai-query, GO_VERSION: "${GO_VERSION:-1.25.13}"}
+    environment:
+      <<: *app-environment
+      AI_INTENT_MIGRATION_DSN: ""
+      AI_CONTROL_MIGRATION_DSN: ""
+      AI_COMMIT_DSN: ""
+      AI_COMPUTE_DSN: ""
+      APP_ROLE: ai-query
+      POSTGRES_PRIMARY_DSN: ""
+      POSTGRES_DSN: ""
+      AI_MIGRATION_DSN: ""
+      AI_SCOPE_SIGNING_SEED: ""
+      AI_PROCESSING_SIGNING_SEED: ""
+      POSTGRES_READONLY_DSN: ""
+      ASYNC_CONTROL_DSN: ""
+      RABBITMQ_URL: ""
+    depends_on:
+      ai-role-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8083/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+  ai-committer:
+    profiles: ["ai-split"]
+    image: bx-yunpan-ai-committer:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args: {TARGET: ai-committer, GO_VERSION: "${GO_VERSION:-1.25.13}"}
+    environment:
+      <<: *app-environment
+      DASHSCOPE_API_KEY: ""
+      AI_INTENT_MIGRATION_DSN: ""
+      AI_CONTROL_MIGRATION_DSN: ""
+      AI_COMPUTE_DSN: ""
+      AI_QUERY_DSN: ""
+      APP_ROLE: ai-committer
+      POSTGRES_PRIMARY_DSN: ""
+      POSTGRES_DSN: ""
+      AI_MIGRATION_DSN: ""
+      AI_SCOPE_SIGNING_SEED: ""
+      AI_PROCESSING_SIGNING_SEED: ""
+      POSTGRES_READONLY_DSN: ""
+    depends_on:
+      ai-role-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8083/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+  ai-content-worker:
+    profiles: ["ai-split"]
+    image: bx-yunpan-ai-content-worker:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args: {TARGET: ai-content-worker, GO_VERSION: "${GO_VERSION:-1.25.13}"}
+    environment:
+      <<: *app-environment
+      DASHSCOPE_API_KEY: ""
+      AI_INTENT_MIGRATION_DSN: ""
+      AI_CONTROL_MIGRATION_DSN: ""
+      AI_COMMIT_DSN: ""
+      AI_QUERY_DSN: ""
+      APP_ROLE: ai-content-worker
+      POSTGRES_PRIMARY_DSN: ""
+      POSTGRES_DSN: ""
+      AI_MIGRATION_DSN: ""
+      AI_SCOPE_SIGNING_SEED: ""
+      AI_PROCESSING_SIGNING_SEED: ""
+      POSTGRES_READONLY_DSN: ""
+    depends_on:
+      ai-role-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8083/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+  ai-embedding-worker:
+    profiles: ["ai-split"]
+    image: bx-yunpan-ai-embedding-worker:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args: {TARGET: ai-embedding-worker, GO_VERSION: "${GO_VERSION:-1.25.13}"}
+    environment:
+      <<: *app-environment
+      AI_INTENT_MIGRATION_DSN: ""
+      AI_CONTROL_MIGRATION_DSN: ""
+      AI_COMMIT_DSN: ""
+      AI_QUERY_DSN: ""
+      APP_ROLE: ai-embedding-worker
+      POSTGRES_PRIMARY_DSN: ""
+      POSTGRES_DSN: ""
+      AI_MIGRATION_DSN: ""
+      AI_SCOPE_SIGNING_SEED: ""
+      AI_PROCESSING_SIGNING_SEED: ""
+      POSTGRES_READONLY_DSN: ""
+    depends_on:
+      ai-role-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8083/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+  ai-summary-worker:
+    profiles: ["ai-split"]
+    image: bx-yunpan-ai-summary-worker:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args: {TARGET: ai-summary-worker, GO_VERSION: "${GO_VERSION:-1.25.13}"}
+    environment:
+      <<: *app-environment
+      AI_INTENT_MIGRATION_DSN: ""
+      AI_CONTROL_MIGRATION_DSN: ""
+      AI_COMMIT_DSN: ""
+      AI_QUERY_DSN: ""
+      APP_ROLE: ai-summary-worker
+      POSTGRES_PRIMARY_DSN: ""
+      POSTGRES_DSN: ""
+      AI_MIGRATION_DSN: ""
+      AI_SCOPE_SIGNING_SEED: ""
+      AI_PROCESSING_SIGNING_SEED: ""
+      POSTGRES_READONLY_DSN: ""
+    depends_on:
+      ai-role-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8083/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+  ai-text-projector:
+    profiles: ["ai-split"]
+    image: bx-yunpan-ai-text-projector:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args: {TARGET: ai-text-projector, GO_VERSION: "${GO_VERSION:-1.25.13}"}
+    environment:
+      <<: *app-environment
+      DASHSCOPE_API_KEY: ""
+      AI_INTENT_MIGRATION_DSN: ""
+      AI_CONTROL_MIGRATION_DSN: ""
+      AI_COMMIT_DSN: ""
+      AI_QUERY_DSN: ""
+      APP_ROLE: ai-text-projector
+      POSTGRES_PRIMARY_DSN: ""
+      POSTGRES_DSN: ""
+      AI_MIGRATION_DSN: ""
+      AI_SCOPE_SIGNING_SEED: ""
+      AI_PROCESSING_SIGNING_SEED: ""
+      POSTGRES_READONLY_DSN: ""
+    depends_on:
+      ai-role-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8083/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+  ai-vector-projector:
+    profiles: ["ai-split"]
+    image: bx-yunpan-ai-vector-projector:${APP_IMAGE_TAG:-local}
+    build:
+      context: ../backend
+      args: {TARGET: ai-vector-projector, GO_VERSION: "${GO_VERSION:-1.25.13}"}
+    environment:
+      <<: *app-environment
+      DASHSCOPE_API_KEY: ""
+      AI_INTENT_MIGRATION_DSN: ""
+      AI_CONTROL_MIGRATION_DSN: ""
+      AI_COMMIT_DSN: ""
+      AI_QUERY_DSN: ""
+      APP_ROLE: ai-vector-projector
+      POSTGRES_PRIMARY_DSN: ""
+      POSTGRES_DSN: ""
+      AI_MIGRATION_DSN: ""
+      AI_SCOPE_SIGNING_SEED: ""
+      AI_PROCESSING_SIGNING_SEED: ""
+      POSTGRES_READONLY_DSN: ""
+    depends_on:
+      ai-role-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8083/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
 
   async-postgres:
     profiles: ["app"]
@@ -294,11 +662,20 @@ services:
         GO_VERSION: ${GO_VERSION:-1.25.13}
     environment:
       <<: *app-environment
+      DASHSCOPE_API_KEY: ""
+      AI_INTENT_MIGRATION_DSN: ""
+      AI_CONTROL_MIGRATION_DSN: ""
+      AI_SCOPE_SIGNING_SEED: ""
+      AI_MIGRATION_DSN: ""
+      AI_COMMIT_DSN: ""
+      AI_COMPUTE_DSN: ""
+      AI_QUERY_DSN: ""
       APP_ROLE: async-control
       POSTGRES_PRIMARY_DSN: ""
       POSTGRES_DSN: ""
     depends_on:
-      async-import: {condition: service_completed_successfully}
+      async-reader-init: {condition: service_completed_successfully}
+      migrate-control: {condition: service_completed_successfully}
       rabbitmq: {condition: service_healthy}
       minio-init: {condition: service_completed_successfully}
     restart: unless-stopped
@@ -322,9 +699,19 @@ services:
         GO_VERSION: ${GO_VERSION:-1.25.13}
     environment:
       <<: *app-environment
+      DASHSCOPE_API_KEY: ""
+      AI_INTENT_MIGRATION_DSN: ""
+      AI_CONTROL_MIGRATION_DSN: ""
+      AI_PROCESSING_SIGNING_SEED: ""
+      AI_SCOPE_SIGNING_SEED: ""
+      AI_MIGRATION_DSN: ""
+      AI_COMMIT_DSN: ""
+      AI_COMPUTE_DSN: ""
+      AI_QUERY_DSN: ""
       APP_ROLE: committer
     depends_on:
-      async-import: {condition: service_completed_successfully}
+      async-reader-init: {condition: service_completed_successfully}
+      migrate-control: {condition: service_completed_successfully}
       rabbitmq: {condition: service_healthy}
       minio-init: {condition: service_completed_successfully}
     restart: unless-stopped
@@ -348,11 +735,21 @@ services:
         GO_VERSION: ${GO_VERSION:-1.25.13}
     environment:
       <<: *app-environment
+      DASHSCOPE_API_KEY: ""
+      AI_INTENT_MIGRATION_DSN: ""
+      AI_CONTROL_MIGRATION_DSN: ""
+      AI_PROCESSING_SIGNING_SEED: ""
+      AI_SCOPE_SIGNING_SEED: ""
+      AI_MIGRATION_DSN: ""
+      AI_COMMIT_DSN: ""
+      AI_COMPUTE_DSN: ""
+      AI_QUERY_DSN: ""
       APP_ROLE: gc-worker
       POSTGRES_PRIMARY_DSN: ""
       POSTGRES_DSN: ""
     depends_on:
-      async-import: {condition: service_completed_successfully}
+      async-reader-init: {condition: service_completed_successfully}
+      migrate-control: {condition: service_completed_successfully}
       rabbitmq: {condition: service_healthy}
       minio-init: {condition: service_completed_successfully}
     restart: unless-stopped
@@ -588,6 +985,17 @@ services:
         TARGET: api
     environment:
       <<: *app-environment
+      DASHSCOPE_API_KEY: ""
+      POSTGRES_READONLY_DSN: ""
+      RABBITMQ_URL: ""
+      ASYNC_CONTROL_DSN: ""
+      AI_INTENT_MIGRATION_DSN: ""
+      AI_CONTROL_MIGRATION_DSN: ""
+      AI_PROCESSING_SIGNING_SEED: ""
+      AI_MIGRATION_DSN: ""
+      AI_COMMIT_DSN: ""
+      AI_COMPUTE_DSN: ""
+      AI_QUERY_DSN: ""
       HTTP_ADDR: :8081
     # API is reachable through the Web/Gateway service. Do not bind a fixed
     # host port here: Compose must be able to scale API replicas.
@@ -677,13 +1085,21 @@ services:
         TARGET: object-worker
     environment:
       <<: *app-environment
+      DASHSCOPE_API_KEY: ""
+      AI_INTENT_MIGRATION_DSN: ""
+      AI_CONTROL_MIGRATION_DSN: ""
+      AI_PROCESSING_SIGNING_SEED: ""
+      AI_SCOPE_SIGNING_SEED: ""
+      AI_MIGRATION_DSN: ""
+      AI_COMMIT_DSN: ""
+      AI_COMPUTE_DSN: ""
+      AI_QUERY_DSN: ""
       POSTGRES_PRIMARY_DSN: ""
       POSTGRES_DSN: ""
     expose: ["8083"]
     depends_on:
       migrate-control: {condition: service_completed_successfully}
       async-reader-init: {condition: service_completed_successfully}
-      async-import: {condition: service_completed_successfully}
       rabbitmq: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
       minio-init: {condition: service_completed_successfully}
@@ -713,13 +1129,21 @@ services:
         TARGET: media-worker
     environment:
       <<: *app-environment
+      DASHSCOPE_API_KEY: ""
+      AI_INTENT_MIGRATION_DSN: ""
+      AI_CONTROL_MIGRATION_DSN: ""
+      AI_PROCESSING_SIGNING_SEED: ""
+      AI_SCOPE_SIGNING_SEED: ""
+      AI_MIGRATION_DSN: ""
+      AI_COMMIT_DSN: ""
+      AI_COMPUTE_DSN: ""
+      AI_QUERY_DSN: ""
       POSTGRES_PRIMARY_DSN: ""
       POSTGRES_DSN: ""
     expose: ["8083"]
     depends_on:
       migrate-control: {condition: service_completed_successfully}
       async-reader-init: {condition: service_completed_successfully}
-      async-import: {condition: service_completed_successfully}
       rabbitmq: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
       minio-init: {condition: service_completed_successfully}
@@ -772,13 +1196,21 @@ services:
         TARGET: upload-worker
     environment:
       <<: *app-environment
+      DASHSCOPE_API_KEY: ""
+      AI_INTENT_MIGRATION_DSN: ""
+      AI_CONTROL_MIGRATION_DSN: ""
+      AI_PROCESSING_SIGNING_SEED: ""
+      AI_SCOPE_SIGNING_SEED: ""
+      AI_MIGRATION_DSN: ""
+      AI_COMMIT_DSN: ""
+      AI_COMPUTE_DSN: ""
+      AI_QUERY_DSN: ""
       POSTGRES_PRIMARY_DSN: ""
       POSTGRES_DSN: ""
     expose: ["8083"]
     depends_on:
       migrate-control: {condition: service_completed_successfully}
       async-reader-init: {condition: service_completed_successfully}
-      async-import: {condition: service_completed_successfully}
       rabbitmq: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
       minio-init: {condition: service_completed_successfully}
@@ -832,7 +1264,7 @@ services:
     restart: unless-stopped
 
   search-indexer:
-    profiles: ["search"]
+    profiles: ["legacy-aliases"]
     image: bx-yunpan-search-indexer:${APP_IMAGE_TAG:-local}
     build:
       context: ../backend
@@ -888,11 +1320,9 @@ services:
     init: true
     stop_grace_period: 100s
 
-  # AI 服务：gRPC server + 独占 ai 队列的 RabbitMQ worker。
-  # 抽取、OCR、Embedding 是 CPU/IO 重活，独立进程才能独立扩容：
-  # docker compose up -d --scale aisvc=2
+  # Retired compatibility service; combined mode fails explicitly.
   aisvc:
-    profiles: ["ai"]
+    profiles: ["legacy-aliases"]
     image: bx-yunpan-aisvc:${APP_IMAGE_TAG:-local}
     build:
       context: ../backend
@@ -926,34 +1356,9 @@ services:
     init: true
     stop_grace_period: 30s
 
-  # P3 split profile. Both services reuse the compatible aisvc image but have
-  # disjoint process roles: query advertises gRPC, indexer owns only queue ai.
-  # Keep the legacy aisvc service as the default rollback path.
-  ai-query:
-    profiles: ["ai-split"]
-    image: bx-yunpan-aisvc:${APP_IMAGE_TAG:-local}
-    environment:
-      <<: *app-environment
-      AI_SERVICE_ROLE: query
-      AISVC_GRPC_ADDR: :8082
-    expose: ["8083", "8082"]
-    depends_on:
-      migrate: {condition: service_completed_successfully}
-      minio-init: {condition: service_completed_successfully}
-      redis: {condition: service_healthy}
-      etcd: {condition: service_healthy}
-    healthcheck:
-      test: ["CMD", "/app/service", "healthcheck"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 10s
-    restart: unless-stopped
-    init: true
-    stop_grace_period: 30s
-
+  # Explicit legacy indexer alias maps only to the embedding role.
   ai-indexer:
-    profiles: ["ai-split"]
+    profiles: ["legacy-aliases"]
     image: bx-yunpan-aisvc:${APP_IMAGE_TAG:-local}
     environment:
       <<: *app-environment
@@ -1042,6 +1447,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  ai-postgres-data:
   async-postgres-data:
   rabbitmq-data:
   postgres-data:

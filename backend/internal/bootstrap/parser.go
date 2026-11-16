@@ -19,6 +19,7 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/registry"
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/serviceauth"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
@@ -80,7 +81,12 @@ func newParserGateway(cfg config.Config, logger *slog.Logger, registerer prometh
 		closeRegistry = func() { _ = client.Close() }
 	}
 
-	remote, err := parserrpc.NewClient(target, cfg.Parser.CallTimeout)
+	transport, err := serviceauth.ClientTransport(cfg.AISplit.TLS)
+	if err != nil {
+		closeRegistry()
+		return nil, noop, err
+	}
+	remote, err := parserrpc.NewClient(target, cfg.Parser.CallTimeout, grpc.WithTransportCredentials(transport), grpc.WithUnaryInterceptor(serviceauth.UnaryClient(cfg.AISplit.ParserToken)))
 	if err != nil {
 		closeRegistry()
 		return nil, noop, err
@@ -114,6 +120,14 @@ func RunParserSvc(ctx context.Context, cfg config.Config, logger *slog.Logger) e
 		grpc.MaxRecvMsgSize(parserrpc.MaxRequestBytes),
 		grpc.MaxSendMsgSize(parserrpc.MaxResponseBytes),
 	}
+	transport, err := serviceauth.ServerTransport(cfg.AISplit.TLS)
+	if err != nil {
+		return err
+	}
+	if transport != nil {
+		serverOptions = append(serverOptions, grpc.Creds(transport))
+	}
+	serverOptions = append(serverOptions, grpc.ChainUnaryInterceptor(serviceauth.UnaryServer(cfg.AISplit.ParserToken, "/yunpan.ai.v1.DocumentParserService/")))
 	serverOptions = append(serverOptions, grpcx.ServerInterceptors(grpcx.ServerOptions{
 		Logger: logger, Metrics: grpcx.NewMetrics(metricsRegistry, "server"), Mapper: ai.GRPCStatus,
 	})...)

@@ -30,11 +30,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/11bronx11/bx_yunpan/backend/internal/ai"
 	"github.com/11bronx11/bx_yunpan/backend/internal/asynccontrol"
 	"github.com/11bronx11/bx_yunpan/backend/internal/asyncjobs"
 	"github.com/11bronx11/bx_yunpan/backend/internal/drive"
-	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/identity"
 	"github.com/11bronx11/bx_yunpan/backend/internal/media"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
@@ -359,74 +357,7 @@ func TestAsyncCoreRealDependencies(t *testing.T) {
 		t.Fatal("quota", quotaResult)
 	}
 	t.Log("real multipart -> merge -> verify -> copy -> file/download -> thumbnail -> staging cleanup passed; injected report failure recovered")
-	// Exercise the compatible auxiliary adapters with real databases/MQ/storage,
-	// a fake embedding provider and PostgreSQL search (no paid/external backend).
-	text := []byte("Async control auxiliary publication and user job completion.")
-	textHash := sha256.Sum256(text)
-	textObject := objectstore.Object{ID: uuid.New(), SHA256: fmt.Sprintf("%x", textHash), SizeBytes: int64(len(text)), MimeType: "text/plain", Bucket: cfg.Storage.Bucket, ObjectKey: "async-test/" + suffix + ".txt", Status: "ready", Version: 1}
-	if _, err := storage.PutObject(ctx, cfg.Storage.Bucket, textObject.ObjectKey, bytes.NewReader(text), int64(len(text)), minio.PutObjectOptions{ContentType: "text/plain"}); err != nil {
-		t.Fatal(err)
-	}
-	defer storage.RemoveObject(context.Background(), cfg.Storage.Bucket, textObject.ObjectKey, minio.RemoveObjectOptions{})
-	if err := business.Create(&textObject).Error; err != nil {
-		t.Fatal(err)
-	}
-	aiService := ai.NewService(business, drive.NewService(business), objects, storage, config.AI{Provider: "fake", Dimension: 1024, MaxObjectBytes: 1 << 20, RequestTimeout: time.Second})
-	start("aisvc", func(c context.Context, local config.Config, l *slog.Logger) error {
-		return runAsyncAI(c, local, l, aiService)
-	})
-	planner := &asyncjobs.Planner{Read: business, AI: true, Search: true}
-	ensureAux := func(e asynccontrol.Event, kind string) asynccontrol.Task {
-		t.Helper()
-		specs, err := planner.Plan(ctx, e)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, spec := range specs {
-			if spec.Kind == kind {
-				task, err := s.Ensure(ctx, spec, "aux-smoke:"+e.ID.String())
-				if err != nil {
-					t.Fatal(err)
-				}
-				return task
-			}
-		}
-		t.Fatal("auxiliary subscription missing", kind)
-		return asynccontrol.Task{}
-	}
-	indexTask := ensureAux(asynccontrol.Event{ID: uuid.New(), AggregateID: textObject.ID, EventType: eventcontract.EventObjectReadyV1}, "ai.index")
-	await("fake AI control completion", func() bool {
-		var task asynccontrol.Task
-		_ = control.First(&task, "id=?", indexTask.ID).Error
-		return task.State == asynccontrol.Succeeded
-	})
-	job := ai.Task{ID: uuid.New(), OwnerID: uuid.MustParse(userID), TaskType: "ai.reprocess", DedupeKey: uuid.NewString(), ResourceType: "object", ResourceID: textObject.ID, Status: "pending"}
-	if err := business.Create(&job).Error; err != nil {
-		t.Fatal(err)
-	}
-	payload, _ := json.Marshal(eventcontract.AIReprocessRequestedV1{TaskID: job.ID, ObjectID: textObject.ID})
-	ensureAux(asynccontrol.Event{ID: uuid.New(), AggregateID: job.ID, EventType: eventcontract.EventAIReprocessRequestedV1, Payload: payload}, "ai.reprocess")
-	await("reprocess business completion through committer", func() bool {
-		var status string
-		_ = business.Table("async_tasks").Select("status").Where("id=?", job.ID).Scan(&status).Error
-		return status == "succeeded"
-	})
-	start("search-indexer", RunSearchIndexer)
-	var fileEvent asynccontrol.Event
-	if err := business.Table("outbox_events").Where("aggregate_id=? AND event_type=?", fileID, eventcontract.EventFileCreatedV1).First(&fileEvent).Error; err != nil {
-		t.Fatal(err)
-	}
-	searchTask := ensureAux(fileEvent, "search.project")
-	await("search projection control completion", func() bool {
-		var task asynccontrol.Task
-		_ = control.First(&task, "id=?", searchTask.ID).Error
-		return task.State == asynccontrol.Succeeded
-	})
-	var projected int64
-	if err := business.Table("search_file_projections").Where("file_entry_id=?", fileID).Count(&projected).Error; err != nil || projected != 1 {
-		t.Fatal("missing PostgreSQL search projection", projected, err)
-	}
-	t.Log("AI disabled HTTP, fake AI indexing/reprocess through control+committer and PostgreSQL search projection passed")
+	// AI split publication is exercised by TestAISplitRealDependencies.
 	// Reference and quota regression through the public share-import API.
 	ownerToken := token
 	share := request("POST", "/api/v1/shares", map[string]any{"file_id": fileID}, 201)

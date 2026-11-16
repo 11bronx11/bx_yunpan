@@ -1,599 +1,126 @@
 # BX YunPan
 
-BX YunPan 是一个 React 18 + Go Gin 的智能私有云盘。项目以网盘核心链路为主，覆盖目录化文件管理、S3 Multipart 上传、断点恢复、SHA-256 秒传、Share Key 导入、异步缩略图，以及混合检索和有证据约束的 RAG 问答。
+React 18 + Go（Gin）的私有云盘：目录、分片直传、断点续传、SHA-256 秒传、分享、缩略图，以及可选的全文/语义检索和 RAG 问答。
 
-**技术栈定位：模块化单体 + AI 服务独立部署。** 后端主体是模块化单体，按 Identity、Drive、Upload、Object、Sharing 等业务边界组织代码，共享一个本地事务边界；只有 AI 模块（文本抽取、OCR/Vision、Embedding、检索、Reranker、RAG 问答）因为 CPU/IO 密集、请求特征与 API 显著不同，被拆成独立进程 `aisvc`，经 gRPC 调用并独立扩容。这不是完整的微服务架构：`ai_*` 表由 aisvc 独占写入，但 drive 的 `file_entries` / `folders` / `file_objects` 保持只读共享，以保留把权限过滤下推到 SQL 的检索设计。取舍理由见「架构取舍」。
+当前源码入口是 [AI 实现与验证说明](docs/AI_SYSTEM_IMPLEMENTATION_2026-11-16.md) 和 [异步实现说明](docs/ASYNC_SYSTEM_IMPLEMENTATION_2026-11-16.md)。根目录施工书描述目标；实现说明区分源码、测试与实际部署。历史性能报告不能作为当前版本的容量结论。
 
-## 核心能力
-
-- Ed25519 JWT Access Token、HttpOnly Refresh Cookie、Refresh 轮换和复用检测。
-- 用户目录树、面包屑、文件与目录移动、重命名、空目录安全删除和乐观锁版本控制。
-- MinIO/S3 Multipart 预签名直传、分片确认、暂停恢复、强 SHA-256 校验、配额预占和过期会话回收。
-- FileEntry 与 FileObject 分离，使用 SHA-256 + 文件大小进行内容寻址；同一用户全盘内容唯一，跨用户上传不暴露去重命中，授权 Share Key 可直接复用对象。
-- 图片缩略图、对象延迟 GC、Transactional Outbox 和 Redis/Asynq Worker。
-- 可选 AI 模式支持 TXT、Markdown、常见源码/配置文件、PDF、DOCX 文本抽取，以及 JPG/PNG 的可插拔 OCR/Vision Provider；二进制 MIME 的源码可按文件名安全回退，并受控兼容 UTF-8 与 GB18030 文本。
-- 可选 AI 模式支持文件名精确、前缀和模糊匹配分级排序，以及 PostgreSQL FTS + pgvector + Reciprocal Rank Fusion 混合检索；Ask 可选在 RRF 后使用 Reranker 二阶段重排。
-- 可选 AI 模式的 RAG 先为每路检索保留最多 50 个候选，再形成最多 30 个 Chunk 的融合池；启用 Reranker 时再取最多 8 个片段、每文件最多 2 个送入 LLM。模型结构化返回 Grounded 判断和证据 ID，后端再按授权证据白名单校验 Citation。
-- 证据不足时保留模型回答但不附带无关引用；文件、段落和页码 Citation 始终受当前用户文件权限约束。上述 AI 能力仅在 `AI_ENABLED=true` 时可用。
-- 结构化日志、Request ID、Prometheus 指标、存活和依赖就绪探针。
-
-### 文件能力边界
-
-| 能力 | 支持范围 |
-| --- | --- |
-| 上传与下载 | 任意非空文件，受用户剩余配额限制 |
-| 在线图片预览 | JPG、PNG、GIF、WebP |
-| AI 索引（需启用 AI） | TXT、Markdown、JSON、CSV、常见源码/配置文件、PDF、DOCX、JPG、PNG |
-| AI 摘要（需启用 AI） | 已成功建立 AI 索引的文档和源码文件 |
-
-同一目录不允许存在两个同名文件，即使内容不同也会返回 `upload.name_conflict`。同一用户上传不同名称但内容相同的文件时，不会创建重复条目，并返回 `upload.file_exists`。
-
-## 架构
+## 当前架构
 
 ```text
-Browser
-   |
-Nginx + React
-   |-- /api/* ----------> Go Gin API
-   |                       |  |
-   |                       |  +-- gRPC + etcd resolver --> aisvc [可选 AI profile]
-   |                       |                              |-- DashScope / fake AI
-   |                       |                              |-- Redis ai queue
-   |                       |                              +-- PostgreSQL (shared read)
-   |                       |
-   |                       +--> PostgreSQL + pgvector
-   |                       +--> Redis + Asynq
-   |                       +--> MinIO presign
-   |-- /storage/* -------> MinIO/S3
-                           ^
-                    Go Worker
-             (verify/media/outbox/GC)
-
- API / Worker / aisvc --OTLP trace--> Collector --> Jaeger
- Prometheus --------scrape /metrics---------> API
+浏览器 -- /api --> API -- gRPC + etcd --> ai-query -- core RPC --> core-internal
+   |               |                       |                        |
+   +-- /storage --> MinIO                AI PG（只读）           业务 PG（只读）
+                   ^                       ^
+业务 PG / outbox --> async-control --> 控制 PG + RabbitMQ
+                          |               |
+                    核心计算角色       AI 计算角色 / 独立 ES、QD projector
+                          |               |
+                       committer       ai-committer
+                          |               |
+                       业务 PG           AI PG
 ```
 
-API 负责鉴权、元数据和预签名 URL，文件字节不经过 Go API。PostgreSQL 是业务事实源，Outbox 在业务事务中记录异步事件；Worker 独立完成对象校验、缩略图、Outbox 投递和 GC。启用 AI 时，aisvc 独立消费 AI 队列并承载检索、问答和索引。
+业务 PG 保存用户、目录、文件、权限、配额、对象世代、用户作业及意图；控制 PG 保存唯一任务权威、预算、租约和接纳结果；AI PG 保存规范源块、父子文本、向量、概览和发布版本。AI 在线角色没有业务 SQL 连接。Elasticsearch、Qdrant、Redis 都是可重建的加速层。Redis 不承担异步调度或选主。
 
-API 保持无状态，文件内容使用对象存储承载，异步任务通过版本化事件解耦。AI 模式下，aisvc 通过 etcd lease 注册，API 使用 gRPC resolver + round_robin 发现实例；Worker 多副本由 Redis 锁保证 Outbox dispatcher 单主投递。`AI_ENABLED=false` 时只运行核心网盘拓扑，API 使用禁用后端，aisvc 和 etcd 不启动。
+上传字节通过同源 `/storage` 直接进入 MinIO。计算角色不写业务事实，业务 committer 在本地事务中提交；AI 计算写 staging，结果经控制库接纳后由 AI committer 发布，receipt 支持重放，后继在确认事务中原子释放。事务内不调用 MinIO 或外部索引。
 
-### 架构取舍
+全文准备、向量、概览、ES 和 Qdrant 独立执行。文本就绪即可全文检索和问答；向量/概览失败不挡文本。全文请求不调用 embedding，外部投影不可用或版本不完整时回退 AI PG。文件名搜索由 core 处理，AI 关闭时仍可用。
 
-- **只拆 AI，不做全面微服务化。** 抽取、OCR/Vision 和 Embedding 是 CPU/IO 密集任务，有独立扩容和资源隔离的真实收益；Identity、Drive、Upload、Sharing 仍需要本地事务，不拆分就不引入分布式事务。
-- **共享数据库，但分清读写所有权。** aisvc 独占写入 `ai_documents` / `ai_chunks`，只读访问 `file_entries` / `folders` / `file_objects`。检索的 `owner_id` 和目录范围在 SQL 中过滤，避免先做全局向量召回再在应用层丢弃越权结果。
-- **服务发现故障降级。** etcd 不可用时 resolver 保留最后一次地址列表继续服务；这牺牲了新实例立即发现和下线实例立即摘除，换取注册中心故障不直接导致 AI 全面不可用。
-- **锁按边界选择。** 事务内的同名写入使用 PostgreSQL advisory lock；跨多轮 Outbox 轮询的 dispatcher 选主使用带 token 校验和续期的 Redis 锁。两者不是互相替换关系。
+问答支持全盘、单文件和最多 50 个指定文件。权限范围先于召回，父子片按 token 预算组装；reranker 和回答使用证据前回验权限，返回引用前再次回验。引用带真实 source/content/parent/child 版本。普通 RAG 的相关片段召回不代表全文穷尽分析；概览使用完整规范源块分段归并。
 
-### 本轮实测
+支持现有文本、代码/配置、文本 PDF、DOCX、CSV、XLSX 解析。PPTX 完整解析、旧 DOC/PPT、扫描件 OCR 不属于已实现的文本能力。图片沿用独立缩略图链路；不支持在线预览的文件可查看信息并下载。
 
-本机已分别保留历史 fake Provider smoke 基线和本轮真实 DashScope/Reranker 性能结果。当前结果目录记录了 3 个 aisvc 副本下的 RAG 切块微基准、Hybrid Search、Ask（含 Reranker）和网盘核心读路径/Multipart 性能；这些是单机小数据集快照，不是生产容量承诺。历史单接口基线见 [`/benchmark.md`](/benchmark.md)，本轮 AI 报告见 [`/artifacts/ai-eval/20260822T213102Z/PERFORMANCE.md`](/artifacts/ai-eval/20260822T213102Z/PERFORMANCE.md)，产品报告见 [`/artifacts/product-test/20260822T213102Z/PERFORMANCE.md`](/artifacts/product-test/20260822T213102Z/PERFORMANCE.md)。
+## 启动
 
-![Jaeger 中跨 api、worker、aisvc 的上传索引链路](jaeger-upload-trace.png)
-
-## Docker 一键启动
-
-### 环境要求
-
-- Docker Engine 24+
-- Docker Compose v2
-- 首次构建建议至少保留 `6GB` 磁盘空间
-- 支持 `amd64` 和 `arm64`
-
-### 从 GitHub 拉取后运行
-
-直接体验完整网盘功能：
+要求 Docker Compose v2；宿主机开发要求 Go 1.25.13+、Node.js 22+。受限主机使用串行构建，后端可设 `GOMAXPROCS=2` 和 `go build -p=1`。
 
 ```bash
-git clone https://github.com/11bronx11/bx_yunpan.git
-cd bx_yunpan
-./deploy/up.sh
-```
-
-首次执行时，`up.sh` 会自动生成 `deploy/.env`、构建业务镜像并启动全部服务。默认使用 `AI_PROVIDER=fake`，不需要外部密钥，适合先验证上传、目录、分享和检索流程。启动完成后访问 `http://127.0.0.1:3000`，再执行下面的命令确认所有链路正常：
-
-```bash
+./deploy/init-env.sh              # 已有 deploy/.env 只补缺键，保留现值
+./deploy/up.sh                    # 默认显式核心角色和独立 AI 角色
 ./deploy/status.sh
-```
-
-只需要目录、上传下载、分享、缩略图与对象回收，不启动 aisvc 和 etcd：
-
-```bash
-./deploy/init-env.sh --no-ai
-./deploy/up.sh
-./deploy/status.sh
-```
-
-该模式使用完整的 [`deploy/.env.no-ai.example`](deploy/.env.no-ai.example) 模板：搜索、问答和重建索引接口立即返回 `503 ai.unavailable`，新上传不会产生 AI 索引任务，已有文件、数据库记录、对象和历史 AI 数据不会被删除。完整模板与无 AI 模板包含相同的配置键，便于以后重新启用 AI。
-
-已有 `deploy/.env` 不会被 `init-env.sh` 覆盖。将现有部署切换到无 AI 模式时，修改其中四项：
-
-```dotenv
-AI_ENABLED=false
-AI_PROVIDER=disabled
-AISVC_REPLICAS=0
-ETCD_ENABLED=false
-```
-
-升级到首次包含无 AI 支持的代码版本后，执行一次完整的 `./deploy/up.sh`，确保 API 和 Worker 镜像包含禁用逻辑。以后仅切换这组配置且镜像未变时可以使用 `./deploy/up.sh --no-build`。脚本会停止并移除 aisvc/etcd 容器，但保留数据库、对象存储、历史 AI 数据和 Docker 数据卷。
-
-需要使用真实 AI 索引、语义检索和 RAG 问答时，建议在第一次启动前完成配置：
-
-```bash
-git clone https://github.com/11bronx11/bx_yunpan.git
-cd bx_yunpan
-./deploy/init-env.sh
-```
-
-编辑 `deploy/.env`，至少修改以下两项，不要把该文件或密钥提交到 Git：
-
-```env
-AI_PROVIDER=dashscope
-DASHSCOPE_API_KEY=你的阿里云百炼 API Key
-```
-
-然后执行：
-
-```bash
-./deploy/up.sh
-./deploy/status.sh
-```
-
-脚本会自动执行以下步骤：
-
-1. 生成不进入 Git 的 `deploy/.env`，全新部署使用随机密码和签名密钥。
-2. 检查 Docker、Compose、AI Provider 配置和剩余磁盘空间。
-3. 构建 Web、API、Worker、Migrate 镜像；仅在 AI 开启时构建 aisvc。
-4. 启动 PostgreSQL、Redis、MinIO，并在 AI 开启时启动 etcd；创建私有 Bucket。
-5. 执行数据库迁移。
-6. 启动 API、Worker、Web，并在 AI 开启时启动 aisvc；等待健康检查通过。
-
-本机空间低于 `6GB` 时脚本会拒绝构建，避免中途写满磁盘。首次启动或者拉取了新的 Go、React、Dockerfile、Compose、Nginx 代码后，应执行完整的 `./deploy/up.sh`。
-
-`up.sh` 默认通过 `deploy/build.sh` 逐个构建镜像；单个构建限制为 1 CPU、1.5 GiB 内存和 2 GiB 内存加 Swap，并在开始下一个镜像前检查宿主机可用内存。不要在小内存主机上并行执行多个 `docker compose build`。
-
-只有业务镜像已经存在，并且仅修改了 `deploy/.env` 配置时，才使用下面的命令跳过构建：
-
-```bash
-./deploy/up.sh --no-build
-```
-
-`--no-build` 仍会根据 `deploy/.env` 重建需要更新配置的容器，但不会重新编译源码；全新环境不能使用该参数。
-
-同时启动 Prometheus、Grafana、OpenTelemetry Collector 和 Jaeger。需要实际导出应用 trace 时，先在 `deploy/.env` 中设置 `OTEL_TRACES_ENABLED=true`：
-
-```bash
-./deploy/up.sh --observability
-```
-
-Prometheus 当前直接抓取 API 的 `/metrics`；应用 trace 由 API、Worker 和 aisvc 经 Collector 写入 Jaeger。`OTEL_TRACES_ENABLED` 默认为 `false`，修改后需要通过 `up.sh` 重建相关容器配置。
-
-AI 开启时可按需扩容 aisvc；该参数会覆盖 `deploy/.env` 中的 `AISVC_REPLICAS`：
-
-```bash
-./deploy/up.sh --no-build --aisvc-replicas 2
-./deploy/status.sh
-```
-
-### 服务入口
-
-| 服务 | 默认地址 | 用途 |
-| --- | --- | --- |
-| Web | `http://127.0.0.1:3000` | 云盘界面和同源对象上传 |
-| API | `http://127.0.0.1:8081` | API、健康探针和 OpenAPI |
-| API 文档 | `http://127.0.0.1:8081/docs` | Redoc 接口文档 |
-| MinIO Console | `http://127.0.0.1:9001` | 对象存储管理 |
-| Prometheus | `http://127.0.0.1:9090` | 可选指标查询 |
-| Grafana | `http://127.0.0.1:3001` | 可选监控面板 |
-| Jaeger | `http://127.0.0.1:16686` | 可选分布式 Trace 查询 |
-
-### 运维命令
-
-```bash
-# 查看容器状态，并检查 Web、API 和对象存储代理链路
-./deploy/status.sh
-
-# 单独检查运行容器是否与 deploy/.env 一致
 ./deploy/config-check.sh
-
-# 在现有单机 Compose 上执行可逆的核心故障恢复演练
-./deploy/local-staging-check.sh
-
-# 跟踪当前模式下的 API、Worker、Web、迁移日志，以及可选的 aisvc、etcd 日志
-./deploy/logs.sh
-
-# 只查看指定服务
-./deploy/logs.sh api worker
-
-# 停止服务，保留数据库和对象存储数据
-./deploy/down.sh
 ```
 
-只有确认不再需要任何网盘数据时，才使用下面的命令删除数据卷：
+全新无 AI 安装使用 `./deploy/init-env.sh --no-ai`。已有配置切换时编辑 `deploy/.env` 中的 `AI_ENABLED=false`、`AI_PROVIDER=disabled`，再运行 `up.sh`。AI 内容搜索、问答和重建返回 `503 ai.unavailable`；文件名搜索、登录、列表、上传下载、分享和配额不依赖 AI。
+
+配置唯一来源是 `deploy/.env`，不要提交。两个模板的键保持一致：[`deploy/.env.example`](deploy/.env.example)、[`deploy/.env.no-ai.example`](deploy/.env.no-ai.example)。默认 fake provider 可验证链路；真实 provider 的凭据仅由需要模型的角色使用。`AI_VECTORS_ENABLED`、`AI_SUMMARY_ENABLED`、`AI_ASK_ENABLED` 可独立关闭；全文准备不要求模型凭据。
+
+AI 默认角色为 `core-internal`、`ai-query`、`ai-content-worker`、`ai-embedding-worker`、`ai-summary-worker`、`ai-committer` 和 `parser-svc`。核心角色为 `async-control`、`committer`、`upload-worker`、`object-worker`、`media-worker`、`gc-worker`。`--ai-split` 和 `--distributed-workers` 是兼容参数。`aisvc combined` 已退出；`--aisvc-replicas N` 只扩容 `ai-query`。
 
 ```bash
-./deploy/down.sh --volumes
+./deploy/up.sh --search-backends --search-indexer # 独立 ES/QD 投影
+./deploy/up.sh --no-build                        # 使用已构建镜像
+./deploy/up.sh --observability
+./deploy/logs.sh api ai-query ai-committer
+./deploy/down.sh                                # 保留数据卷
 ```
 
-## 本地开发
+只配置 ES 或 Qdrant endpoint 时可单独启动对应 projector。投影 epoch 分别由 `AI_TEXT_INDEX_EPOCH`、`AI_VECTOR_INDEX_EPOCH` 控制。`AI_PROJECTION_NAMESPACE` 用于隔离目标，不能在多个环境间共用目标名。每个已发布版本的覆盖证明决定是否切换，AI PG 始终参与版本校验。
 
-需要频繁修改代码时，可以只用 Docker 运行基础设施，Go 和 React 直接在宿主机启动。
+默认 Web 为 `http://127.0.0.1:3000`；API 由 Web 代理，`/docs` 提供随二进制发布的 OpenAPI。MinIO Console 为 `:9001`，RabbitMQ 管理界面为 `:15672`。AI gRPC 与数据库仅供内部访问。部署脚本不会自动归档旧表，也不删除旧数据或 purge 队列。
 
-要求 Go 1.25.13+、Node.js 22+ 和 Docker Compose v2。
+## 保留数据升级
+
+业务迁移到 `000036`，控制迁移到 `000004`，AI 独立迁移到 `000007`；归档使用独立迁移 lane。AI 可使用独立 PG 实例；开发/验收同实例多数据库只证明连接与权限隔离。
+
+先停止旧 AI/search 消费者，构建新角色镜像。只升级 AI 时使用专用工具，不重跑核心 `async-import`：
 
 ```bash
-# 完整 AI 模式生成 deploy/.env；无 AI 开发改用 ./deploy/init-env.sh --no-ai
+AI_LEGACY_WRITERS_STOPPED=true ./deploy/ai-upgrade.sh prepare
+./deploy/ai-upgrade.sh inspect
+./deploy/ai-upgrade.sh verify
+# 历史文本重建完成、旧结果审阅完成后，使用 prepare 输出的 RUN_UUID：
+AI_LEGACY_WRITERS_STOPPED=true ./deploy/ai-upgrade.sh archive RUN_UUID
+```
+
+prepare 依次 expand、分批建 manifest、旧任务/消息交接、登记重建意图。重复执行继续已有 run。旧 attempts/dispatches/recoveries/deadline 和停止结论保留；无法证明生效的 computed 结果隔离等待审阅。已有新意图通过持久化观察关系接续旧用户作业，避免修改冻结任务和重置预算。verify 未有进展会退出，待任务完成后重跑。
+
+归档前工具检查 manifest、旧任务和消息检查点，写切换标记后才移动旧表到归档 schema；正文、旧 embedding 和 FK 定义保留。`migrate archive down-one` 恢复旧表位置及 FK，但不会反向生成旧格式的新结果。服务回滚需停止新发布；旧 query 只能有限降级读取旧数据，新文件/结果可能缺失。不要同时运行新旧写者。
+
+## 宿主机开发
+
+```bash
 ./deploy/init-env.sh
-
-# 1. 只启动基础设施，业务进程在宿主机运行
 ./deploy/infra-up.sh
-
-# 2. 使用同一份配置执行数据库迁移
 ./deploy/local-run.sh migrate up
-
-# 3. API
-./deploy/local-run.sh api
+./deploy/local-run.sh migrate control up
+./deploy/local-run.sh migrate ai up
+./deploy/local-run.sh reader-init
+./deploy/local-run.sh ai-reader-init
 ```
 
-另开终端启动 Worker：
+每个进程在独立终端运行 `./deploy/local-run.sh ROLE`，角色见上文；前端运行 `./deploy/local-frontend.sh`。所有宿主机端点从同一份 `.env` 派生，metrics 端口按角色分配 `18083–18100`，可用调用环境 `WORKER_METRICS_ADDR` 覆盖。不要与 Docker 应用进程争用端口。
+
+首次从旧核心异步系统迁移才执行 `ASYNC_LEGACY_WRITERS_STOPPED=true ./deploy/local-run.sh async-import`；它与本轮 AI 专用交接工具不同。宿主机 AI 迁移使用 `AI_LEGACY_WRITERS_STOPPED=true ./deploy/local-run.sh ai-migrate ...`，完整分阶段命令见实现说明。
+
+## 验证
 
 ```bash
-./deploy/local-run.sh worker
-```
-
-`AI_ENABLED=true` 时再启动 aisvc；`./deploy/init-env.sh --no-ai` 生成的核心网盘模式跳过此步：
-
-```bash
-./deploy/local-run.sh aisvc
-```
-
-再启动前端：
-
-```bash
-./deploy/local-frontend.sh
-```
-
-开发服务器访问 `http://127.0.0.1:3000`。前端将 `/api` 代理到 `:8081`，将 `/storage` 代理到 MinIO `:9000`。
-`local-run.sh` 和 `local-frontend.sh` 会从 `deploy/.env` 派生宿主机地址；不要再为宿主机单独维护一份业务配置。宿主机 API/Worker 与 Docker 业务服务不能同时占用相同端口。
-
-## 配置
-
-Docker Compose 和宿主机开发脚本都从 `deploy/.env` 读取配置。不要提交该文件。完整 AI 配置参考 [deploy/.env.example](deploy/.env.example)，核心网盘配置参考 [deploy/.env.no-ai.example](deploy/.env.no-ai.example)；两个模板包含相同的配置键，仅默认运行模式不同。`init-env.sh` 只在 `deploy/.env` 不存在时从所选模板生成配置并写入随机密钥，不会覆盖或合并已有文件。
-
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `APP_ENV` | `development` | 使用 `production` 时必须替换签名密钥 |
-| `DOCKER_REGISTRY` | `docker.io` | Docker 基础镜像仓库；网络受限时可切换镜像代理 |
-| `GO_PROXY` | `https://proxy.golang.org,direct` | Go 模块下载代理；网络受限时可切换为可达镜像 |
-| `APP_BIND_IP` | `127.0.0.1` | Web/API 监听地址 |
-| `WEB_PORT` | `3000` | Web 对外端口 |
-| `API_PORT` | `8081` | API 对外端口 |
-| `HTTP_MAX_BODY_BYTES` | `1048576` | API 请求体全局上限，AI 接口仍使用更严格上限 |
-| `HTTP_MAX_HEADER_BYTES` | `65536` | HTTP 请求头总大小上限 |
-| `HTTP_SHUTDOWN_TIMEOUT` | `10s` | API 优雅停机等待时间 |
-| `HTTP_PROBE_TIMEOUT` | `2s` | 健康检查依赖探测超时 |
-| `HTTP_READ_HEADER_TIMEOUT` | `5s` | HTTP 请求头读取超时 |
-| `HTTP_IDLE_TIMEOUT` | `60s` | HTTP Keep-Alive 空闲超时 |
-| `POSTGRES_MAX_OPEN_CONNS` | `32` | PostgreSQL 最大连接数 |
-| `POSTGRES_MAX_IDLE_CONNS` | `8` | PostgreSQL 最大空闲连接数 |
-| `POSTGRES_CONN_MAX_LIFETIME` | `30m` | PostgreSQL 连接最大生命周期 |
-| `POSTGRES_CONN_MAX_IDLE_TIME` | `5m` | PostgreSQL 空闲连接回收时间 |
-| `REDIS_DB` | `0` | Redis 逻辑数据库编号 |
-| `REDIS_BROKER_ADDR/PASSWORD/DB` | 继承 `REDIS_*` | Asynq Broker 连接；可单独指向 Redis 实例 |
-| `REDIS_COORDINATION_ADDR/PASSWORD/DB` | 继承 `REDIS_*` | 选主锁、限流等协调状态连接 |
-| `REDIS_CACHE_ADDR/PASSWORD/DB` | 继承 `REDIS_*` | 两级业务缓存 L2 连接；缓存故障可回源事实库 |
-| `S3_PUBLIC_ENDPOINT` | `127.0.0.1:3000` | 浏览器实际访问到的 Web Host，参与 SigV4 签名 |
-| `S3_PUBLIC_PATH_PREFIX` | `/storage` | Web 代理对象存储的路径前缀 |
-| `S3_REGION` | `us-east-1` | S3 签名区域 |
-| `S3_SECURE` | `false` | API 到 MinIO 是否使用 HTTPS |
-| `S3_READ_URL_TTL` | `10m` | 下载和预览 URL 有效时间 |
-| `S3_PUBLIC_SECURE` | `false` | 浏览器预签名 URL 是否使用 HTTPS |
-| `AUTH_ISSUER` | `bx-yunpan` | JWT 签发者 |
-| `AUTH_SIGNING_SEED` | 自动生成 | Access Token 签名种子 |
-| `AUTH_ACCESS_TTL` | `15m` | Access Token 有效期 |
-| `AUTH_REFRESH_TTL` | `720h` | Refresh Token 有效期 |
-| `AUTH_COOKIE_SECURE` | `false` | HTTPS 部署时设为 `true` |
-| `AUTH_COOKIE_DOMAIN` | 空 | Refresh Cookie 的域，单域部署保持为空 |
-| `USER_DEFAULT_QUOTA_BYTES` | `10737418240` | 新用户默认网盘容量 |
-| `UPLOAD_SESSION_TTL` | `24h` | 未完成上传会话有效期 |
-| `UPLOAD_PART_URL_TTL` | `15m` | 分片上传 URL 有效时间 |
-| `UPLOAD_CLEANUP_INTERVAL` | `5m` | Worker 扫描过期上传的周期 |
-| `UPLOAD_CLEANUP_BATCH` | `100` | 单次过期上传回收数量 |
-| `OUTBOX_POLL_INTERVAL` | `1s` | Outbox 事件轮询周期 |
-| `OUTBOX_BATCH_SIZE` | `20` | 单批事件投递数量 |
-| `OUTBOX_TASK_MAX_RETRY` | `8` | 异步任务最大重试次数 |
-| `OUTBOX_TASK_TIMEOUT` | `30m` | 单个异步任务超时 |
-| `OBJECT_GC_DELAY` | `24h` | 零引用对象延迟删除时间 |
-| `SHARE_SECRET` | 自动生成 | Share Access Token 签名密钥 |
-| `SHARE_ACCESS_TTL` | `15m` | Share Access Token 有效期 |
-| `WORKER_CONCURRENCY` | `8` | 每个 Worker 或 aisvc 进程的 Asynq 并发数；增加 aisvc 副本会成倍增加 AI 任务总并发上限 |
-| `WORKER_QUEUE_AI` | `4` | AI 队列权重 |
-| `WORKER_QUEUE_MEDIA` | `4` | 缩略图/媒体队列权重 |
-| `WORKER_QUEUE_OBJECT` | `2` | 对象校验队列权重 |
-| `WORKER_QUEUE_MAINTENANCE` | `1` | 清理维护队列权重 |
-| `AI_ENABLED` | `true` | 是否构建、启动和调用 aisvc；关闭后不投递 AI 索引任务 |
-| `AI_PROVIDER` | `fake` | AI 开启时为 `fake` 或 `dashscope`；无 AI 模板使用 `disabled` |
-| `DASHSCOPE_API_KEY` | 空 | DashScope 模式必填 |
-| `AI_BASE_URL` | DashScope 兼容地址 | OpenAI 兼容 API 地址 |
-| `AI_CHAT_MODEL` | `qwen-plus` | 问答模型 |
-| `AI_EMBEDDING_MODEL` | `text-embedding-v4` | 向量模型 |
-| `AI_VISION_MODEL` | `qwen-vl-plus` | 图片理解/OCR 模型 |
-| `AI_RERANK_ENABLED` | `false` | 是否在 Ask 中启用二阶段 Reranker；只影响问答，不影响普通搜索 |
-| `AI_RERANK_BASE_URL` | 空 | DashScope Reranker 的 `compatible-api/v1` 根地址；不要追加 `/reranks` |
-| `AI_RERANK_MODEL` | `qwen3-rerank` | Reranker 模型 |
-| `AI_RERANK_CANDIDATES` | `30` | 送入 Reranker 的 RRF 候选 Chunk 数 |
-| `AI_RERANK_TOP_K` | `8` | Reranker 后送入 LLM 的最多 Chunk 数 |
-| `AI_RERANK_TIMEOUT` | `30s` | Reranker HTTP 请求超时 |
-| `AI_EMBEDDING_DIMENSION` | `1024` | 向量维度，数据库列固定为 `vector(1024)` |
-| `AI_MAX_OBJECT_MIB` | `32` | AI 抽取单文件大小上限 |
-| `AI_REQUEST_TIMEOUT` | `90s` | 单次 AI Provider HTTP 请求超时 |
-| `AI_RATE_LIMIT_ENABLED` | `true` | 是否启用 AI 接口的用户级 Redis 限流 |
-| `AI_RATE_LIMIT_SEARCH_PER_MINUTE` | `30` | 每个用户每分钟搜索次数 |
-| `AI_RATE_LIMIT_ASK_PER_MINUTE` | `10` | 每个用户每分钟 AI 问答次数 |
-| `AI_RATE_LIMIT_REPROCESS_PER_MINUTE` | `3` | 每个用户每分钟重建索引次数 |
-| `AISVC_REPLICAS` | `1` | `up.sh` 启动的 aisvc 副本数；AI 开启时必须为正整数，仅 `AI_ENABLED=false` 时可设为 `0` |
-| `AISVC_GRPC_ADDR` | `:8082` | aisvc 监听地址 |
-| `AISVC_GRPC_TARGET` | `aisvc:8082` | API 直连 aisvc 的目标；启用 etcd 后由 resolver 发现 |
-| `AI_SERVICE_ROLE` | `combined` | AI 进程角色：`combined`、`query` 或 `indexer`；P3 split profile 使用后两者 |
-| `AISVC_CALL_TIMEOUT` | `120s` | API 到 aisvc 的总调用预算，不得短于 `AI_REQUEST_TIMEOUT` |
-| `AISVC_SEARCH_MAX_ATTEMPTS` | `3` | aisvc 搜索调用最大尝试次数 |
-| `AISVC_REPROCESS_MAX_ATTEMPTS` | `3` | aisvc 重建索引调用最大尝试次数 |
-| `AISVC_RETRY_BASE_BACKOFF` | `20ms` | gRPC 重试初始退避 |
-| `AISVC_RETRY_MAX_BACKOFF` | `1s` | gRPC 重试最大退避 |
-| `AISVC_BREAKER_WINDOW` | `10s` | aisvc 客户端熔断统计窗口 |
-| `AISVC_BREAKER_MIN_REQUESTS` | `20` | 触发熔断前的最少请求数 |
-| `AISVC_BREAKER_FAILURE_RATE` | `0.5` | 熔断失败率阈值 |
-| `AISVC_BREAKER_OPEN_TIMEOUT` | `5s` | 熔断打开后的等待时间 |
-| `AISVC_BREAKER_HALF_OPEN_PROBES` | `3` | 半开状态探测请求数 |
-| `GO_BUILD_PARALLELISM` | `1` | Docker 内 `go build -p`，限制同时编译的包数 |
-| `GO_BUILD_MAX_PROCS` | `2` | Docker 内 Go 编译器可使用的最大 CPU 线程数 |
-| `COMPOSE_PARALLEL_LIMIT` | `1` | `up.sh` 同时执行的 Compose 构建/启动任务数 |
-| `BUILD_MEMORY_LIMIT` | `1536m` | 单个镜像构建容器的内存上限 |
-| `BUILD_MEMORY_SWAP_LIMIT` | `2048m` | 单个镜像构建容器的内存与 Swap 总上限 |
-| `BUILD_CPU_QUOTA` | `100000` | 配合默认 period 将构建限制为 1 个 CPU 核 |
-| `BUILD_MIN_AVAILABLE_MB` | `1536` | 开始下一个镜像前要求的宿主机可用内存 |
-| `YUNPAN_MIN_FREE_GB` | `6` | 构建前要求的磁盘最小剩余空间 |
-| `YUNPAN_UP_ATTEMPTS` | `3` | Compose 启动失败时的最大尝试次数 |
-| `ETCD_ENABLED` | `true` | 是否启用 aisvc 注册发现 |
-| `ETCD_IMAGE` | `quay.io/coreos/etcd:v3.6.6` | 内置 etcd 镜像 |
-| `ETCD_ENDPOINTS` | `etcd:2379` | etcd 客户端地址列表 |
-| `ETCD_USERNAME` | 空 | 外部 etcd 用户名；内置 etcd 不启用认证 |
-| `ETCD_PASSWORD` | 空 | 外部 etcd 密码；内置 etcd 不启用认证 |
-| `ETCD_DIAL_TIMEOUT` | `5s` | etcd 客户端连接超时 |
-| `ETCD_SERVICE_PREFIX` | `/services/aisvc` | aisvc 注册键前缀 |
-| `ETCD_LEASE_TTL` | `10s` | aisvc 注册租约时长 |
-| `AISVC_ADVERTISE_ADDR` | 空 | 写入 etcd 的 aisvc 可达地址；留空时由容器 hostname 推断 |
-| `OUTBOX_LEADER_LOCK_ENABLED` | `true` | 是否启用 dispatcher Redis 选主 |
-| `OUTBOX_LEADER_LOCK_TTL` | `15s` | dispatcher 锁 TTL，由 watchdog 续期 |
-| `OTEL_TRACES_ENABLED` | `false` | 是否导出应用 trace |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otel-collector:4317` | OTLP gRPC Collector 地址 |
-| `OTEL_TRACES_SAMPLER_ARG` | `1.0` | ParentBased 下的根 trace 采样率 |
-
-对象存储有两个端点：
-
-- `S3_ENDPOINT=minio:9000`：API 和 Worker在 Compose 网络内访问。
-- `S3_PUBLIC_ENDPOINT=127.0.0.1:3000`：浏览器通过 Nginx `/storage` 同源访问。
-
-部署到域名和 HTTPS 后，需要同步设置：
-
-```dotenv
-APP_ENV=production
-APP_BIND_IP=127.0.0.1
-S3_PUBLIC_ENDPOINT=drive.example.com
-S3_PUBLIC_SECURE=true
-AUTH_COOKIE_SECURE=true
-```
-
-TLS 建议由 VM 宿主机 Caddy、Nginx 或云负载均衡终止。Docker 内 Web Nginx 继续监听
-`80`，Compose 将 VM 的 `127.0.0.1:3000` 映射到容器 `80`；公网只开放 `80/443`，
-不要直接暴露 PostgreSQL、Redis、MinIO 或应用的 `3000/8081` 端口。
-
-### 公网 HTTPS 部署（VM 宿主机终止 TLS）
-
-推荐的请求链路是：
-
-```text
-浏览器 https://drive.example.com:443
-  -> VM 宿主机 Nginx/Caddy（证书和 TLS 终止）
-  -> http://127.0.0.1:3000
-  -> Docker Web Nginx :80
-  -> /api 转 API，/storage 转 MinIO
-```
-
-按以下顺序部署：
-
-1. 将域名的 DNS A/AAAA 记录指向 VM 公网 IP，并在云安全组和 VM 防火墙放行 TCP
-   `80`、`443`。应用的 `3000`、`8081` 只允许本机访问。
-2. 在 VM 宿主机配置证书（例如使用 Certbot/Let's Encrypt 或云证书），证书文件放在
-   宿主机，由宿主机 Nginx/Caddy读取，不需要挂载到 Docker Web 容器。
-3. 修改 VM 上不提交到 Git 的 `deploy/.env`：
-
-   ```dotenv
-   APP_ENV=production
-   APP_BIND_IP=127.0.0.1
-   WEB_PORT=3000
-   S3_PUBLIC_ENDPOINT=drive.example.com
-   S3_PUBLIC_PATH_PREFIX=/storage
-   S3_PUBLIC_SECURE=true
-   AUTH_COOKIE_SECURE=true
-   ```
-
-   `S3_PUBLIC_ENDPOINT` 只写域名，不写 `https://`。它必须与浏览器访问的公网 Host
-   一致，因为上传、下载的 S3 预签名 URL 会使用它。
-4. 启动或重启应用，使 API 重新读取签名和 Cookie 配置：
-
-   ```bash
-   ./deploy/up.sh
-   ./deploy/config-check.sh
-   ```
-
-5. 在 VM 宿主机 Nginx 配置 HTTP 跳转和 HTTPS 反代。核心配置如下，证书路径按实际环境替换：
-
-   ```nginx
-   server {
-       listen 80;
-       server_name drive.example.com;
-       return 301 https://$host$request_uri;
-   }
-
-   server {
-       listen 443 ssl;
-       server_name drive.example.com;
-
-       ssl_certificate     /path/to/fullchain.pem;
-       ssl_certificate_key /path/to/privkey.pem;
-
-       client_max_body_size 0;
-
-       location / {
-           proxy_pass http://127.0.0.1:3000;
-           proxy_set_header Host $host;
-           proxy_set_header X-Real-IP $remote_addr;
-           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-           proxy_set_header X-Forwarded-Proto https;
-           proxy_request_buffering off;
-           proxy_buffering off;
-           proxy_read_timeout 300s;
-           proxy_send_timeout 300s;
-       }
-   }
-   ```
-
-   `Host` 必须保留为公网域名，否则对象存储预签名 URL 可能出现签名不匹配；上传分片
-   默认约 `10MB`，因此宿主机反代不能使用默认的 `1MB` 请求体限制。
-6. 重载宿主机 Nginx/Caddy 后验证 `https://drive.example.com` 的登录、Token 刷新、上传、
-   下载和分享流程。上传时确认 `/api/v1/uploads/.../parts/presign` 返回的 URL 以
-   `https://drive.example.com/storage/` 开头。
-
-### 远程开发端口转发
-
-服务器保持 `127.0.0.1` 绑定时，可在 Mac 上执行：
-
-```bash
-ssh -N \
-  -L 3000:127.0.0.1:3000 \
-  -L 8081:127.0.0.1:8081 \
-  -L 9001:127.0.0.1:9001 \
-  user@server
-```
-
-浏览器仍访问 `http://127.0.0.1:3000`，预签名 URL 的 Host 与 `S3_PUBLIC_ENDPOINT` 保持一致。
-
-默认配置下，SSH 本地监听端口必须和 `S3_PUBLIC_ENDPOINT` 中的端口一致，都是 `3000`。
-不要只改成 `-L 3001:127.0.0.1:3000` 后从 `http://127.0.0.1:3001` 访问：登录、检索等
-相对路径 API 仍可用，但分片上传会直接请求后端按 `S3_PUBLIC_ENDPOINT` 生成的
-`http://127.0.0.1:3000/storage/...` 预签名 URL，可能因端口不可达或跨源限制失败。
-
-如果 Mac 的 `3000` 端口无法使用，需要同时将 `S3_PUBLIC_ENDPOINT` 改为
-`127.0.0.1:<本地转发端口>`，重启 API，并让浏览器访问相同的 Host 和端口；不能在
-前端直接替换预签名 URL 的端口，因为 Host 参与 S3 签名。
-
-Linux 本机部署按默认配置从 `http://127.0.0.1:3000` 访问没有该问题。若浏览器运行在
-其他机器上，则 `127.0.0.1` 指向浏览器所在机器，必须把 `S3_PUBLIC_ENDPOINT` 配置为
-浏览器实际可达且与页面同源的域名或 `IP:端口`。
-
-## AI 模式
-
-项目提供三种运行方式：
-
-- `AI_ENABLED=false`：核心网盘模式，不构建或启动 aisvc/etcd，不产生 AI 队列任务。
-- `AI_ENABLED=true + AI_PROVIDER=fake`：默认离线 AI 模式，使用确定性本地 Embedding 和摘要，不依赖外部 Key，适合演示和自动化测试。
-- `AI_ENABLED=true + AI_PROVIDER=dashscope`：真实模型模式，需要 DashScope API Key。
-
-文件完成异步索引后，文件名搜索会优先返回精确和前缀匹配；混合检索使用全文排名与向量排名做 RRF 融合。设置 `AI_RERANK_ENABLED=true` 后，Ask 会把 RRF 融合池（默认最多 30 个 Chunk）发送到 Reranker，再将最多 8 个重排结果交给 LLM；关闭时直接使用 RRF 结果，不额外调用 Reranker。DashScope 的 `qwen3-rerank` 使用 `AI_RERANK_BASE_URL` 的 `compatible-api/v1` 根地址，客户端自动请求 `/reranks`，不要把 `/reranks` 写进配置。问答阶段每个文件最多提供 2 个片段，避免单一文档占满上下文。DashScope 以 JSON 返回回答、Grounded 判断和证据 ID，后端只接受本次检索证据集合中的 ID；证据不足或引用无效时，响应中的 `citations` 为空。
-
-启用 DashScope：
-
-```dotenv
-AI_PROVIDER=dashscope
-DASHSCOPE_API_KEY=sk-...
-AI_CHAT_MODEL=qwen-plus
-AI_EMBEDDING_MODEL=text-embedding-v4
-AI_VISION_MODEL=qwen-vl-plus
-AI_RERANK_ENABLED=true
-AI_RERANK_BASE_URL=https://dashscope.aliyuncs.com/compatible-api/v1
-AI_RERANK_MODEL=qwen3-rerank
-AI_RERANK_CANDIDATES=30
-AI_RERANK_TOP_K=8
-AI_RERANK_TIMEOUT=30s
-AI_REQUEST_TIMEOUT=90s
-AI_RATE_LIMIT_ENABLED=true
-AI_RATE_LIMIT_SEARCH_PER_MINUTE=30
-AI_RATE_LIMIT_ASK_PER_MINUTE=10
-AI_RATE_LIMIT_REPROCESS_PER_MINUTE=3
-```
-
-修改 `deploy/.env` 后：
-
-- Docker：仅修改 Provider、限流等配置且所需镜像已存在时，执行 `./deploy/up.sh --no-build` 重建容器配置；从无 AI 部署首次启用 AI 时执行完整的 `./deploy/up.sh`，确保 aisvc 镜像存在。
-- 宿主机开发：重新启动 `local-run.sh` 或 `local-frontend.sh` 进程。
-
-首次使用 Docker 或宿主机开发时执行 `./deploy/init-env.sh`，脚本会从 `.env.example` 生成带随机密钥的 `deploy/.env`。无 AI 部署执行 `./deploy/init-env.sh --no-ai`，改用 `.env.no-ai.example`。两个模板的配置键保持一致；模板只在首次生成时使用，已有 `deploy/.env` 不会自动被模板覆盖或合并。
-
-启动脚本会在构建镜像前检查 Provider 配置：`AI_PROVIDER=dashscope` 必须提供 `DASHSCOPE_API_KEY`，且 `AI_EMBEDDING_DIMENSION` 必须保持为 `1024`。检查过程不会输出密钥内容。
-
-## 测试与质量检查
-
-```bash
-# Go
 cd backend
-go test -p=1 ./...
+go build ./cmd/...
 go vet ./...
-
-# React
+go test -p=1 ./...
+make proto
+go generate ./api
+python3 -m unittest parser_worker.test_parsers -v
 cd ../web
 npm run lint
 CI=true npm test -- --runInBand
 npm run build
-
-# 完整 AI 模式的 Compose 静态展开，不构建镜像
-cd ..
-docker compose --env-file deploy/.env.example \
-  -f deploy/compose.yaml \
-  --profile app --profile ai config --quiet
-
-# 无 AI 模式的 Compose 静态展开，不构建镜像
-docker compose --env-file deploy/.env.no-ai.example \
-  -f deploy/compose.yaml \
-  --profile app config --quiet
-
-# 后端热路径快速测试（需要 TEST_POSTGRES_DSN 才会执行真实数据库并发用例）
-cd backend
-TEST_POSTGRES_DSN='postgres://yunpan:yunpan@127.0.0.1:5432/yunpan?sslmode=disable' go test -count=1 \
-  ./internal/platform/config ./internal/platform/httpapi \
-  ./internal/drive ./internal/upload ./internal/sharing ./internal/ai
-
-# AI Provider 结构化回答、Grounded 判断和 Citation 白名单契约
-go test ./internal/ai -run 'Test(ParseAnswerResult|DashScopeAnswer)'
 ```
 
-当前轻量验收覆盖注册鉴权、目录、Multipart 上传、下载、秒传、分享导入、AI 检索、权限隔离、多用户并发读和幂等写，也覆盖 AI 禁用配置、禁用后端的 `503` 契约和 Outbox 跳过 AI fanout。它证明核心链路及模式切换的代码契约可用，但不替代多机容灾、长时间容量测试和真实云环境演练。
+集成测试必须使用跑过迁移的专用测试库。`TEST_POSTGRES_DSN`、`TEST_CONTROL_POSTGRES_DSN`、`TEST_AI_POSTGRES_DSN` 指向三个不同数据库；附加依赖变量与隔离边界见 AGENTS 和实现说明。未配置环境而 skip 不属于真实链路通过。不得将整个测试套件指向开发库。
 
-## 关键目录
+`TestAISplitRealDependencies` 使用真实三库连接、MQ、MinIO、etcd、Go/Python parser、ES/QD 和 fake 模型；`deploy/tests/ai-browser.cjs` 配合该夹具验证真实浏览器交互。当前实际结果见实现说明，不代表真实模型效果、容量或跨主机 HA。
 
-```text
-backend/cmd/                  API、Worker、aisvc、Migrate 入口
-backend/internal/identity    用户、密码、JWT 和 Refresh Session
-backend/internal/drive       目录与逻辑文件
-backend/internal/upload      Multipart、断点恢复、校验与配额
-backend/internal/objectstore 内容寻址对象、引用计数与 GC
-backend/internal/sharing     Share Key 与授权导入
-backend/internal/media       图片缩略图
-backend/internal/ai          抽取、Embedding、RRF、Reranker 与 RAG
-backend/internal/outbox      Transactional Outbox
-backend/migrations           PostgreSQL/pgvector Schema
-web/src                      React 云盘工作台
-deploy                       Compose、Nginx、监控和部署脚本
-```
+## 代码入口
 
-### Derived search projection (opt-in)
+- `backend/internal/aisystem`：源/文本/向量/概览、查询、发布、投影、清理、迁移。
+- `backend/internal/core`、`internal/aigateway`：内部权限 RPC、公共 HTTP 适配和业务意图。
+- `backend/internal/asynccontrol`、`asyncjobs`：唯一执行权威、核心提交、后继与旧消息交接。
+- `backend/internal/ai/rag`：父子切片；`backend/parser_worker`：Python 解析器。
+- `backend/api/proto`、`api/openapi.yaml`：契约及生成入口。
+- `backend/{migrations,control-migrations,ai-migrations,archive-migrations}`：各自迁移 lane。
+- `web/src`：React/Ant Design 工作台；`deploy`：配置、Compose、启动、迁移与验证工具。
 
-The default development profile keeps search reads on PostgreSQL. To exercise
-the rebuildable projection consumer locally, start with:
-
-```bash
-SEARCH_INDEX_ENABLED=true ./deploy/up.sh --no-build --distributed-workers --ai-split --redis-split --search-indexer
-```
-
-This only validates the PostgreSQL projection fallback. Elasticsearch/Qdrant,
-Kafka, PostgreSQL HA/PITR, and production Gateway checks require the dedicated
-staging gates under `deploy/staging-*-check.sh`.
+历史性能快照保留在 `benchmark.md` 和 `artifacts/ai-eval/20260822T213102Z/`，对应旧架构与小数据集，不作为本次实现证据。

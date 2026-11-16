@@ -24,11 +24,11 @@ type Client struct {
 	timeout time.Duration
 }
 
-func NewClient(target string, timeout time.Duration) (*Client, error) {
+func NewClient(target string, timeout time.Duration, options ...grpc.DialOption) (*Client, error) {
 	if target == "" {
 		return nil, errors.New("document parser gRPC target is required")
 	}
-	conn, err := grpc.NewClient(target,
+	defaults := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig":[{"round_robin":{}}]}`),
 		grpc.WithDefaultCallOptions(
@@ -36,7 +36,8 @@ func NewClient(target string, timeout time.Duration) (*Client, error) {
 			grpc.MaxCallRecvMsgSize(MaxResponseBytes),
 		),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
-	)
+	}
+	conn, err := grpc.NewClient(target, append(defaults, options...)...)
 	if err != nil {
 		return nil, fmt.Errorf("create document parser client: %w", err)
 	}

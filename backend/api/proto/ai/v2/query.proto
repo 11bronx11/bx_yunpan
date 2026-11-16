@@ -1,0 +1,28 @@
+syntax = "proto3";
+package yunpan.ai.v2;
+import "core/v1/core.proto";
+option go_package = "github.com/11bronx11/bx_yunpan/backend/internal/ai/pbv2;pbv2";
+service AIQueryService {
+ rpc Search(SearchRequest) returns (SearchResponse);
+ rpc Ask(AskRequest) returns (AskResponse);
+ rpc BatchCapabilities(BatchCapabilitiesRequest) returns (BatchCapabilitiesResponse);
+ rpc GetOverview(GetOverviewRequest) returns (OverviewResponse);
+}
+message Scope { string mode=1; repeated string file_ids=2; string folder_id=3; bool include_subfolders=4; string snapshot_id=5; }
+message SearchRequest { string grant=1; string query=2; string mode=3; int32 limit=4; repeated string mime_types=5; }
+message Citation { string id=1; string file_id=2; string file_name=3; string content_version_id=4; string parent_id=5; string child_id=6; int64 content_generation=7; int32 page_number=8; string section=9; string excerpt=10; string source_version_id=11; }
+message SearchHit { yunpan.core.v1.FileRef file=1; double score=2; string match_type=3; repeated Citation citations=4; }
+message Retrieval { string text_backend=1; string vector_backend=2; bool degraded=3; repeated string reasons=4; int32 evidence_tokens=5; bool token_count_is_estimate=6; string text_target=7; string vector_target=8; }
+message Coverage { string mode=1; bool exhaustive=2; repeated string missing_evidence_file_ids=3; }
+message SearchResponse { repeated SearchHit hits=1; Retrieval retrieval=2; Coverage coverage=3; }
+message AskRequest { string grant=1; string question=2; string request_id=3; }
+message AskResponse { string answer=1; repeated Citation citations=2; Scope scope=3; Retrieval retrieval=4; Coverage coverage=5; }
+message LatestBuild { string state=1; string error_code=2; string observed_at=3; }
+message Capability { bool supported=1; bool available=2; string freshness=3; string coverage=4; LatestBuild latest_build=5; string version_id=6; }
+message Capabilities { bool askable=1; Capability source=2; Capability text=3; Capability vector=4; Capability summary=5; }
+message ObjectRef { string object_id=1; int64 content_generation=2; string mime_type=3; }
+message BatchCapabilitiesRequest { repeated ObjectRef objects=1; }
+message ObjectCapabilities { ObjectRef object=1; Capabilities capabilities=2; }
+message BatchCapabilitiesResponse { repeated ObjectCapabilities items=1; }
+message GetOverviewRequest { string grant=1; string file_id=2; }
+message OverviewResponse { string file_id=1; Capabilities capabilities=2; string summary=3; repeated string tags=4; string language=5; string preview_kind=6; string preview_state=7; Coverage coverage=8; }

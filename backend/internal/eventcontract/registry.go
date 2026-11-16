@@ -1,6 +1,9 @@
 package eventcontract
 
-import "sort"
+import (
+	"github.com/11bronx11/bx_yunpan/backend/internal/aiprotocol"
+	"sort"
+)
 
 const (
 	EventUploadExpiryRequestedV1   = "upload.expiry_requested.v1"
@@ -36,6 +39,8 @@ type Definition struct {
 }
 
 var definitions = map[string]Definition{
+	aiprotocol.IntentEvent:         {aiprotocol.IntentEvent, MessageKindCommand, 2, "file_object", func() any { return &aiprotocol.Intent{} }},
+	aiprotocol.TombstoneEvent:      {aiprotocol.TombstoneEvent, MessageKindDomainEvent, 2, "file_object", func() any { return &aiprotocol.Tombstone{} }},
 	EventUploadExpiryRequestedV1:   {EventUploadExpiryRequestedV1, MessageKindCommand, 1, "upload_session", func() any { return &UploadExpiryRequestedV1{} }},
 	EventFileCreatedV1:             {EventFileCreatedV1, MessageKindDomainEvent, 1, "file_entry", func() any { return &FileCreatedV1{} }},
 	EventFileUpdatedV1:             {EventFileUpdatedV1, MessageKindDomainEvent, 1, "file_entry", func() any { return &FileUpdatedV1{} }},

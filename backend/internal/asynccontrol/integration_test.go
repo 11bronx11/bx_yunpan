@@ -92,6 +92,31 @@ func dispatch(t *testing.T, s *Store, task Task) Task {
 	return c
 }
 
+func TestPermanentlyPausedLegacyQueueDoesNotBlockDispatch(t *testing.T) {
+	s, _ := testStore(t)
+	ctx := context.Background()
+	legacy := spec("retired-ai")
+	legacy.Kind = "ai.index"
+	if _, err := s.Ensure(ctx, legacy, "legacy-event"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.Exec("UPDATE queue_budgets SET paused_until='infinity' WHERE queue IN ('ai','search')").Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, queue := range []string{"ai", "search"} {
+		if _, ok, err := s.Reserve(ctx, queue); err != nil || ok {
+			t.Fatalf("permanently paused %s: reserved=%v error=%v", queue, ok, err)
+		}
+	}
+	current, err := s.Ensure(ctx, spec("current-upload"), "current-event")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.Reserve(ctx, current.Queue); err != nil || !ok || got.ID != current.ID {
+		t.Fatalf("current queue: task=%s reserved=%v error=%v", got.ID, ok, err)
+	}
+}
+
 func TestLeaseResultsAndDurableBudget(t *testing.T) {
 	s, _ := testStore(t)
 	ctx := context.Background()

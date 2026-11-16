@@ -55,6 +55,9 @@ func (s *Service) CommitAsync(tx *gorm.DB, kind string, in asyncprotocol.Input, 
 		if err := tx.Model(&o).Updates(map[string]any{"status": "deleting", "version": gorm.Expr("version+1"), "updated_at": now}).Error; err != nil {
 			return d, err
 		}
+		if err := outbox.TombstoneAI(tx.Statement.Context, tx, o.ID, o.ContentGeneration, o.Version+1); err != nil {
+			return d, err
+		}
 		_, err := storageops.Enqueue(tx, storageops.Input{OperationType: storageops.ObjectDelete, IdempotencyKey: fmt.Sprintf("object.delete:%s:%d:%d", o.ID, o.ContentGeneration, o.GCGeneration), ObjectID: &o.ID, SourceBucket: o.Bucket, SourceKey: o.ObjectKey})
 		return d, err
 	case storageops.ObjectDelete:
@@ -65,9 +68,6 @@ func (s *Service) CommitAsync(tx *gorm.DB, kind string, in asyncprotocol.Input, 
 			return d, fmt.Errorf("delete result lacks active authorization")
 		}
 		if err := tx.Exec("DELETE FROM object_variants WHERE object_id=?", o.ID).Error; err != nil {
-			return d, err
-		}
-		if err := tx.Exec("DELETE FROM ai_documents WHERE object_id=?", o.ID).Error; err != nil {
 			return d, err
 		}
 		if err := tx.Model(&o).Updates(map[string]any{"status": "deleted", "deleted_at": gorm.Expr("clock_timestamp()"), "version": gorm.Expr("version+1"), "updated_at": gorm.Expr("clock_timestamp()")}).Error; err != nil {

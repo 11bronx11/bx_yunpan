@@ -22,6 +22,7 @@ if missing:
     with open(path,'a') as f:f.write('\n# Added compatible configuration defaults\n'+''.join(missing))
 print('Environment preserved; added %d missing keys.'%len(missing))
 PYENV
+  python3 "$deploy_dir/ai-init-env.py" "$env_file"
   exit 0
 fi
 if [[ ! -f "$template_file" ]]; then
@@ -67,6 +68,7 @@ set_env GRAFANA_ADMIN_PASSWORD "$grafana_password"
 set_env RABBITMQ_PASSWORD "$(random_secret)"
 set_env ASYNC_POSTGRES_PASSWORD "$(random_secret)"
 set_env POSTGRES_READER_PASSWORD "$(random_secret)"
+python3 "$deploy_dir/ai-init-env.py" "$env_file"
 chmod 600 "$env_file"
 
 echo "Created $env_file from $(basename "$template_file") with local random secrets."

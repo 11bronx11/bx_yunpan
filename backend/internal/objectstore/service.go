@@ -70,6 +70,9 @@ func (s *Service) GarbageCollect(ctx context.Context, storage GCStorage, objectI
 				return err
 			}
 		}
+		if err := outbox.TombstoneAI(tx.Statement.Context, tx, object.ID, object.ContentGeneration, object.Version); err != nil {
+			return err
+		}
 		var err error
 		operation, err = storageops.Enqueue(tx, storageops.Input{
 			OperationType: storageops.ObjectDelete, IdempotencyKey: fmt.Sprintf("object.delete:%s:%d", objectID, object.Version),
@@ -224,9 +227,6 @@ func (s *Service) performObjectDelete(ctx context.Context, storage GCStorage, op
 			return storageops.MarkSucceededOwned(tx, operation.ID, operationLeaseToken(operation))
 		}
 		if err := tx.Where("object_id = ?", object.ID).Delete(&objectVariant{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Exec("DELETE FROM ai_documents WHERE object_id = ?", object.ID).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&Object{}).Where("id = ? AND status = 'deleting' AND reference_count = 0", object.ID).

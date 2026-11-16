@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Modal, Skeleton, Tag } from 'antd';
+import { Button, Space, Modal, Skeleton, Tag } from 'antd';
 import { FileTextOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import styled from '@emotion/styled';
 import { getFileAI } from '../services/ai';
@@ -97,7 +97,7 @@ const Metadata = styled.div`
 
 const unavailableMessage = '暂时无法查看AI摘要';
 
-const FileSummaryModal = ({ file, open, onClose }) => {
+const FileSummaryModal = ({ file, open, onClose, onDownload, onAsk }) => {
   const [document, setDocument] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -123,7 +123,9 @@ const FileSummaryModal = ({ file, open, onClose }) => {
   }, [file?.id, open]);
 
   const summary = useMemo(() => truncateSummary(document?.summary), [document?.summary]);
-  const available = document?.status === 'indexed' && Boolean(summary);
+  const available = Boolean(summary) && (document?.capabilities?.summary?.available ?? document?.status === 'indexed');
+  const previewState = document?.preview?.state || document?.capabilities?.summary?.latest_build?.state;
+  const stateMessage = error || ({ pending: '概览正在准备，文本就绪后仍可问答', failed: '概览生成失败，已就绪的文本仍可问答', unsupported: '此类型暂不支持概览，可下载查看' }[previewState] || unavailableMessage);
 
   return <SummaryModal
     open={open}
@@ -132,13 +134,13 @@ const FileSummaryModal = ({ file, open, onClose }) => {
     centered
     destroyOnClose
     onCancel={onClose}
-    footer={<Button onClick={onClose}>关闭</Button>}
+    footer={<Space>{onAsk && <Button disabled={!document?.capabilities?.askable} onClick={onAsk}>问此文件</Button>}{onDownload && <Button onClick={onDownload}>下载</Button>}<Button onClick={onClose}>关闭</Button></Space>}
   >
     <Content aria-live="polite" aria-busy={loading}>
       {loading && <Skeleton active paragraph={{ rows: 5 }} title={false} />}
       {!loading && (error || !available) && <Unavailable>
         <InfoCircleOutlined aria-hidden="true" />
-        <p>{unavailableMessage}</p>
+        <p>{stateMessage}</p>
       </Unavailable>}
       {!loading && available && <>
         <Summary>{summary}</Summary>

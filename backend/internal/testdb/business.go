@@ -16,6 +16,7 @@ import (
 )
 
 func Business(t *testing.T) *gorm.DB { return database(t, "TEST_POSTGRES_DSN", "migrations") }
+func AI(t *testing.T) *gorm.DB       { return database(t, "TEST_AI_POSTGRES_DSN", "ai-migrations") }
 func Control(t *testing.T) *gorm.DB {
 	return database(t, "TEST_CONTROL_POSTGRES_DSN", "control-migrations")
 }

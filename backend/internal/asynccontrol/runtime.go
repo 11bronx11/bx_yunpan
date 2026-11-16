@@ -114,7 +114,7 @@ func (s *Store) RunScheduler(ctx context.Context, b *Broker, holder string, logg
 				}
 				continue
 			}
-			for _, queue := range []string{"upload", "object", "media", "gc", "ai", "search"} {
+			for _, queue := range WorkQueues() {
 				for range 8 {
 					if err := s.RenewModule(live, "scheduler", token); err != nil {
 						return err
@@ -161,7 +161,7 @@ func (s *Store) RunResults(ctx context.Context, b *Broker, holder string, logger
 				}
 				continue
 			}
-			if err := b.Publish(live, b.ResultQueue(t.Shard), t.Notice()); err != nil {
+			if err := b.Publish(live, b.ResultQueueFor(t.EffectTarget, t.Shard), t.Notice()); err != nil {
 				return err
 			}
 		}

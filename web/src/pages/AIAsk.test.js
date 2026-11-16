@@ -2,9 +2,10 @@ import React from 'react';
 import { App } from 'antd';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import AIAsk from './AIAsk';
-import { askFiles } from '../services/ai';
+import { askFiles, getFileAI } from '../services/ai';
 
-jest.mock('../services/ai', () => ({ askFiles: jest.fn() }));
+jest.mock('../services/drive', () => ({ getRoot: jest.fn().mockResolvedValue({ id: 'root' }), getChildren: jest.fn(), getDownloadURL: jest.fn() }));
+jest.mock('../services/ai', () => ({ askFiles: jest.fn(), listAskableFiles: jest.fn(), getFileAI: jest.fn() }));
 beforeEach(() => jest.clearAllMocks());
 
 test('asks indexed files and renders the answer with citations', async () => {
@@ -18,7 +19,7 @@ test('asks indexed files and renders the answer with citations', async () => {
   await waitFor(() => expect(screen.getByRole('button', { name: '提问' })).toBeVisible());
   fireEvent.click(screen.getByRole('button', { name: '提问' }));
 
-  await waitFor(() => expect(askFiles).toHaveBeenCalledWith('有哪些待跟进事项？'));
+  await waitFor(() => expect(askFiles).toHaveBeenCalledWith('有哪些待跟进事项？', { scope: { mode: 'all' } }));
   await waitFor(() => expect(screen.getByLabelText('向文件提问')).toHaveValue(''));
   expect(await screen.findByText('待跟进事项包括接口联调和上线检查。')).toBeInTheDocument();
   expect(screen.getByText(/项目复盘\.pdf \/ 第 3 页/)).toBeInTheDocument();
@@ -40,7 +41,7 @@ test('confirms IME text without asking, keeps Shift+Enter, and submits with a la
   expect(askFiles).not.toHaveBeenCalled();
   fireEvent.keyDown(input, { key: 'Enter' });
   await waitFor(() => expect(askFiles).toHaveBeenCalledTimes(1));
-  expect(askFiles).toHaveBeenCalledWith('hello');
+  expect(askFiles).toHaveBeenCalledWith('hello', { scope: { mode: 'all' } });
   expect(input).toHaveValue('');
 });
 
@@ -64,4 +65,24 @@ test('does not overwrite a new draft when the previous question fails', async ()
   fireEvent.change(input, { target: { value: '新的草稿' } });
   await act(async () => rejectAsk(new Error('网络连接失败')));
   expect(input).toHaveValue('新的草稿');
+});
+
+test('keeps an invalid selected scope and question without retrying all files', async () => {
+  window.history.replaceState({}, '', '/ask?file=selected-id&name=alpha.txt');
+  getFileAI.mockResolvedValue({ capabilities: { askable: true } });
+  askFiles.mockRejectedValue(Object.assign(new Error('选择已失效'), { code: 'ai.scope_invalid' }));
+  render(<App><AIAsk /></App>);
+  await screen.findByText('alpha.txt');
+  const input = screen.getByLabelText('向文件提问');
+  fireEvent.change(input, { target: { value: '保留这个问题' } });
+  fireEvent.click(screen.getByRole('button', { name: '提问' }));
+  await screen.findByText('选择已失效');
+  expect(input).toHaveValue('保留这个问题');
+  expect(askFiles).toHaveBeenCalledTimes(1);
+  expect(askFiles).toHaveBeenCalledWith('保留这个问题', { scope: { mode: 'selected', file_ids: ['selected-id'] } });
+  expect(screen.getByRole('button', { name: '提问' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: '清空选择' }));
+  expect(screen.getByText('全部可问答文件')).toBeVisible();
+  expect(input).toHaveValue('保留这个问题');
+  window.history.replaceState({}, '', '/');
 });

@@ -12,6 +12,138 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for AICapabilityCoverage.
+const (
+	AICapabilityCoverageComplete AICapabilityCoverage = "complete"
+	AICapabilityCoverageNone     AICapabilityCoverage = "none"
+	AICapabilityCoveragePartial  AICapabilityCoverage = "partial"
+)
+
+// Valid indicates whether the value is a known member of the AICapabilityCoverage enum.
+func (e AICapabilityCoverage) Valid() bool {
+	switch e {
+	case AICapabilityCoverageComplete:
+		return true
+	case AICapabilityCoverageNone:
+		return true
+	case AICapabilityCoveragePartial:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AICapabilityFreshness.
+const (
+	Current  AICapabilityFreshness = "current"
+	Previous AICapabilityFreshness = "previous"
+)
+
+// Valid indicates whether the value is a known member of the AICapabilityFreshness enum.
+func (e AICapabilityFreshness) Valid() bool {
+	switch e {
+	case Current:
+		return true
+	case Previous:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AICapabilityLatestBuildState.
+const (
+	AICapabilityLatestBuildStateFailed     AICapabilityLatestBuildState = "failed"
+	AICapabilityLatestBuildStatePending    AICapabilityLatestBuildState = "pending"
+	AICapabilityLatestBuildStateSucceeded  AICapabilityLatestBuildState = "succeeded"
+	AICapabilityLatestBuildStateSuperseded AICapabilityLatestBuildState = "superseded"
+	AICapabilityLatestBuildStateUnknown    AICapabilityLatestBuildState = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the AICapabilityLatestBuildState enum.
+func (e AICapabilityLatestBuildState) Valid() bool {
+	switch e {
+	case AICapabilityLatestBuildStateFailed:
+		return true
+	case AICapabilityLatestBuildStatePending:
+		return true
+	case AICapabilityLatestBuildStateSucceeded:
+		return true
+	case AICapabilityLatestBuildStateSuperseded:
+		return true
+	case AICapabilityLatestBuildStateUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AICoverageMode.
+const (
+	AICoverageModeRetrieved AICoverageMode = "retrieved"
+	AICoverageModeSource    AICoverageMode = "source"
+)
+
+// Valid indicates whether the value is a known member of the AICoverageMode enum.
+func (e AICoverageMode) Valid() bool {
+	switch e {
+	case AICoverageModeRetrieved:
+		return true
+	case AICoverageModeSource:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AIDocumentPreviewKind.
+const (
+	AIDocumentPreviewKindDocumentSummary AIDocumentPreviewKind = "document_summary"
+	AIDocumentPreviewKindImageThumbnail  AIDocumentPreviewKind = "image_thumbnail"
+	AIDocumentPreviewKindNone            AIDocumentPreviewKind = "none"
+)
+
+// Valid indicates whether the value is a known member of the AIDocumentPreviewKind enum.
+func (e AIDocumentPreviewKind) Valid() bool {
+	switch e {
+	case AIDocumentPreviewKindDocumentSummary:
+		return true
+	case AIDocumentPreviewKindImageThumbnail:
+		return true
+	case AIDocumentPreviewKindNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AIDocumentPreviewState.
+const (
+	AIDocumentPreviewStateAvailable   AIDocumentPreviewState = "available"
+	AIDocumentPreviewStateFailed      AIDocumentPreviewState = "failed"
+	AIDocumentPreviewStatePending     AIDocumentPreviewState = "pending"
+	AIDocumentPreviewStateUnknown     AIDocumentPreviewState = "unknown"
+	AIDocumentPreviewStateUnsupported AIDocumentPreviewState = "unsupported"
+)
+
+// Valid indicates whether the value is a known member of the AIDocumentPreviewState enum.
+func (e AIDocumentPreviewState) Valid() bool {
+	switch e {
+	case AIDocumentPreviewStateAvailable:
+		return true
+	case AIDocumentPreviewStateFailed:
+		return true
+	case AIDocumentPreviewStatePending:
+		return true
+	case AIDocumentPreviewStateUnknown:
+		return true
+	case AIDocumentPreviewStateUnsupported:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AIDocumentStatus.
 const (
 	AIDocumentStatusFailed      AIDocumentStatus = "failed"
@@ -39,6 +171,69 @@ func (e AIDocumentStatus) Valid() bool {
 	}
 }
 
+// Defines values for AIScopeMode.
+const (
+	AIScopeModeAll      AIScopeMode = "all"
+	AIScopeModeFolder   AIScopeMode = "folder"
+	AIScopeModeSelected AIScopeMode = "selected"
+)
+
+// Valid indicates whether the value is a known member of the AIScopeMode enum.
+func (e AIScopeMode) Valid() bool {
+	switch e {
+	case AIScopeModeAll:
+		return true
+	case AIScopeModeFolder:
+		return true
+	case AIScopeModeSelected:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AskableFilePageItemsAiStatus.
+const (
+	AskableFilePageItemsAiStatusFailed      AskableFilePageItemsAiStatus = "failed"
+	AskableFilePageItemsAiStatusIndexed     AskableFilePageItemsAiStatus = "indexed"
+	AskableFilePageItemsAiStatusPending     AskableFilePageItemsAiStatus = "pending"
+	AskableFilePageItemsAiStatusProcessing  AskableFilePageItemsAiStatus = "processing"
+	AskableFilePageItemsAiStatusUnsupported AskableFilePageItemsAiStatus = "unsupported"
+)
+
+// Valid indicates whether the value is a known member of the AskableFilePageItemsAiStatus enum.
+func (e AskableFilePageItemsAiStatus) Valid() bool {
+	switch e {
+	case AskableFilePageItemsAiStatusFailed:
+		return true
+	case AskableFilePageItemsAiStatusIndexed:
+		return true
+	case AskableFilePageItemsAiStatusPending:
+		return true
+	case AskableFilePageItemsAiStatusProcessing:
+		return true
+	case AskableFilePageItemsAiStatusUnsupported:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AskableFilePageItemsType.
+const (
+	AskableFilePageItemsTypeFile AskableFilePageItemsType = "file"
+)
+
+// Valid indicates whether the value is a known member of the AskableFilePageItemsType enum.
+func (e AskableFilePageItemsType) Valid() bool {
+	switch e {
+	case AskableFilePageItemsTypeFile:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AuthResponseTokenType.
 const (
 	Bearer AuthResponseTokenType = "Bearer"
@@ -48,6 +243,24 @@ const (
 func (e AuthResponseTokenType) Valid() bool {
 	switch e {
 	case Bearer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ErrorEnvelopeInvalidFilesReason.
+const (
+	ErrorEnvelopeInvalidFilesReasonTextUnavailable ErrorEnvelopeInvalidFilesReason = "text_unavailable"
+	ErrorEnvelopeInvalidFilesReasonUnavailable     ErrorEnvelopeInvalidFilesReason = "unavailable"
+)
+
+// Valid indicates whether the value is a known member of the ErrorEnvelopeInvalidFilesReason enum.
+func (e ErrorEnvelopeInvalidFilesReason) Valid() bool {
+	switch e {
+	case ErrorEnvelopeInvalidFilesReasonTextUnavailable:
+		return true
+	case ErrorEnvelopeInvalidFilesReasonUnavailable:
 		return true
 	default:
 		return false
@@ -83,13 +296,13 @@ func (e FileEntryAiStatus) Valid() bool {
 
 // Defines values for FileEntryType.
 const (
-	File FileEntryType = "file"
+	FileEntryTypeFile FileEntryType = "file"
 )
 
 // Valid indicates whether the value is a known member of the FileEntryType enum.
 func (e FileEntryType) Valid() bool {
 	switch e {
-	case File:
+	case FileEntryTypeFile:
 		return true
 	default:
 		return false
@@ -113,19 +326,19 @@ func (e FolderType) Valid() bool {
 
 // Defines values for HealthStatus.
 const (
-	Degraded    HealthStatus = "degraded"
-	Ok          HealthStatus = "ok"
-	Unavailable HealthStatus = "unavailable"
+	HealthStatusDegraded    HealthStatus = "degraded"
+	HealthStatusOk          HealthStatus = "ok"
+	HealthStatusUnavailable HealthStatus = "unavailable"
 )
 
 // Valid indicates whether the value is a known member of the HealthStatus enum.
 func (e HealthStatus) Valid() bool {
 	switch e {
-	case Degraded:
+	case HealthStatusDegraded:
 		return true
-	case Ok:
+	case HealthStatusOk:
 		return true
-	case Unavailable:
+	case HealthStatusUnavailable:
 		return true
 	default:
 		return false
@@ -263,11 +476,14 @@ func (e ShareStatus) Valid() bool {
 
 // Defines values for TaskStatus.
 const (
-	TaskStatusCanceled  TaskStatus = "canceled"
-	TaskStatusFailed    TaskStatus = "failed"
-	TaskStatusPending   TaskStatus = "pending"
-	TaskStatusRunning   TaskStatus = "running"
-	TaskStatusSucceeded TaskStatus = "succeeded"
+	TaskStatusCanceled       TaskStatus = "canceled"
+	TaskStatusFailed         TaskStatus = "failed"
+	TaskStatusNeedsAttention TaskStatus = "needs_attention"
+	TaskStatusPartialSuccess TaskStatus = "partial_success"
+	TaskStatusPending        TaskStatus = "pending"
+	TaskStatusRunning        TaskStatus = "running"
+	TaskStatusSucceeded      TaskStatus = "succeeded"
+	TaskStatusSuperseded     TaskStatus = "superseded"
 )
 
 // Valid indicates whether the value is a known member of the TaskStatus enum.
@@ -277,11 +493,17 @@ func (e TaskStatus) Valid() bool {
 		return true
 	case TaskStatusFailed:
 		return true
+	case TaskStatusNeedsAttention:
+		return true
+	case TaskStatusPartialSuccess:
+		return true
 	case TaskStatusPending:
 		return true
 	case TaskStatusRunning:
 		return true
 	case TaskStatusSucceeded:
+		return true
+	case TaskStatusSuperseded:
 		return true
 	default:
 		return false
@@ -363,6 +585,72 @@ func (e Sort) Valid() bool {
 	}
 }
 
+// Defines values for ListAskableFilesParamsSort.
+const (
+	ListAskableFilesParamsSortNameAsc     ListAskableFilesParamsSort = "name_asc"
+	ListAskableFilesParamsSortUpdatedDesc ListAskableFilesParamsSort = "updated_desc"
+)
+
+// Valid indicates whether the value is a known member of the ListAskableFilesParamsSort enum.
+func (e ListAskableFilesParamsSort) Valid() bool {
+	switch e {
+	case ListAskableFilesParamsSortNameAsc:
+		return true
+	case ListAskableFilesParamsSortUpdatedDesc:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListAskableFilesParamsEligibility.
+const (
+	Askable ListAskableFilesParamsEligibility = "askable"
+)
+
+// Valid indicates whether the value is a known member of the ListAskableFilesParamsEligibility enum.
+func (e ListAskableFilesParamsEligibility) Valid() bool {
+	switch e {
+	case Askable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReprocessFileAIJSONBodyTargets.
+const (
+	ReprocessFileAIJSONBodyTargetsAll              ReprocessFileAIJSONBodyTargets = "all"
+	ReprocessFileAIJSONBodyTargetsProjectionText   ReprocessFileAIJSONBodyTargets = "projection_text"
+	ReprocessFileAIJSONBodyTargetsProjectionVector ReprocessFileAIJSONBodyTargets = "projection_vector"
+	ReprocessFileAIJSONBodyTargetsSource           ReprocessFileAIJSONBodyTargets = "source"
+	ReprocessFileAIJSONBodyTargetsSummary          ReprocessFileAIJSONBodyTargets = "summary"
+	ReprocessFileAIJSONBodyTargetsText             ReprocessFileAIJSONBodyTargets = "text"
+	ReprocessFileAIJSONBodyTargetsVectors          ReprocessFileAIJSONBodyTargets = "vectors"
+)
+
+// Valid indicates whether the value is a known member of the ReprocessFileAIJSONBodyTargets enum.
+func (e ReprocessFileAIJSONBodyTargets) Valid() bool {
+	switch e {
+	case ReprocessFileAIJSONBodyTargetsAll:
+		return true
+	case ReprocessFileAIJSONBodyTargetsProjectionText:
+		return true
+	case ReprocessFileAIJSONBodyTargetsProjectionVector:
+		return true
+	case ReprocessFileAIJSONBodyTargetsSource:
+		return true
+	case ReprocessFileAIJSONBodyTargetsSummary:
+		return true
+	case ReprocessFileAIJSONBodyTargetsText:
+		return true
+	case ReprocessFileAIJSONBodyTargetsVectors:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ListFolderChildrenParamsSort.
 const (
 	ListFolderChildrenParamsSortNameAsc  ListFolderChildrenParamsSort = "name_asc"
@@ -435,28 +723,109 @@ func (e ListActiveUploadsParamsStatus) Valid() bool {
 	}
 }
 
+// AICapabilities defines model for AICapabilities.
+type AICapabilities struct {
+	Askable *bool         `json:"askable,omitempty"`
+	Source  *AICapability `json:"source,omitempty"`
+	Summary *AICapability `json:"summary,omitempty"`
+	Text    *AICapability `json:"text,omitempty"`
+	Vector  *AICapability `json:"vector,omitempty"`
+}
+
+// AICapability defines model for AICapability.
+type AICapability struct {
+	Available   *bool                  `json:"available,omitempty"`
+	Coverage    *AICapabilityCoverage  `json:"coverage,omitempty"`
+	Freshness   *AICapabilityFreshness `json:"freshness,omitempty"`
+	LatestBuild *struct {
+		ErrorCode  *string                       `json:"error_code,omitempty"`
+		ObservedAt *string                       `json:"observed_at,omitempty"`
+		State      *AICapabilityLatestBuildState `json:"state,omitempty"`
+	} `json:"latest_build,omitempty"`
+	Supported *bool   `json:"supported,omitempty"`
+	VersionId *string `json:"version_id,omitempty"`
+}
+
+// AICapabilityCoverage defines model for AICapability.Coverage.
+type AICapabilityCoverage string
+
+// AICapabilityFreshness defines model for AICapability.Freshness.
+type AICapabilityFreshness string
+
+// AICapabilityLatestBuildState defines model for AICapability.LatestBuild.State.
+type AICapabilityLatestBuildState string
+
+// AICoverage defines model for AICoverage.
+type AICoverage struct {
+	Exhaustive             *bool           `json:"exhaustive,omitempty"`
+	MissingEvidenceFileIds *[]UUID         `json:"missing_evidence_file_ids,omitempty"`
+	Mode                   *AICoverageMode `json:"mode,omitempty"`
+}
+
+// AICoverageMode defines model for AICoverage.Mode.
+type AICoverageMode string
+
 // AIDocument defines model for AIDocument.
 type AIDocument struct {
-	ErrorCode *string `json:"error_code,omitempty"`
+	Capabilities AICapabilities `json:"capabilities"`
+	Coverage     *AICoverage    `json:"coverage,omitempty"`
+	ErrorCode    *string        `json:"error_code,omitempty"`
 
 	// FileId Example: 0198a1f0-7b2a-7000-8000-000000000001
-	FileId          UUID             `json:"file_id"`
-	Language        *string          `json:"language,omitempty"`
-	ModelVersion    string           `json:"model_version"`
-	PipelineVersion string           `json:"pipeline_version"`
-	Status          AIDocumentStatus `json:"status"`
-	Summary         *string          `json:"summary,omitempty"`
-	Tags            *[]string        `json:"tags,omitempty"`
+	FileId          UUID    `json:"file_id"`
+	Language        *string `json:"language,omitempty"`
+	ModelVersion    *string `json:"model_version,omitempty"`
+	PipelineVersion *string `json:"pipeline_version,omitempty"`
+	Preview         struct {
+		Kind  *AIDocumentPreviewKind  `json:"kind,omitempty"`
+		State *AIDocumentPreviewState `json:"state,omitempty"`
+	} `json:"preview"`
+	Status  *AIDocumentStatus `json:"status,omitempty"`
+	Summary *string           `json:"summary,omitempty"`
+	Tags    *[]string         `json:"tags,omitempty"`
 }
+
+// AIDocumentPreviewKind defines model for AIDocument.Preview.Kind.
+type AIDocumentPreviewKind string
+
+// AIDocumentPreviewState defines model for AIDocument.Preview.State.
+type AIDocumentPreviewState string
 
 // AIDocumentStatus defines model for AIDocument.Status.
 type AIDocumentStatus string
+
+// AIRetrieval defines model for AIRetrieval.
+type AIRetrieval struct {
+	Degraded             *bool     `json:"degraded,omitempty"`
+	EvidenceTokens       *int      `json:"evidence_tokens,omitempty"`
+	Reasons              *[]string `json:"reasons,omitempty"`
+	TextBackend          *string   `json:"text_backend,omitempty"`
+	TextTarget           *string   `json:"text_target,omitempty"`
+	TokenCountIsEstimate *bool     `json:"token_count_is_estimate,omitempty"`
+	VectorBackend        *string   `json:"vector_backend,omitempty"`
+	VectorTarget         *string   `json:"vector_target,omitempty"`
+}
+
+// AIScope Explicit selected requires 1..50 unique file IDs. New scope cannot be combined with legacy file_ids/folder_id.
+type AIScope struct {
+	FileIds           *[]UUID       `json:"file_ids,omitempty"`
+	FolderId          *NullableUUID `json:"folder_id,omitempty"`
+	IncludeSubfolders *bool         `json:"include_subfolders,omitempty"`
+	Mode              AIScopeMode   `json:"mode"`
+	SnapshotId        *string       `json:"snapshot_id,omitempty"`
+}
+
+// AIScopeMode defines model for AIScope.Mode.
+type AIScopeMode string
 
 // AskRequest defines model for AskRequest.
 type AskRequest struct {
 	FileIds  *[]UUID       `json:"file_ids,omitempty"`
 	FolderId *NullableUUID `json:"folder_id,omitempty"`
 	Question string        `json:"question"`
+
+	// Scope Explicit selected requires 1..50 unique file IDs. New scope cannot be combined with legacy file_ids/folder_id.
+	Scope *AIScope `json:"scope,omitempty"`
 }
 
 // AskResponse Citations contain only model-selected evidence IDs validated against the retrieved authorized chunks.
@@ -464,11 +833,52 @@ type AskResponse struct {
 	Answer string `json:"answer"`
 
 	// Citations Empty when the answer is not grounded in the retrieved evidence.
-	Citations []Citation `json:"citations"`
+	Citations []Citation  `json:"citations"`
+	Coverage  *AICoverage `json:"coverage,omitempty"`
 
 	// Grounded True only when at least one returned citation survived server-side evidence validation.
-	Grounded bool `json:"grounded"`
+	Grounded  bool         `json:"grounded"`
+	Retrieval *AIRetrieval `json:"retrieval,omitempty"`
+
+	// Scope Explicit selected requires 1..50 unique file IDs. New scope cannot be combined with legacy file_ids/folder_id.
+	Scope *AIScope `json:"scope,omitempty"`
 }
+
+// AskableFilePage defines model for AskableFilePage.
+type AskableFilePage struct {
+	Items []struct {
+		AiStatus     *AskableFilePageItemsAiStatus `json:"ai_status,omitempty"`
+		Capabilities *AICapabilities               `json:"capabilities,omitempty"`
+		CreatedAt    Timestamp                     `json:"created_at"`
+
+		// FolderId Example: 0198a1f0-7b2a-7000-8000-000000000001
+		FolderId UUID `json:"folder_id"`
+
+		// Id Example: 0198a1f0-7b2a-7000-8000-000000000001
+		Id       UUID   `json:"id"`
+		MimeType string `json:"mime_type"`
+		Name     string `json:"name"`
+
+		// ObjectId Example: 0198a1f0-7b2a-7000-8000-000000000001
+		ObjectId UUID `json:"object_id"`
+
+		// OwnerId Example: 0198a1f0-7b2a-7000-8000-000000000001
+		OwnerId      UUID                     `json:"owner_id"`
+		SizeBytes    int64                    `json:"size_bytes"`
+		ThumbnailUrl *string                  `json:"thumbnail_url,omitempty"`
+		Type         AskableFilePageItemsType `json:"type"`
+		UpdatedAt    Timestamp                `json:"updated_at"`
+		Version      int64                    `json:"version"`
+	} `json:"items"`
+	Page           PageInfo `json:"page"`
+	ScanIncomplete bool     `json:"scan_incomplete"`
+}
+
+// AskableFilePageItemsAiStatus defines model for AskableFilePage.Items.AiStatus.
+type AskableFilePageItemsAiStatus string
+
+// AskableFilePageItemsType defines model for AskableFilePage.Items.Type.
+type AskableFilePageItemsType string
 
 // AuthResponse defines model for AuthResponse.
 type AuthResponse struct {
@@ -488,14 +898,26 @@ type Breadcrumb struct {
 
 // Citation defines model for Citation.
 type Citation struct {
-	Excerpt string `json:"excerpt"`
+	// ChildId Example: 0198a1f0-7b2a-7000-8000-000000000001
+	ChildId           *UUID  `json:"child_id,omitempty"`
+	ContentGeneration *int64 `json:"content_generation,omitempty"`
+
+	// ContentVersionId Example: 0198a1f0-7b2a-7000-8000-000000000001
+	ContentVersionId *UUID  `json:"content_version_id,omitempty"`
+	Excerpt          string `json:"excerpt"`
 
 	// FileId Example: 0198a1f0-7b2a-7000-8000-000000000001
-	FileId     UUID    `json:"file_id"`
-	FileName   string  `json:"file_name"`
-	Id         string  `json:"id"`
-	PageNumber *int    `json:"page_number,omitempty"`
-	Section    *string `json:"section,omitempty"`
+	FileId     UUID   `json:"file_id"`
+	FileName   string `json:"file_name"`
+	Id         string `json:"id"`
+	PageNumber *int   `json:"page_number,omitempty"`
+
+	// ParentId Example: 0198a1f0-7b2a-7000-8000-000000000001
+	ParentId *UUID   `json:"parent_id,omitempty"`
+	Section  *string `json:"section,omitempty"`
+
+	// SourceVersionId Example: 0198a1f0-7b2a-7000-8000-000000000001
+	SourceVersionId *UUID `json:"source_version_id,omitempty"`
 }
 
 // ConfirmPartsRequest defines model for ConfirmPartsRequest.
@@ -575,8 +997,18 @@ type ErrorEnvelope struct {
 		Details *map[string]interface{} `json:"details,omitempty"`
 		Message string                  `json:"message"`
 	} `json:"error"`
+
+	// InvalidFiles Present for ai.scope_invalid. Contains only IDs from the submitted selection, without permission or ownership details.
+	InvalidFiles *[]struct {
+		// FileId Example: 0198a1f0-7b2a-7000-8000-000000000001
+		FileId UUID                            `json:"file_id"`
+		Reason ErrorEnvelopeInvalidFilesReason `json:"reason"`
+	} `json:"invalid_files,omitempty"`
 	RequestId string `json:"request_id"`
 }
+
+// ErrorEnvelopeInvalidFilesReason defines model for ErrorEnvelope.InvalidFiles.Reason.
+type ErrorEnvelopeInvalidFilesReason string
 
 // FileEntry defines model for FileEntry.
 type FileEntry struct {
@@ -809,8 +1241,10 @@ type SearchRequestMode string
 
 // SearchResponse defines model for SearchResponse.
 type SearchResponse struct {
-	Hits []SearchHit `json:"hits"`
-	Page PageInfo    `json:"page"`
+	Coverage  *AICoverage  `json:"coverage,omitempty"`
+	Hits      []SearchHit  `json:"hits"`
+	Page      PageInfo     `json:"page"`
+	Retrieval *AIRetrieval `json:"retrieval,omitempty"`
 }
 
 // Share defines model for Share.
@@ -977,6 +1411,24 @@ type Unauthorized = ErrorEnvelope
 // ValidationError defines model for ValidationError.
 type ValidationError = ErrorEnvelope
 
+// ListAskableFilesParams defines parameters for ListAskableFiles.
+type ListAskableFilesParams struct {
+	Q                 *string                            `form:"q,omitempty" json:"q,omitempty"`
+	FolderId          *UUID                              `form:"folder_id,omitempty" json:"folder_id,omitempty"`
+	IncludeSubfolders *bool                              `form:"include_subfolders,omitempty" json:"include_subfolders,omitempty"`
+	MimeTypes         *[]string                          `form:"mime_types,omitempty" json:"mime_types,omitempty"`
+	Sort              *ListAskableFilesParamsSort        `form:"sort,omitempty" json:"sort,omitempty"`
+	Cursor            *string                            `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit             *int                               `form:"limit,omitempty" json:"limit,omitempty"`
+	Eligibility       *ListAskableFilesParamsEligibility `form:"eligibility,omitempty" json:"eligibility,omitempty"`
+}
+
+// ListAskableFilesParamsSort defines parameters for ListAskableFiles.
+type ListAskableFilesParamsSort string
+
+// ListAskableFilesParamsEligibility defines parameters for ListAskableFiles.
+type ListAskableFilesParamsEligibility string
+
 // LogoutParams defines parameters for Logout.
 type LogoutParams struct {
 	Origin Origin `json:"Origin"`
@@ -999,10 +1451,19 @@ type UpdateFileParams struct {
 	IfMatch IfMatch `json:"If-Match"`
 }
 
+// ReprocessFileAIJSONBody defines parameters for ReprocessFileAI.
+type ReprocessFileAIJSONBody struct {
+	Profile *string                           `json:"profile,omitempty"`
+	Targets *[]ReprocessFileAIJSONBodyTargets `json:"targets,omitempty"`
+}
+
 // ReprocessFileAIParams defines parameters for ReprocessFileAI.
 type ReprocessFileAIParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
+
+// ReprocessFileAIJSONBodyTargets defines parameters for ReprocessFileAI.
+type ReprocessFileAIJSONBodyTargets string
 
 // MoveFileParams defines parameters for MoveFile.
 type MoveFileParams struct {
@@ -1093,6 +1554,9 @@ type RegisterUserJSONRequestBody = RegisterRequest
 
 // UpdateFileJSONRequestBody defines body for UpdateFile for application/json ContentType.
 type UpdateFileJSONRequestBody = RenameRequest
+
+// ReprocessFileAIJSONRequestBody defines body for ReprocessFileAI for application/json ContentType.
+type ReprocessFileAIJSONRequestBody ReprocessFileAIJSONBody
 
 // MoveFileJSONRequestBody defines body for MoveFile for application/json ContentType.
 type MoveFileJSONRequestBody = MoveRequest

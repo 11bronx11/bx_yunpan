@@ -61,6 +61,9 @@ func ImportLegacy(ctx context.Context, business *gorm.DB, s *asynccontrol.Store,
 	defer s.DB.WithContext(context.WithoutCancel(ctx)).Exec("UPDATE module_leases SET lease_until=clock_timestamp() WHERE name='relay' AND token=?", token)
 	relay := asynccontrol.Relay{Control: s, Business: business, Source: "business-primary", Rows: 200, Bytes: 1 << 20, Plan: func(ctx context.Context, e asynccontrol.Event) ([]asynccontrol.Spec, error) {
 		specs, err := p.Plan(ctx, e)
+		if err == nil {
+			specs, err = p.legacyAIPlan(ctx, e, specs)
+		}
 		if err != nil {
 			return nil, err
 		}

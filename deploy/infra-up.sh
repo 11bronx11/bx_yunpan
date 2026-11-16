@@ -18,7 +18,8 @@ fi
 docker compose \
   --env-file "$env_file" \
   -f "$deploy_dir/compose.yaml" \
-  up -d --wait --wait-timeout 120 postgres redis minio rabbitmq async-postgres
+  --profile app --profile ai-split \
+  up -d --wait --wait-timeout 120 postgres redis minio rabbitmq async-postgres ai-postgres etcd
 
 docker compose \
   --env-file "$env_file" \

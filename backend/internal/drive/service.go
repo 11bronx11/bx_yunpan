@@ -293,9 +293,8 @@ func (s *Service) loadChildrenPage(ctx context.Context, ownerID, folderID uuid.U
 	folderQuery := s.db.WithContext(ctx).Where("owner_id = ? AND parent_id = ? AND deleted_at IS NULL", ownerID, folderID)
 	var files []FileView
 	fileQuery := s.db.WithContext(ctx).Table("file_entries e").
-		Select("e.*, o.size_bytes, o.mime_type, o.sha256, d.status AS ai_status").
+		Select("e.*, o.size_bytes, o.mime_type, o.sha256").
 		Joins("JOIN file_objects o ON o.id = e.object_id AND o.status = 'ready'").
-		Joins("LEFT JOIN ai_documents d ON d.object_id = e.object_id").
 		Where("e.owner_id = ? AND e.folder_id = ? AND e.deleted_at IS NULL", ownerID, folderID)
 	desc := sortName == "name_desc"
 	if cursor != nil {
@@ -346,10 +345,9 @@ func (s *Service) loadChildren(ownerID, folderID uuid.UUID) ([]Folder, []FileVie
 	}
 	var files []FileView
 	err = s.db.Raw(`
-	        SELECT e.*, o.size_bytes, o.mime_type, o.sha256, d.status AS ai_status
+	        SELECT e.*, o.size_bytes, o.mime_type, o.sha256
 	        FROM file_entries e
 	        JOIN file_objects o ON o.id = e.object_id AND o.status = 'ready'
-	        LEFT JOIN ai_documents d ON d.object_id = e.object_id
 	        WHERE e.owner_id = ? AND e.folder_id = ? AND e.deleted_at IS NULL
 	        ORDER BY e.name_normalized ASC`, ownerID, folderID).Scan(&files).Error
 	return folders, files, err
@@ -358,26 +356,9 @@ func (s *Service) loadChildren(ownerID, folderID uuid.UUID) ([]Folder, []FileVie
 // Indexing changes independently of the directory cache. Read all displayed
 // statuses in one query after loading cached metadata, including old payloads.
 func (s *Service) refreshAIStatuses(ctx context.Context, files []FileView) error {
-	if len(files) == 0 {
-		return nil
-	}
-	objectIDs := make([]uuid.UUID, len(files))
+	// Deprecated compatibility field. Content capabilities are fetched via AI v2.
 	for i := range files {
-		objectIDs[i] = files[i].ObjectID
-	}
-	var rows []struct {
-		ObjectID uuid.UUID
-		Status   *string
-	}
-	if err := s.db.WithContext(ctx).Table("ai_documents").Select("object_id, status").Where("object_id IN ?", objectIDs).Scan(&rows).Error; err != nil {
-		return err
-	}
-	statuses := make(map[uuid.UUID]*string, len(rows))
-	for _, row := range rows {
-		statuses[row.ObjectID] = row.Status
-	}
-	for i := range files {
-		files[i].AIStatus = statuses[files[i].ObjectID]
+		files[i].AIStatus = nil
 	}
 	return nil
 }
@@ -721,10 +702,9 @@ func (s *Service) File(ownerID, fileID uuid.UUID) (FileView, error) {
 func (s *Service) loadFile(ownerID, fileID uuid.UUID) (FileView, error) {
 	var file FileView
 	err := s.db.Raw(`
-	        SELECT e.*, o.size_bytes, o.mime_type, o.sha256, d.status AS ai_status
+	        SELECT e.*, o.size_bytes, o.mime_type, o.sha256
 	        FROM file_entries e
 	        JOIN file_objects o ON o.id = e.object_id AND o.status = 'ready'
-	        LEFT JOIN ai_documents d ON d.object_id = e.object_id
 	        WHERE e.id = ? AND e.owner_id = ? AND e.deleted_at IS NULL`, fileID, ownerID).Scan(&file).Error
 	if err != nil || file.ID == uuid.Nil {
 		return FileView{}, ErrNotFound

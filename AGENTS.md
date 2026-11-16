@@ -4,7 +4,7 @@ BX YunPan：React 18 + Go（Gin）的私有云盘，带分片上传、秒传、�
 
 ## 先知道这几件事
 
-- **README 有一部分是旧的。** 任务队列在 2026-10-08 从 Asynq 换成了 RabbitMQ，README 的架构图和「Redis/Asynq Worker」等说法没跟上。当前异步系统已改成独立控制 PG + 明确计算角色 + committer；Redis 只做缓存与限流，不再负责异步选主。当前入口见 `docs/ASYNC_SYSTEM_IMPLEMENTATION_2026-11-16.md`；两个 11-03 文档保留为旧源码快照。
+- **README 有一部分是旧的。** 任务队列在 2026-10-08 从 Asynq 换成了 RabbitMQ，README 的架构图和「Redis/Asynq Worker」等说法没跟上。当前异步系统已改成独立控制 PG + 明确计算角色 + committer；Redis 只做缓存与限流，不再负责异步选主。当前入口见 `docs/ASYNC_SYSTEM_IMPLEMENTATION_2026-11-16.md` 和 `docs/AI_SYSTEM_IMPLEMENTATION_2026-11-16.md`；两个 11-03 文档保留为旧源码快照。
 - **`docs/` 默认被 `.gitignore` 忽略**，只有白名单里的文件入库；`artifacts/` 整个忽略。新文档要入库，得在 `.gitignore` 加一行 `!docs/<文件名>`。
 - **仓库里没有 CI 配置**（无 `.github/`），格式化、vet、测试都靠本地跑。
 - 写验证报告的惯例：只写实际执行过的结果。单机 smoke、fake provider、静态检查不写成容量或高可用结论。
@@ -20,7 +20,7 @@ go test -p=1 ./...                                   # 全量；集成用例缺�
 go test ./internal/outbox -run 'TestName' -count=1   # 单个测试
 make fmt             # gofumpt + goimports
 make lint            # golangci-lint，仓库里没有配置文件，用默认规则
-make proto           # 改了 api/proto 后重新生成 internal/ai/pb（生成物入库）
+make proto           # 改了 api/proto 后重新生成 internal/ai/pb、pbv2 和 internal/core/pb（生成物入库）
 make proto-check     # 校验生成物没有漏提交
 go generate ./api    # 改了 api/openapi.yaml 后重新生成 internal/contract/api.gen.go
 ```
@@ -31,6 +31,7 @@ HTTP handler 不依赖 `internal/contract` 的生成代码，改接口时要同�
 
 - `TEST_POSTGRES_DSN`：专用业务测试库；绝大多数集成用例
 - `TEST_CONTROL_POSTGRES_DSN`：专用独立控制测试库
+- `TEST_AI_POSTGRES_DSN`：专用独立 AI 测试库；`TEST_AI_SPLIT=true` 与真实 parser/etcd/ES/QD 等变量开启新三库链路
 - `TEST_ASYNC_CORE=true` + `TEST_POSTGRES_READONLY_DSN`：开启真实 HTTP/MQ/MinIO 核心冒烟，读角色必须无业务写权限
 - `TEST_RABBITMQ_URL` + `TEST_RABBITMQ_MANAGEMENT_URL`
 - `TEST_MINIO_ENDPOINT` / `TEST_MINIO_ACCESS_KEY` / `TEST_MINIO_SECRET_KEY`
@@ -39,11 +40,13 @@ HTTP handler 不依赖 `internal/contract` 的生成代码，改接口时要同�
 
 夹具的隔离程度不一样：identity、outbox 等包在目标库里建独立 schema（RabbitMQ 用独立 vhost），结束时删除；storageops、recovery、upload 并发、sharing、search 等夹具使用独立迁移 schema；仍有兼容用例读写目标库 `public`，不能据此把整个测试套件指向开发库。outbox 的夹具还用 `CREATE TABLE ... LIKE public.<表>` 克隆表结构。所以要用一个跑过迁移的专用测试库，不要指向开发库。
 
-迁移文件是 `backend/migrations/NNNNNN_name.{up,down}.sql`（golang-migrate，当前到 000034；控制迁移独立放在 `backend/control-migrations/`，当前到 000002）：
+迁移文件是 `backend/migrations/NNNNNN_name.{up,down}.sql`（golang-migrate，当前到 000036；控制迁移独立放在 `backend/control-migrations/`，当前到 000004；AI 迁移在 `backend/ai-migrations/`，当前到 000007；归档独立放在 `backend/archive-migrations/`）：
 
 ```bash
 ./deploy/local-run.sh migrate up        # 业务库；还支持 down-one、version
 ./deploy/local-run.sh migrate control up # 独立控制库
+./deploy/local-run.sh migrate ai up      # 独立 AI 库
+./deploy/local-run.sh ai-reader-init     # query / compute / commit 独立账号
 ```
 
 前端，在 `web/` 下，要求 Node.js 22+：
@@ -87,16 +90,16 @@ ASYNC_LEGACY_WRITERS_STOPPED=true ./deploy/local-run.sh async-import # 先停旧
 ./deploy/local-frontend.sh        # :3000
 ```
 
-`local-run.sh` 和 `local-frontend.sh` 从 `deploy/.env` 派生宿主机地址，包括 RabbitMQ、业务只读 PG 和控制 PG；不要另外维护配置。默认宿主机 metrics 端口由角色分配为 18083–18091，可用调用环境中的 `WORKER_METRICS_ADDR` 覆盖。`worker` 只是 `async-control` 的兼容别名，不再启动计算角色。
+`local-run.sh` 和 `local-frontend.sh` 从 `deploy/.env` 派生宿主机地址，包括 RabbitMQ、业务只读 PG 和控制 PG；不要另外维护配置。默认宿主机 metrics 端口由角色分配为 18083–18100，可用调用环境中的 `WORKER_METRICS_ADDR` 覆盖。`worker` 只是 `async-control` 的兼容别名，不再启动计算角色。
 ## 架构
 
 ### 进程与部署形态
 
 `backend/` 是一个 Go module。`cmd/*` 的入口装配在 `internal/bootstrap`。业务 PG 是唯一业务事实源；独立控制 PG 是唯一任务执行权威。MinIO 保存字节；Redis、Elasticsearch、Qdrant 是可重建的加速层。控制库可以位于独立 PG 实例，测试使用同一实例的两个数据库不等于实例资源隔离。
 
-核心默认进程是 `api`、`async-control`、`committer`、`upload-worker`、`object-worker`、`media-worker`、`gc-worker`。`--distributed-workers` 现为默认形态的兼容参数。`--ai-split` 仍拆分查询与索引，`--search-indexer` 启用搜索投影。旧 `worker` / `outbox-relay` 命令只映射控制角色，`maintenance-worker` 只映射 GC；不要与对应新角色一起启动。
+核心默认进程是 `api`、`async-control`、`committer`、`upload-worker`、`object-worker`、`media-worker`、`gc-worker`。`--distributed-workers` 现为默认形态的兼容参数。AI 默认是 `core-internal`、`ai-query`、`ai-content-worker`、`ai-embedding-worker`、`ai-summary-worker`、`ai-committer` 和 parser，`--ai-split` 是兼容参数；ES/QD projector 分开启动。旧 `worker` / `outbox-relay` 命令只映射控制角色，`maintenance-worker` 只映射 GC；不要与对应新角色一起启动。
 
-核心计算进程通过 `dependencies.OpenAsync` 取得控制池、保留控制池及业务只读池，没有业务写池；业务只读角色必须无写权限。`committer` 额外取得业务写池。API 不打开控制 PG 或 broker；其配置校验和 HTTP readiness 不要求二者健康。AI/search 仍有派生数据写连接，这是本轮保留的兼容边界。
+核心计算进程通过 `dependencies.OpenAsync` 取得控制池、保留控制池及业务只读池，没有业务写池；业务只读角色必须无写权限。`committer` 额外取得业务写池。API 不打开控制 PG 或 broker；其配置校验和 HTTP readiness 不要求二者健康。AI 在线角色只连接独立 AI PG，通过 core RPC 获取权限、对象和短期授权；没有业务 SQL 池。query 仅能读发布视图，compute 仅能写 staging，ai-committer 才能发布。
 
 ### 异步链路与修改入口
 
@@ -123,11 +126,15 @@ ASYNC_LEGACY_WRITERS_STOPPED=true ./deploy/local-run.sh async-import # 先停旧
 
 ### AI、解析与搜索
 
-- `AI_ENABLED=false` 时 API 使用 `ai.DisabledBackend`，搜索、问答、重建索引都返回 `503 ai.unavailable`，控制订阅计划记录 AI 未订阅。
-- API 调 aisvc 走 etcd 注册、自定义 gRPC resolver（`platform/registry`）和 `round_robin`。Search 和 Ask 走 gRPC；Reprocess 是 core-api 自己的命令，在本地事务里写任务和 outbox。
-- `parser-svc` 是 Go 进程，启动时拉起 Python 子进程 `parser_worker.server`（代码在 `backend/parser_worker/`）做文档解析。
-- 向量维度在迁移里写死为 `vector(1024)`，`AI_EMBEDDING_DIMENSION` 不一致时 `up.sh` 会拒绝启动。
-- 检索默认读 PostgreSQL（FTS、pgvector、RRF 融合）。Elasticsearch 和 Qdrant 是可选的派生投影，由 `search/projector.go` 写入，可以重建，对业务表没有外键。
+- API 的 `aigateway` 走 ai/v2 gRPC + etcd resolver；`core-internal` 提供带服务身份和 scope/processing grant 的 core/v1 RPC。AI 无业务 SQL、跨库 JOIN 或业务作业写连接。
+- `AI_ENABLED=false` 时内容搜索/问答/重建返回 503，core 文件名搜索仍可用。文本准备不要求模型；`AI_VECTORS_ENABLED`、`AI_SUMMARY_ENABLED`、`AI_ASK_ENABLED` 各自开关。
+- 控制 effect target 分 core / AI，AI result shard 与核心隔离。staging 只有经接纳、ai-committer 发布并写 receipt 才可见，控制确认和冻结后继释放在同一事务。
+- `aisystem/planner.go`、`compute.go`、`publish.go`、`projection.go`、`query.go` 分别负责计划、计算、发布、独立 ES/QD 投影、检索问答。source、text、vectors、summary 的 desired seq 和 active pointer 分开，失败快照不能覆盖新成功。
+- 独立父子片由 `ai/rag/parent_child.go` 生成，子文本不要求向量。全文请求不调用模型；semantic 需要兼容 query embedding，hybrid 可文本降级。外部投影读必须有 AI PG active/coverage 证明，失败回退 PG。
+- scope 先由 core 校验、分页后参与召回；reranker/模型之前及返回证据前回验。最多 50 个指定文件，不设每文件最多两片；引用含 source/content/parent/child 版本。普通 RAG 不代表全文穷尽分析。
+- `parser-svc` 拉起 Python `parser_worker.server`；保留文本、PDF、DOCX、CSV、XLSX 等现有能力，不宣称 PPTX、旧 DOC/PPT 或 OCR 已完整支持。图片缩略图仍走原 media 链。
+- 业务 36 只建立切换标记，不自动移动旧表。`ai-upgrade.sh prepare/verify/archive` 提供保留数据的分批交接、重建和独立归档；旧 computed 无证明时隔离，不丢结果重算，不重跑核心 async-import，不 purge。归档 down 恢复旧表/FK，不反向转换新 AI 数据。
+- AI staging、退休版本及未接纳外部物理输出按安全宽限清理；active、未提交结果、墓碑和 receipt 保留。维护任务只由控制库调度。
 
 ### 缓存与锁
 

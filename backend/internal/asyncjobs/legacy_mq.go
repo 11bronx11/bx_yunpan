@@ -20,13 +20,6 @@ import (
 // an old payload, creates TTL retries or purges queues. Every ACK follows a
 // durable transfer/quarantine record. Old retry queues are drained first.
 func TransferLegacyMessages(ctx context.Context, url string, s *asynccontrol.Store, testPrefix ...string) error {
-	conn, err := amqp.DialConfig(url, amqp.Config{Heartbeat: 10 * time.Second, Locale: "en_US"})
-	if err != nil {
-		return errors.New("legacy broker unavailable")
-	}
-	defer conn.Close()
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stop()
 	queues := []string{}
 	for _, q := range []string{"object", "media", "maintenance", "upload", "ai", "search"} {
 		for _, delay := range []string{"1000", "5000", "30000", "60000", "300000"} {
@@ -40,6 +33,29 @@ func TransferLegacyMessages(ctx context.Context, url string, s *asynccontrol.Sto
 			queues[i] = testPrefix[0] + queues[i]
 		}
 	}
+	return transferLegacyMessages(ctx, url, s, queues)
+}
+
+// TransferLegacyAIMessages handles only the retired AI/search lanes. It does
+// not repeat core import or consume shared core result shards.
+func TransferLegacyAIMessages(ctx context.Context, url string, s *asynccontrol.Store, prefix string) error {
+	queues := []string{}
+	for _, q := range []string{"ai", "search"} {
+		for _, delay := range []string{"1000", "5000", "30000", "60000", "300000"} {
+			queues = append(queues, q+".retry."+delay)
+		}
+		queues = append(queues, q+".dlq", q, prefix+".work."+q)
+	}
+	return transferLegacyMessages(ctx, url, s, queues)
+}
+func transferLegacyMessages(ctx context.Context, url string, s *asynccontrol.Store, queues []string) error {
+	conn, err := amqp.DialConfig(url, amqp.Config{Heartbeat: 10 * time.Second, Locale: "en_US"})
+	if err != nil {
+		return errors.New("legacy broker unavailable")
+	}
+	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	total := 0
 	for pass := 0; pass < 2; pass++ {
 		for _, queue := range queues {

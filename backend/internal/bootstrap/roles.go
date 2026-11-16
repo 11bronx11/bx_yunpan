@@ -4,25 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
-	"net/http"
 
 	"github.com/google/uuid"
-	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/11bronx11/bx_yunpan/backend/internal/asynccontrol"
-	"github.com/11bronx11/bx_yunpan/backend/internal/asyncprotocol"
 	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
-	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
-	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dbmetrics"
-	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dependencies"
 	platformworker "github.com/11bronx11/bx_yunpan/backend/internal/platform/worker"
-	"github.com/11bronx11/bx_yunpan/backend/internal/search"
 	"github.com/11bronx11/bx_yunpan/backend/internal/storageops"
 	"github.com/11bronx11/bx_yunpan/backend/internal/upload"
 )
@@ -48,38 +39,7 @@ func RunRole(ctx context.Context, cfg config.Config, logger *slog.Logger, role p
 }
 
 func RunSearchIndexer(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
-	ctx = outbox.WithSearchEnabled(ctx, true)
-	deps, err := dependencies.Open(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	defer deps.Close()
-	ctx, background := newBackgroundGroup(ctx)
-	defer background.Close()
-	projector := search.NewProjector(deps.GORM, cfg.Search.IndexEpoch)
-	if searchBackendConfigured(cfg.Search) {
-		client := &http.Client{Timeout: cfg.Search.WriteTimeout}
-		indexes := make([]search.Index, 0, 2)
-		if cfg.Search.ESEndpoint != "" {
-			indexes = append(indexes, search.NewElasticsearchIndex(cfg.Search.ESEndpoint, cfg.Search.ESUsername, cfg.Search.ESPassword, client))
-		}
-		if cfg.Search.QdrantEndpoint != "" {
-			indexes = append(indexes, search.NewQdrantIndex(cfg.Search.QdrantEndpoint, cfg.Search.QdrantAPIKey, cfg.AI.Dimension, client))
-		}
-		external := search.NewExternalIndex(indexes...)
-		if err := external.(search.EpochPreparer).PrepareEpoch(ctx, cfg.Search.IndexEpoch, int64(cfg.AI.Dimension)); err != nil {
-			return fmt.Errorf("prepare search target: %w", err)
-		}
-		projector.WithExternalIndex(external)
-	}
-	queues := platformworker.QueuesForRole(platformworker.RoleSearch, cfg.Worker.Queues)
-	metricsRegistry := prometheus.NewRegistry()
-	_ = platformworker.NewMetrics(metricsRegistry, platformworker.RoleSearch, queues)
-	dbmetrics.RegisterPool(metricsRegistry, deps.SQL, "search-indexer")
-	background.Go(func() { serveWorkerMetrics(ctx, cfg.Worker.MetricsAddr, metricsRegistry, logger) })
-	return runAsyncAux(ctx, cfg, "search", logger, func(ctx context.Context, t asynccontrol.Task, in asyncprotocol.Input) error {
-		return projector.Handler(ctx, &taskqueue.Task{ID: t.ID.String(), Kind: outbox.TaskSearchProjectV1, Queue: "search", Body: in.OriginalPayload})
-	})
+	return errors.New("search-indexer requires an explicit ai-text-projector or ai-vector-projector role")
 }
 
 func searchBackendConfigured(cfg config.Search) bool {

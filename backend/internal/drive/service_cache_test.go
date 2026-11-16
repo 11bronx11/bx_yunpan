@@ -46,7 +46,7 @@ func TestCachedPagesObserveBackgroundContentEpoch(t *testing.T) {
 	}
 }
 
-func TestCachedReadsUseCurrentAIStatus(t *testing.T) {
+func TestCachedReadsAreIndependentOfLegacyAIStatus(t *testing.T) {
 	f := newMoveFixture(t)
 	ctx := context.Background()
 	store := platformcache.NewJSONStore(nil, time.Hour, 8)
@@ -74,12 +74,10 @@ func TestCachedReadsUseCurrentAIStatus(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, got := range []FileView{children[0], page[0], file} {
-			if (want == "" && got.AIStatus != nil) || (want != "" && (got.AIStatus == nil || *got.AIStatus != want)) {
-				t.Fatalf("AIStatus=%v, want %q while metadata cache is still valid", got.AIStatus, want)
+			if got.AIStatus != nil {
+				t.Fatalf("business read still depends on legacy AI status: %v", got.AIStatus)
 			}
-			if want != "" && FileResponse(got)["ai_status"] != want {
-				t.Fatalf("response lost ai_status: %v", FileResponse(got))
-			}
+
 		}
 	}
 	// A fresh cache fill must also exclude the volatile field itself.

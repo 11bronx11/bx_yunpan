@@ -20,8 +20,19 @@ func TestJSONStoreRealRedisFallbackBudget(t *testing.T) {
 	client := NewRedisClient(addr, "", 0)
 	control := redis.NewClient(&redis.Options{Addr: addr, ReadTimeout: 2 * time.Second, MaxRetries: -1})
 	t.Cleanup(func() { _ = client.Close(); _ = control.Close() })
-	if err := client.Ping(ctx).Err(); err != nil {
-		t.Fatal(err)
+	// Warm the production client's connection before injecting the stall. Its
+	// 50ms fail-open budget also covers the cold handshake, which may time out
+	// under host scheduling pressure; that is separate from this test's steady
+	// connection fallback measurement below.
+	setupCtx, cancelSetup := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelSetup()
+	for {
+		if err := client.Ping(setupCtx).Err(); err == nil {
+			break
+		} else if setupCtx.Err() != nil {
+			t.Fatalf("Redis connection setup: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	key := "hc:cache:" + uuid.NewString()
 	t.Cleanup(func() { _ = client.Del(ctx, key).Err() })

@@ -51,7 +51,8 @@ func Terminal(state string) bool {
 type Definition struct {
 	Kind, Queue       string
 	Timeout, Lifetime time.Duration
-	BusinessEffect    bool
+	BusinessEffect    bool // Deprecated: use Target() to resolve legacy definitions.
+	EffectTarget      string
 	Converge          bool
 	Priority          int
 }
@@ -63,7 +64,7 @@ type Registry map[string]Definition
 func CoreRegistry() Registry {
 	r := Registry{}
 	add := func(kind, queue string, timeout time.Duration, priority int, converge bool) {
-		r[kind] = Definition{kind, queue, timeout, 24 * time.Hour, true, converge, priority}
+		r[kind] = Definition{Kind: kind, Queue: queue, Timeout: timeout, Lifetime: 24 * time.Hour, EffectTarget: EffectCore, Converge: converge, Priority: priority}
 	}
 	for _, kind := range []string{"multipart.create", "multipart.complete", "canonical.ensure"} {
 		add(kind, "upload", 10*time.Minute, 0, true)
@@ -76,14 +77,15 @@ func CoreRegistry() Registry {
 	for _, kind := range []string{"upload.expire", "object.authorize_delete", "failure.converge"} {
 		add(kind, "commit", time.Minute, 0, false)
 	}
-	r["ai.index"] = Definition{"ai.index", "ai", 30 * time.Minute, 24 * time.Hour, false, false, 2}
-	r["ai.reprocess"] = Definition{"ai.reprocess", "ai", 30 * time.Minute, 24 * time.Hour, true, true, 1}
-	r["search.project"] = Definition{"search.project", "search", 5 * time.Minute, 24 * time.Hour, false, false, 2}
+	r["ai.index"] = Definition{Kind: "ai.index", Queue: "ai", Timeout: 30 * time.Minute, Lifetime: 24 * time.Hour, Priority: 2}
+	r["ai.reprocess"] = Definition{Kind: "ai.reprocess", Queue: "ai", Timeout: 30 * time.Minute, Lifetime: 24 * time.Hour, EffectTarget: EffectCore, Converge: true, Priority: 1}
+	r["search.project"] = Definition{Kind: "search.project", Queue: "search", Timeout: 5 * time.Minute, Lifetime: 24 * time.Hour, Priority: 2}
 	return r
 }
 
 type Task struct {
 	ID                                                                                                       uuid.UUID `gorm:"type:uuid;primaryKey"`
+	EffectTarget                                                                                             string
 	SemanticKey, Kind                                                                                        string
 	ContractVersion                                                                                          int
 	InputDigest                                                                                              string
@@ -112,6 +114,7 @@ type Result struct {
 	ID, TaskID                uuid.UUID `gorm:"type:uuid"`
 	Generation                int64
 	InputDigest, ResultDigest string
+	EffectTarget              string
 	Body                      datatypes.JSON `gorm:"type:jsonb"`
 	Outcome                   string
 	CommittedAt               *time.Time
@@ -126,13 +129,15 @@ type Spec struct {
 	Trace                                              json.RawMessage
 	NotBefore                                          time.Time
 	// Explicit historical bounds may only tighten the configured defaults.
-	Deadline    time.Time
-	MaxAttempts int
-	ParentID    *uuid.UUID
+	Deadline                     time.Time
+	MaxAttempts                  int
+	MaxDispatches, MaxRecoveries int
+	ParentID                     *uuid.UUID
 	// Imported history can only consume budget; it cannot grant extra attempts.
 	Attempts, Dispatches, Recoveries int
 }
 type Notice struct {
+	EffectTarget       string          `json:"effect_target,omitempty"`
 	SemanticKey        string          `json:"semantic_key,omitempty"`
 	InputDigest        string          `json:"input_digest,omitempty"`
 	ShardKey           string          `json:"shard_key,omitempty"`
@@ -147,7 +152,7 @@ type Notice struct {
 }
 
 func (t Task) Notice() Notice {
-	return Notice{TaskID: t.ID, DispatchGeneration: t.DispatchGeneration, ResultID: t.ResultID, Version: 1, Shard: t.Shard, SemanticKey: t.SemanticKey, InputDigest: t.InputDigest, ShardKey: t.ShardKey, LayoutVersion: t.LayoutVersion, Generation: t.Generation, Trace: json.RawMessage(t.Trace)}
+	return Notice{EffectTarget: t.EffectTarget, TaskID: t.ID, DispatchGeneration: t.DispatchGeneration, ResultID: t.ResultID, Version: 1, Shard: t.Shard, SemanticKey: t.SemanticKey, InputDigest: t.InputDigest, ShardKey: t.ShardKey, LayoutVersion: t.LayoutVersion, Generation: t.Generation, Trace: json.RawMessage(t.Trace)}
 }
 
 func (n Notice) validWire() bool {
@@ -155,7 +160,7 @@ func (n Notice) validWire() bool {
 }
 
 func (n Notice) matches(t Task) bool {
-	return n.SemanticKey == t.SemanticKey && n.InputDigest == t.InputDigest && n.ShardKey == t.ShardKey && n.LayoutVersion == t.LayoutVersion && n.Shard == t.Shard && n.Generation == t.Generation
+	return (n.EffectTarget == "" && t.EffectTarget != EffectAI || n.EffectTarget == t.EffectTarget) && n.SemanticKey == t.SemanticKey && n.InputDigest == t.InputDigest && n.ShardKey == t.ShardKey && n.LayoutVersion == t.LayoutVersion && n.Shard == t.Shard && n.Generation == t.Generation
 }
 
 func Digest(input []byte) (string, []byte, error) {
@@ -209,7 +214,7 @@ func Backoff(attempt int, base, cap time.Duration, jitter float64) time.Duration
 
 func (r Registry) Validate(s Spec) (Definition, error) {
 	d, ok := r[s.Kind]
-	if !ok || s.SemanticKey == "" || s.ShardKey == "" || s.ResourceKey == "" || len(s.Input) == 0 || len(s.Input) > 1<<20 || s.Attempts < 0 || s.Dispatches < 0 || s.Recoveries < 0 {
+	if !ok || (d.Target() != EffectNone && d.Target() != EffectCore && d.Target() != EffectAI) || s.SemanticKey == "" || s.ShardKey == "" || s.ResourceKey == "" || len(s.Input) == 0 || len(s.Input) > 1<<20 || s.Attempts < 0 || s.Dispatches < 0 || s.Recoveries < 0 {
 		return d, fmt.Errorf("%w: %s", ErrInvalid, s.Kind)
 	}
 	return d, nil

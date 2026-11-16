@@ -228,6 +228,7 @@ export const TransferProvider = ({ children }) => {
         control: null,
         session: result.session || task.session,
         instant: Boolean(result.instant),
+        completedFile: result.file || null,
         completedAt: Date.now(),
       });
     } catch (error) {

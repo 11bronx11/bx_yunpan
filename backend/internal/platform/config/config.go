@@ -11,6 +11,7 @@ import (
 
 type Config struct {
 	Role      string
+	AISplit   AISplit
 	Async     Async
 	App       App
 	HTTP      HTTP
@@ -272,7 +273,7 @@ func LoadForRole(role string) (Config, error) {
 		postgresPrimaryDSN = env("POSTGRES_DSN", "postgres://yunpan:yunpan@127.0.0.1:5432/yunpan?sslmode=disable")
 	}
 	cfg := Config{
-		Role: role, Async: loadAsync(),
+		Role: role, Async: loadAsync(), AISplit: loadAISplit(),
 		App: App{
 			Env:        env("APP_ENV", "development"),
 			LogLevel:   env("LOG_LEVEL", "info"),
@@ -473,6 +474,9 @@ func LoadForRole(role string) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if isSplitRole(c.Role) {
+		return c.validateAISplit()
+	}
 	switch c.Role {
 	case "async-control", "committer", "gc-worker", "upload-worker", "object-worker", "media-worker", "worker", "maintenance-worker", "outbox-relay", "async-import", "async-admin":
 		return c.validateAsync()
@@ -613,7 +617,7 @@ func (c Config) Validate() error {
 		if c.AI.Provider != "fake" && c.AI.Provider != "dashscope" {
 			errs = append(errs, errors.New("AI_PROVIDER must be fake or dashscope when AI is enabled"))
 		}
-		if c.AI.Provider == "dashscope" && c.AI.APIKey == "" {
+		if c.Role != "api" && c.AI.Provider == "dashscope" && c.AI.APIKey == "" {
 			errs = append(errs, errors.New("DASHSCOPE_API_KEY is required for dashscope"))
 		}
 		if c.AI.Dimension != 1024 || c.AI.MaxObjectBytes <= 0 || c.AI.RequestTimeout <= 0 {

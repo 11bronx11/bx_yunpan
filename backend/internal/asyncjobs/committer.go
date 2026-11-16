@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/aiprotocol"
 	"github.com/11bronx11/bx_yunpan/backend/internal/asynccontrol"
 	"github.com/11bronx11/bx_yunpan/backend/internal/asyncprotocol"
 	"github.com/11bronx11/bx_yunpan/backend/internal/drive"
@@ -139,6 +140,18 @@ func (c *Committer) commitTx(tx *gorm.DB, t asynccontrol.Task, r asynccontrol.Re
 		decision, err = c.Upload.CommitAsync(tx, t.Kind, in, out)
 	} else {
 		switch t.Kind {
+		case "ai.job.finish":
+			var finish aiprotocol.JobFinish
+			if json.Unmarshal(t.Input, &finish) != nil || finish.JobID == uuid.Nil {
+				return decision, asynccontrol.ErrInvalid
+			}
+			body, _ := json.Marshal(finish.Outcomes)
+			if e := tx.Table("ai_job_requests").Where("job_id=? AND owner_id=?", finish.JobID, finish.OwnerID).Updates(map[string]any{"capability_outcomes": string(body), "finished_at": gorm.Expr("clock_timestamp()")}).Error; e != nil {
+				return decision, e
+			}
+			err = tx.Table("async_tasks").Where("id=? AND owner_id=?", finish.JobID, finish.OwnerID).Updates(map[string]any{"status": finish.Status, "progress": 100, "version": gorm.Expr("version+1"), "updated_at": gorm.Expr("clock_timestamp()")}).Error
+			decision.Outcome = asynccontrol.Succeeded
+
 		case "object.authorize_delete", "object.delete":
 			decision, err = c.Objects.CommitAsync(tx, t.Kind, in, out, c.GCDelay)
 		case "thumbnail":

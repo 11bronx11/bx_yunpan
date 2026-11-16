@@ -112,7 +112,7 @@ func TestMoveFileChangesOnlyDirectoryMetadata(t *testing.T) {
 	}
 }
 
-func TestFileViewsIncludeAIStatus(t *testing.T) {
+func TestFileViewsDoNotReadLegacyAIStatus(t *testing.T) {
 	fixture := newMoveFixture(t)
 	documentID := uuid.New()
 	if err := fixture.db.Exec(`
@@ -125,7 +125,7 @@ func TestFileViewsIncludeAIStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load file: %v", err)
 	}
-	if file.AIStatus == nil || *file.AIStatus != "failed" {
+	if file.AIStatus != nil {
 		t.Fatalf("file AI status = %v, want failed", file.AIStatus)
 	}
 
@@ -133,7 +133,7 @@ func TestFileViewsIncludeAIStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load children: %v", err)
 	}
-	if len(files) != 1 || files[0].AIStatus == nil || *files[0].AIStatus != "failed" {
+	if len(files) != 1 || files[0].AIStatus != nil {
 		t.Fatalf("children AI status = %+v, want failed", files)
 	}
 }

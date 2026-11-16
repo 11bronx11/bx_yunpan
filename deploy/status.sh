@@ -57,57 +57,17 @@ for container_id in "${api_ids[@]}"; do
   fi
 done
 
-# aisvc 只暴露 gRPC；逐个检查所有副本，不能让一个健康副本掩盖其他故障。
-# Keep the distributed profile enabled while probing optional role services;
-# targeting a profiled service without its profile can make Compose validate an
-# incomplete dependency graph.
-compose=(docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile app --profile ai --profile ai-split --profile parser --profile distributed --profile redis-split)
-mapfile -t aisvc_ids < <("${compose[@]}" ps -q aisvc)
-mapfile -t ai_query_ids < <("${compose[@]}" ps -q ai-query)
-mapfile -t ai_indexer_ids < <("${compose[@]}" ps -q ai-indexer)
+compose=(docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --profile '*')
 mapfile -t parser_ids < <("${compose[@]}" ps -q parser-svc)
 aisvc_failures=0
 if [[ "$ai_enabled" == true ]]; then
-	if ((${#ai_query_ids[@]} > 0)); then
-		if ((${#ai_indexer_ids[@]} == 0)); then
-			echo "ai-indexer: no running containers" >&2
-			aisvc_failures=1
-		fi
-		for container_id in "${ai_query_ids[@]}"; do
-			container_name=$(docker inspect --format '{{.Name}}' "$container_id")
-			container_name=${container_name#/}
-			if docker exec "$container_id" /app/service healthcheck >/dev/null 2>&1; then
-				echo "$container_name -> grpc.health.v1: SERVING"
-			else
-				echo "$container_name -> grpc.health.v1: FAILED" >&2
-				aisvc_failures=$((aisvc_failures + 1))
-			fi
-		done
-		for container_id in "${ai_indexer_ids[@]}"; do
-			container_name=$(docker inspect --format '{{.Name}}' "$container_id")
-			container_name=${container_name#/}
-			echo "$container_name -> ai queue worker: running"
-		done
-	elif ((${#aisvc_ids[@]} == 0)); then
-		echo "aisvc: no running containers" >&2
-		aisvc_failures=1
-	else
-		for container_id in "${aisvc_ids[@]}"; do
-		container_name=$(docker inspect --format '{{.Name}}' "$container_id")
-		container_name=${container_name#/}
-    if docker exec "$container_id" /app/service healthcheck >/dev/null 2>&1; then
-      echo "$container_name -> grpc.health.v1: SERVING"
-    else
-      echo "$container_name -> grpc.health.v1: FAILED" >&2
-      aisvc_failures=$((aisvc_failures + 1))
-    fi
-		done
-	fi
-elif ((${#aisvc_ids[@]} > 0)); then
-  echo "aisvc: disabled but running containers still exist" >&2
-  aisvc_failures=1
-else
-  echo "aisvc: disabled"
+ for role in core-internal ai-query ai-committer ai-content-worker ai-embedding-worker ai-summary-worker; do
+  mapfile -t role_ids < <("${compose[@]}" ps -q "$role")
+  if ((${#role_ids[@]}==0));then echo "$role: no running containers" >&2;aisvc_failures=$((aisvc_failures+1));fi
+  for container_id in "${role_ids[@]}";do
+   if docker exec "$container_id" wget -q -O - http://127.0.0.1:8083/health/ready >/dev/null;then echo "$role -> dependencies: ready";else echo "$role -> readiness: FAILED" >&2;aisvc_failures=$((aisvc_failures+1));fi
+  done
+ done
 fi
 
 if [[ "$ai_enabled" == true && "$parser_remote_enabled" == true ]]; then
@@ -124,7 +84,7 @@ if [[ "$ai_enabled" == true && "$parser_remote_enabled" == true ]]; then
       echo "$container_name -> document parser grpc.health.v1: FAILED" >&2
       aisvc_failures=$((aisvc_failures + 1))
     fi
-    if docker exec "$container_id" wget -q -O - http://127.0.0.1:8083/metrics >/dev/null; then
+    if docker exec "$container_id" python3 -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8083/metrics", timeout=5).read()' >/dev/null; then
       echo "$container_name -> parser metrics: OK"
     else
       echo "$container_name -> parser metrics: FAILED" >&2
@@ -154,14 +114,11 @@ for role in async-control committer object-worker media-worker gc-worker upload-
     fi
   done
 done
-mapfile -t search_ids < <("${compose[@]}" ps -q search-indexer)
-for container_id in "${search_ids[@]}"; do
-  if docker exec "$container_id" wget -q -O - http://127.0.0.1:8083/metrics >/dev/null; then
-    echo "search-indexer -> metrics: OK"
-  else
-    echo "search-indexer -> metrics: FAILED" >&2
-    api_failures=$((api_failures + 1))
-  fi
+for role in ai-text-projector ai-vector-projector;do
+ mapfile -t projection_ids < <("${compose[@]}" ps -q "$role")
+ for container_id in "${projection_ids[@]}";do
+  if docker exec "$container_id" wget -q -O - http://127.0.0.1:8083/health/ready >/dev/null;then echo "$role -> ready";else api_failures=$((api_failures+1));fi
+ done
 done
 
 if ((api_failures > 0 || aisvc_failures > 0)); then

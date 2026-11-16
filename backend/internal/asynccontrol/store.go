@@ -16,6 +16,11 @@ import (
 )
 
 type Store struct {
+	Observe       func(*gorm.DB, Task) error
+	AfterTerminal func(*gorm.DB, *Store, Task, string) error
+	// These hooks are trusted immutable planners, never worker supplied specs.
+	PlanContinuations                                         func(Task, Result) ([]Spec, error)
+	PlanFailure                                               func(Task) ([]Spec, error)
 	CommitCalls, CommitNanos, ReceiptHits                     atomic.Uint64
 	MaxAttempts, MaxDispatches, MaxRecoveries, MaxResultSends int
 	BatchRows, BatchBytes                                     int
@@ -70,12 +75,18 @@ func (s *Store) ensure(tx *gorm.DB, spec Spec, source string) (Task, error) {
 	if len(trace) == 0 {
 		trace = json.RawMessage(`{}`)
 	}
-	t := Task{ID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("bx/async/v1/"+spec.SemanticKey)), SemanticKey: spec.SemanticKey, Kind: spec.Kind, ContractVersion: 1, InputDigest: digest, Input: input, Queue: d.Queue, OwnerKey: spec.OwnerKey, ResourceKey: spec.ResourceKey, ShardKey: spec.ShardKey, LayoutVersion: 1, Shard: Shard(spec.ShardKey, s.Shards), Priority: d.Priority, State: Ready, Version: 1, NotBefore: due, Deadline: maxTime(due, now).Add(d.Lifetime), Attempts: spec.Attempts, Dispatches: spec.Dispatches, Recoveries: spec.Recoveries, MaxAttempts: s.MaxAttempts, MaxDispatches: s.MaxDispatches, MaxRecoveries: s.MaxRecoveries, MaxResultSends: s.MaxResultSends, TimeoutMS: d.Timeout.Milliseconds(), ParentID: spec.ParentID, Trace: []byte(trace), CreatedAt: now, UpdatedAt: now}
+	t := Task{EffectTarget: d.Target(), ID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("bx/async/v1/"+spec.SemanticKey)), SemanticKey: spec.SemanticKey, Kind: spec.Kind, ContractVersion: 1, InputDigest: digest, Input: input, Queue: d.Queue, OwnerKey: spec.OwnerKey, ResourceKey: spec.ResourceKey, ShardKey: spec.ShardKey, LayoutVersion: 1, Shard: Shard(spec.ShardKey, s.Shards), Priority: d.Priority, State: Ready, Version: 1, NotBefore: due, Deadline: maxTime(due, now).Add(d.Lifetime), Attempts: spec.Attempts, Dispatches: spec.Dispatches, Recoveries: spec.Recoveries, MaxAttempts: s.MaxAttempts, MaxDispatches: s.MaxDispatches, MaxRecoveries: s.MaxRecoveries, MaxResultSends: s.MaxResultSends, TimeoutMS: d.Timeout.Milliseconds(), ParentID: spec.ParentID, Trace: []byte(trace), CreatedAt: now, UpdatedAt: now}
 	if !spec.Deadline.IsZero() && spec.Deadline.Before(t.Deadline) {
 		t.Deadline = spec.Deadline
 	}
 	if spec.MaxAttempts > 0 {
 		t.MaxAttempts = min(t.MaxAttempts, spec.MaxAttempts)
+	}
+	if spec.MaxDispatches > 0 {
+		t.MaxDispatches = min(t.MaxDispatches, spec.MaxDispatches)
+	}
+	if spec.MaxRecoveries > 0 {
+		t.MaxRecoveries = min(t.MaxRecoveries, spec.MaxRecoveries)
 	}
 	res := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "semantic_key"}}, DoNothing: true}).Create(&t)
 	if res.Error != nil {
@@ -91,6 +102,11 @@ func (s *Store) ensure(tx *gorm.DB, spec Spec, source string) (Task, error) {
 	}
 	if source != "" {
 		if err := tx.Exec("INSERT INTO task_sources(task_id,source_key) VALUES(?,?) ON CONFLICT DO NOTHING", t.ID, source).Error; err != nil {
+			return t, err
+		}
+	}
+	if s.Observe != nil {
+		if err := s.Observe(tx, t); err != nil {
 			return t, err
 		}
 	}
@@ -227,13 +243,13 @@ func (s *Store) SaveResult(ctx context.Context, t Task, body json.RawMessage) (R
 	if err != nil || len(b) > 1<<20 {
 		return Result{}, ErrInvalid
 	}
-	r := Result{ID: uuid.NewSHA1(t.ID, []byte(fmt.Sprint(t.Generation))), TaskID: t.ID, Generation: t.Generation, InputDigest: t.InputDigest, ResultDigest: digest, Body: b}
+	r := Result{ID: uuid.NewSHA1(t.ID, []byte(fmt.Sprint(t.Generation))), TaskID: t.ID, Generation: t.Generation, InputDigest: t.InputDigest, ResultDigest: digest, Body: b, EffectTarget: t.EffectTarget}
 	err = s.critical().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if t.Token == nil {
 			return ErrLost
 		}
 		state := Computed
-		if d, ok := s.Registry[t.Kind]; ok && !d.BusinessEffect {
+		if d, ok := s.Registry[t.Kind]; ok && d.Target() == EffectNone {
 			state = Succeeded
 			r.Outcome = Succeeded
 			now := time.Now().UTC()
@@ -245,6 +261,14 @@ func (s *Store) SaveResult(ctx context.Context, t Task, body json.RawMessage) (R
 		}
 		if err := tx.Create(&r).Error; err != nil {
 			return err
+		}
+		if err := s.freezeContinuations(tx, t, r); err != nil {
+			return err
+		}
+		if state == Succeeded {
+			if err := s.releaseContinuations(tx, t, r, Succeeded); err != nil {
+				return err
+			}
 		}
 		return tx.Exec("UPDATE executions SET finished_at=clock_timestamp(),outcome='computed' WHERE task_id=? AND generation=?", t.ID, t.Generation).Error
 	})
@@ -289,7 +313,7 @@ func (s *Store) LoadResult(ctx context.Context, n Notice) (Task, Result, error) 
 	if err := s.DB.WithContext(ctx).First(&r, "id=? AND task_id=? AND input_digest=?", *n.ResultID, t.ID, t.InputDigest).Error; err != nil {
 		return t, r, err
 	}
-	if r.Generation != t.Generation {
+	if r.Generation != t.Generation || r.EffectTarget != t.EffectTarget {
 		return t, r, ErrConflict
 	}
 	if Terminal(t.State) && t.State != NeedsAttention && r.CommittedAt != nil {
@@ -328,7 +352,7 @@ func (s *Store) Report(ctx context.Context, t Task, r Result, outcome string) er
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, "id=?", t.ID).Error; err != nil {
 			return err
 		}
-		if current.ResultID == nil || *current.ResultID != r.ID || current.InputDigest != r.InputDigest {
+		if current.ResultID == nil || *current.ResultID != r.ID || current.InputDigest != r.InputDigest || current.EffectTarget != r.EffectTarget || current.Generation != r.Generation {
 			return ErrConflict
 		}
 		if Terminal(current.State) && current.State != NeedsAttention {
@@ -343,7 +367,16 @@ func (s *Store) Report(ctx context.Context, t Task, r Result, outcome string) er
 		if err := tx.Model(&Result{}).Where("id=? AND result_digest=?", r.ID, r.ResultDigest).Updates(map[string]any{"outcome": outcome, "committed_at": gorm.Expr("clock_timestamp()")}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&Task{}).Where("id=?", t.ID).Updates(map[string]any{"state": outcome, "version": gorm.Expr("version+1"), "stopped_at": gorm.Expr("clock_timestamp()"), "updated_at": gorm.Expr("clock_timestamp()")}).Error
+		if err := s.releaseContinuations(tx, current, r, outcome); err != nil {
+			return err
+		}
+		if err := tx.Model(&Task{}).Where("id=?", t.ID).Updates(map[string]any{"state": outcome, "version": gorm.Expr("version+1"), "stopped_at": gorm.Expr("clock_timestamp()"), "updated_at": gorm.Expr("clock_timestamp()")}).Error; err != nil {
+			return err
+		}
+		if s.AfterTerminal != nil {
+			return s.AfterTerminal(tx, s, current, outcome)
+		}
+		return nil
 	})
 }
 
@@ -378,6 +411,18 @@ func (s *Store) ImportState(tx *gorm.DB, t Task, state string, body json.RawMess
 // Redo creates one audited child for a stopped operation. Retrying the operator
 // command returns that child; the old task and its consumed budgets remain.
 func (s *Store) Redo(ctx context.Context, id uuid.UUID, reason string, validate func(Task) error) (Task, error) {
+	return s.RedoPlanned(ctx, id, reason, func(old Task, spec Spec) (Spec, error) {
+		if validate == nil {
+			return spec, ErrInvalid
+		}
+		return spec, validate(old)
+	})
+}
+
+// RedoPlanned lets a trusted domain planner renew an expired authorization or
+// route a failed derived step through its current root prerequisites. The
+// audit identity, parent and routing keys remain tied to the stopped task.
+func (s *Store) RedoPlanned(ctx context.Context, id uuid.UUID, reason string, plan func(Task, Spec) (Spec, error)) (Task, error) {
 	var next Task
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var old Task
@@ -395,14 +440,15 @@ func (s *Store) Redo(ctx context.Context, id uuid.UUID, reason string, validate 
 		if old.State != NeedsAttention && old.State != Quarantined && old.State != Failed && old.State != Rejected {
 			return ErrInvalid
 		}
-		if len(reason) < 8 || len(reason) > 1024 || validate == nil {
+		if len(reason) < 8 || len(reason) > 1024 || plan == nil {
 			return ErrInvalid
 		}
-		if err := validate(old); err != nil {
+		spec := Spec{Kind: old.Kind, SemanticKey: key, OwnerKey: old.OwnerKey, ResourceKey: old.ResourceKey, ShardKey: old.ShardKey, Input: json.RawMessage(old.Input), Trace: json.RawMessage(old.Trace), ParentID: &old.ID}
+		prepared, err := plan(old, spec)
+		if err != nil {
 			return err
 		}
-		spec := Spec{Kind: old.Kind, SemanticKey: key, OwnerKey: old.OwnerKey, ResourceKey: old.ResourceKey, ShardKey: old.ShardKey, Input: json.RawMessage(old.Input), Trace: json.RawMessage(old.Trace), ParentID: &old.ID}
-		var err error
+		spec.Kind, spec.Input, spec.Deadline = prepared.Kind, prepared.Input, prepared.Deadline
 		next, err = s.ensure(tx, spec, "manual:"+reason)
 		if err != nil {
 			return err
@@ -410,4 +456,9 @@ func (s *Store) Redo(ctx context.Context, id uuid.UUID, reason string, validate 
 		return tx.Model(&Task{}).Where("id=?", id).Updates(map[string]any{"state": Quarantined, "last_error": "explicit redo: " + next.ID.String() + "; " + reason}).Error
 	})
 	return next, err
+}
+
+// EnsureTx is reserved for trusted domain planners composing atomic transitions.
+func (s *Store) EnsureTx(tx *gorm.DB, spec Spec, source string) (Task, error) {
+	return s.ensure(tx, spec, source)
 }

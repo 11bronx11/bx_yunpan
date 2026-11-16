@@ -14,9 +14,13 @@ if [[ ! -f "$env_file" ]]; then
 fi
 
 # Load the same business settings used by Compose.
+task_ai_legacy_stopped=${AI_LEGACY_WRITERS_STOPPED-}
+task_async_legacy_stopped=${ASYNC_LEGACY_WRITERS_STOPPED-}
 set -a
 # shellcheck disable=SC1090
 source "$env_file"
+if [[ -n "$task_ai_legacy_stopped" ]]; then export AI_LEGACY_WRITERS_STOPPED=$task_ai_legacy_stopped; fi
+if [[ -n "$task_async_legacy_stopped" ]]; then export ASYNC_LEGACY_WRITERS_STOPPED=$task_async_legacy_stopped; fi
 set +a
 
 if [[ "${S3_PUBLIC_PATH_PREFIX:-/storage}" != "/storage" ]]; then
@@ -73,3 +77,27 @@ export POSTGRES_DSN="$POSTGRES_PRIMARY_DSN"
 export POSTGRES_READONLY_DSN="${POSTGRES_READONLY_DSN//@postgres:5432/@${infra_host}:${POSTGRES_PORT:-5432}}"
 export ASYNC_CONTROL_DSN="${ASYNC_CONTROL_DSN//@async-postgres:5432/@${infra_host}:${ASYNC_POSTGRES_PORT:-5433}}"
 export RABBITMQ_URL="${RABBITMQ_URL//@rabbitmq:5672/@${infra_host}:${RABBITMQ_PORT:-5672}}"
+
+# AI role endpoints derive from the same deploy/.env values.
+CORE_INTERNAL_GRPC_ADDR=${CORE_INTERNAL_GRPC_ADDR:-:51053}
+AI_QUERY_GRPC_ADDR=${AI_QUERY_GRPC_ADDR:-:51054}
+export CORE_INTERNAL_GRPC_ADDR="${app_host}:${CORE_INTERNAL_GRPC_ADDR##*:}"
+export CORE_INTERNAL_TARGET="${proxy_app_host}:${CORE_INTERNAL_GRPC_ADDR##*:}"
+export CORE_INTERNAL_ADVERTISE_ADDR="$CORE_INTERNAL_TARGET"
+export AI_QUERY_GRPC_ADDR="${app_host}:${AI_QUERY_GRPC_ADDR##*:}"
+export AI_QUERY_TARGET="${proxy_app_host}:${AI_QUERY_GRPC_ADDR##*:}"
+export AI_QUERY_ADVERTISE_ADDR="$AI_QUERY_TARGET"
+export AI_QUERY_DSN="${AI_QUERY_DSN:-postgres://yunpan_ai_query:${AI_QUERY_PASSWORD:-}@${infra_host}:${AI_POSTGRES_PORT:-5434}/${AI_POSTGRES_DB:-yunpan_ai}?sslmode=disable}"
+export AI_COMPUTE_DSN="${AI_COMPUTE_DSN:-postgres://yunpan_ai_compute:${AI_COMPUTE_PASSWORD:-}@${infra_host}:${AI_POSTGRES_PORT:-5434}/${AI_POSTGRES_DB:-yunpan_ai}?sslmode=disable}"
+export AI_COMMIT_DSN="${AI_COMMIT_DSN:-postgres://yunpan_ai_commit:${AI_COMMIT_PASSWORD:-}@${infra_host}:${AI_POSTGRES_PORT:-5434}/${AI_POSTGRES_DB:-yunpan_ai}?sslmode=disable}"
+export AI_MIGRATION_DSN="${AI_MIGRATION_DSN:-postgres://${AI_POSTGRES_USER:-yunpan_ai}:${AI_POSTGRES_PASSWORD:-}@${infra_host}:${AI_POSTGRES_PORT:-5434}/${AI_POSTGRES_DB:-yunpan_ai}?sslmode=disable}"
+for task_ai_dsn in AI_QUERY_DSN AI_COMPUTE_DSN AI_COMMIT_DSN AI_MIGRATION_DSN; do
+  task_ai_value=${!task_ai_dsn}
+  export "$task_ai_dsn=${task_ai_value//@ai-postgres:5432/@${infra_host}:${AI_POSTGRES_PORT:-5434}}"
+done
+
+# One-shot migration/admin endpoints use the same host translation.
+export AI_CONTROL_MIGRATION_DSN="${AI_CONTROL_MIGRATION_DSN:-$ASYNC_CONTROL_DSN}"
+export AI_INTENT_MIGRATION_DSN="${AI_INTENT_MIGRATION_DSN:-$POSTGRES_PRIMARY_DSN}"
+export AI_CONTROL_MIGRATION_DSN="${AI_CONTROL_MIGRATION_DSN//@async-postgres:5432/@${infra_host}:${ASYNC_POSTGRES_PORT:-5433}}"
+export AI_INTENT_MIGRATION_DSN="${AI_INTENT_MIGRATION_DSN//@postgres:5432/@${infra_host}:${POSTGRES_PORT:-5432}}"

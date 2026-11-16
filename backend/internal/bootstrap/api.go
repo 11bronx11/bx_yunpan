@@ -14,6 +14,8 @@ import (
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai"
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcclient"
+	"github.com/11bronx11/bx_yunpan/backend/internal/ai/pbv2"
+	"github.com/11bronx11/bx_yunpan/backend/internal/aigateway"
 	"github.com/11bronx11/bx_yunpan/backend/internal/drive"
 	"github.com/11bronx11/bx_yunpan/backend/internal/identity"
 	"github.com/11bronx11/bx_yunpan/backend/internal/media"
@@ -26,12 +28,13 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dependencies"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/httpapi"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/registry"
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/serviceauth"
 	"github.com/11bronx11/bx_yunpan/backend/internal/sharing"
 	"github.com/11bronx11/bx_yunpan/backend/internal/upload"
 )
 
 func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
-	ctx = outbox.WithSearchEnabled(ctx, cfg.Search.Enabled)
+	ctx = outbox.WithAIProfile(outbox.WithSearchEnabled(ctx, cfg.Search.Enabled), cfg.AISplit.ProfileID, cfg.AISplit.ProfileRevision)
 	deps, err := dependencies.Open(ctx, cfg)
 	if err != nil {
 		return err
@@ -62,29 +65,25 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	sharingService := sharing.NewService(deps.GORM, driveService, objects, identityService, cfg.Sharing)
 	sharingHTTP := sharing.NewHTTP(sharingService, fileManager, identityHTTP.Authenticate()).WithStorage(deps.Storage)
 	readiness := httpapi.NewReadiness(true)
-	var aiBackend ai.Backend = ai.DisabledBackend{}
-	closeAI := func() {}
+
+	aiHTTP := &aigateway.HTTP{DB: deps.GORM, Enabled: cfg.AI.Enabled, Profile: cfg.AIProfile(), QueryTimeout: cfg.AISplit.QueryTimeout, AskTimeout: cfg.AISplit.AskTimeout, Authenticate: identityHTTP.Authenticate()}
+	if cfg.AI.RateLimitEnabled {
+		aiHTTP.Limiter = ai.NewRequestLimiter(deps.RedisCoordination, ai.RateLimits{SearchPerMinute: cfg.AI.RateLimitSearchPerMinute, AskPerMinute: cfg.AI.RateLimitAskPerMinute, ReprocessPerMinute: cfg.AI.RateLimitReprocessPerMinute})
+	}
 	if cfg.AI.Enabled {
-		// Search / Ask 经 gRPC 调 query 服务；Reprocess 是 core-api 的命令，
-		// 必须在本地事务里完成 owner 校验、幂等 Task 和 Outbox 写入。
-		aiClient, closeRegistry, err := newAIClient(cfg, logger, metrics.Registry)
+		key, err := serviceauth.Private(cfg.AISplit.ScopeSigningSeed)
 		if err != nil {
 			return err
 		}
-		var commandLimiter ai.RequestLimiter
-		if cfg.AI.RateLimitEnabled {
-			commandLimiter = ai.NewRequestLimiter(deps.RedisCoordination, ai.RateLimits{
-				ReprocessPerMinute: cfg.AI.RateLimitReprocessPerMinute,
-			})
+		aiHTTP.ScopeKey = key
+		conn, closeRegistry, err := internalClient(cfg, "ai-query-v2", cfg.AISplit.QueryTarget, cfg.AISplit.QueryToken)
+		if err != nil {
+			return err
 		}
-		aiBackend = &splitAIBackend{query: aiClient, command: ai.NewService(deps.GORM, driveService, objects, deps.Storage, cfg.AI), limiter: commandLimiter}
-		closeAI = func() {
-			_ = aiClient.Close()
-			closeRegistry()
-		}
+		defer conn.Close()
+		defer closeRegistry()
+		aiHTTP.Client = pbv2.NewAIQueryServiceClient(conn)
 	}
-	defer closeAI()
-	aiHTTP := ai.NewHTTP(aiBackend, ai.NewReader(deps.GORM, driveService), identityHTTP.Authenticate())
 
 	router := httpapi.NewRouter(httpapi.RouterConfig{
 		Environment:     cfg.App.Env,
@@ -138,7 +137,6 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 	return nil
 }
-
 
 type splitAIBackend struct {
 	query   *grpcclient.Client

@@ -23,12 +23,11 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/recovery"
 	"github.com/11bronx11/bx_yunpan/backend/internal/taskqueue"
+	"github.com/11bronx11/bx_yunpan/backend/internal/testdb"
 	"github.com/11bronx11/bx_yunpan/backend/internal/upload"
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 // Exercise the actual role handlers, relay and periodic runners together.
@@ -38,12 +37,7 @@ func TestAsyncUploadAndGCWithTwoMaintenanceScanners(t *testing.T) {
 	if dsn == "" || endpoint == "" || rabbit == "" || management == "" {
 		t.Skip("isolated PostgreSQL, RabbitMQ and MinIO required")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool, _ := db.DB()
-	t.Cleanup(func() { _ = pool.Close() })
+	db := testdb.Business(t)
 	client, err := minio.New(endpoint, &minio.Options{Creds: credentials.NewStaticV4(os.Getenv("TEST_MINIO_ACCESS_KEY"), os.Getenv("TEST_MINIO_SECRET_KEY"), ""), Region: "us-east-1"})
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +82,6 @@ func TestAsyncUploadAndGCWithTwoMaintenanceScanners(t *testing.T) {
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Exec("DELETE FROM users WHERE id = ?", user.ID) })
 	driveService := drive.NewService(db)
 	if err := driveService.ProvisionUser(db, user.ID); err != nil {
 		t.Fatal(err)

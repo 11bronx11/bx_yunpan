@@ -24,9 +24,6 @@ func testBroker(t *testing.T) *Broker {
 		t.Skip("TEST_RABBITMQ_URL required")
 	}
 	b := NewBroker(url, 32, "bx.async.test."+uuid.NewString())
-	if err := b.Ready(context.Background()); err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(func() {
 		b.Close()
 		conn, err := amqp.Dial(url)
@@ -41,14 +38,16 @@ func testBroker(t *testing.T) *Broker {
 			return
 		}
 		defer ch.Close()
-		for _, q := range []string{"upload", "object", "media", "gc", "ai", "search"} {
+		for _, q := range WorkQueues() {
 			if _, err := ch.QueueDelete(b.WorkQueue(q), false, false, false); err != nil {
 				t.Error(err)
 			}
 		}
 		for i := 0; i < 32; i++ {
-			if _, err := ch.QueueDelete(b.ResultQueue(i), false, false, false); err != nil {
-				t.Error(err)
+			for _, target := range []string{EffectCore, EffectAI} {
+				if _, err := ch.QueueDelete(b.ResultQueueFor(target, i), false, false, false); err != nil {
+					t.Error(err)
+				}
 			}
 		}
 		if _, err := ch.QueueDelete(b.Prefix+".dead", false, false, false); err != nil {
@@ -58,6 +57,9 @@ func testBroker(t *testing.T) *Broker {
 			t.Error(err)
 		}
 	})
+	if err := b.Ready(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	return b
 }
 

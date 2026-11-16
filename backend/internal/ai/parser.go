@@ -102,6 +102,10 @@ func (p *ChunkingParser) Parse(ctx context.Context, request ParseRequest) (Parse
 	if err != nil {
 		return ParseResult{}, err
 	}
+	if request.ChunkerVersion == rag.ParentChildVersion {
+		result.Chunks = nil
+		return result, nil
+	}
 	if len(result.Chunks) != 0 {
 		return result, nil
 	}

@@ -5,9 +5,9 @@ deploy_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 root_dir=$(cd -- "$deploy_dir/.." && pwd)
 
 case "${1:-}" in
-  api|worker|aisvc|parser-svc|async-control|committer|gc-worker|upload-worker|object-worker|media-worker|search-indexer|async-import|async-admin|reader-init|migrate) target=$1; shift ;;
+  api|worker|aisvc|core-internal|ai-query|ai-committer|ai-content-worker|ai-embedding-worker|ai-summary-worker|ai-text-projector|ai-vector-projector|ai-migrate|parser-svc|async-control|committer|gc-worker|upload-worker|object-worker|media-worker|search-indexer|async-import|async-admin|reader-init|ai-reader-init|migrate) target=$1; shift ;;
   *)
-    echo "Usage: ./deploy/local-run.sh {api|async-control|committer|upload-worker|object-worker|media-worker|gc-worker|aisvc|parser-svc|search-indexer|async-import|async-admin|reader-init|migrate} [args...]" >&2
+    echo "Usage: ./deploy/local-run.sh {api|async-control|committer|upload-worker|object-worker|media-worker|gc-worker|core-internal|ai-query|ai-committer|ai-content-worker|ai-embedding-worker|ai-summary-worker|ai-text-projector|ai-vector-projector|ai-migrate|parser-svc|async-import|async-admin|reader-init|ai-reader-init|migrate} [args...]" >&2
     exit 2
     ;;
 esac
@@ -15,6 +15,9 @@ esac
 # shellcheck disable=SC1091
 task_metrics_addr=${WORKER_METRICS_ADDR:-}
 source "$deploy_dir/local-env.sh"
+if [[ "$target" == ai-reader-init ]]; then
+ exec docker compose --env-file "$deploy_dir/.env" -f "$deploy_dir/compose.yaml" --profile app --profile ai-split run --rm ai-role-init
+fi
 if [[ "$target" == reader-init ]]; then
   exec docker compose --env-file "$deploy_dir/.env" -f "$deploy_dir/compose.yaml" --profile app run --rm --no-deps async-reader-init
 fi
@@ -31,7 +34,15 @@ elif [[ ${WORKER_METRICS_ADDR:-:8083} == :8083 ]]; then
     aisvc) metrics_port=18089 ;;
     parser-svc) metrics_port=18090 ;;
     search-indexer) metrics_port=18091 ;;
-    *) metrics_port=18092 ;;
+    core-internal) metrics_port=18092 ;;
+    ai-query) metrics_port=18093 ;;
+    ai-committer) metrics_port=18094 ;;
+    ai-content-worker) metrics_port=18095 ;;
+    ai-embedding-worker) metrics_port=18096 ;;
+    ai-summary-worker) metrics_port=18097 ;;
+    ai-text-projector) metrics_port=18098 ;;
+    ai-vector-projector) metrics_port=18099 ;;
+    *) metrics_port=18100 ;;
   esac
   export WORKER_METRICS_ADDR="127.0.0.1:$metrics_port"
 fi

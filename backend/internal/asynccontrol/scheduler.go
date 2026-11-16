@@ -18,7 +18,6 @@ type Budget struct {
 	InflightLimit, OwnerLimit, ResultHigh int
 	FairCursor                            string
 	PriorityTurn                          int64
-	PausedUntil                           time.Time
 	Backpressured                         bool
 	RecoveryAfter                         time.Time
 }
@@ -31,6 +30,8 @@ func (s *Store) Reserve(ctx context.Context, queue string, moduleToken ...uuid.U
 	var t Task
 	ok := false
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// paused_until is evaluated in SQL below. Do not scan its permanent
+		// 'infinity' fence into time.Time when a legacy queue has retired.
 		var b Budget
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&b, "queue=?", queue).Error; err != nil {
 			return err
@@ -161,6 +162,22 @@ func (s *Store) Recover(ctx context.Context, limit int) error {
 					return err
 				}
 			}
+			if s.PlanFailure != nil {
+				specs, err := s.PlanFailure(t)
+				if err != nil {
+					return err
+				}
+				for _, spec := range specs {
+					if _, err := s.ensure(tx, spec, "failure:"+t.ID.String()); err != nil {
+						return err
+					}
+				}
+			}
+			if s.AfterTerminal != nil {
+				if err := s.AfterTerminal(tx, s, t, state); err != nil {
+					return err
+				}
+			}
 			slog.Error("async work automatic execution stopped", "task_id", t.ID, "semantic_key", t.SemanticKey, "resource", t.ResourceKey, "generation", t.Generation, "attempts", t.Attempts, "max_attempts", t.MaxAttempts, "dispatches", t.Dispatches, "max_dispatches", t.MaxDispatches, "recoveries", t.Recoveries, "max_recoveries", t.MaxRecoveries, "started_at", t.StartedAt, "deadline", t.Deadline, "last_error", t.LastError, "trace", string(t.Trace))
 		}
 		return nil
@@ -173,7 +190,7 @@ func (s *Store) commandResult(tx *gorm.DB, t Task, body []byte, state string, no
 		return err
 	}
 	id := uuid.NewSHA1(t.ID, []byte(fmt.Sprintf("command:%d:%s", t.Generation, state)))
-	r := Result{ID: id, TaskID: t.ID, Generation: t.Generation, InputDigest: t.InputDigest, ResultDigest: digest, Body: b, CreatedAt: now}
+	r := Result{ID: id, TaskID: t.ID, Generation: t.Generation, InputDigest: t.InputDigest, ResultDigest: digest, Body: b, CreatedAt: now, EffectTarget: t.EffectTarget}
 	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&r).Error; err != nil {
 		return err
 	}

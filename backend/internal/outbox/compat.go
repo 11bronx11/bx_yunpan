@@ -83,7 +83,13 @@ func AddTyped(ctx context.Context, tx *gorm.DB, input eventcontract.EnvelopeInpu
 	if err != nil {
 		return err
 	}
-	return AddEnvelopeContext(ctx, tx, envelope)
+	if err := AddEnvelopeContext(ctx, tx, envelope); err != nil {
+		return err
+	}
+	if input.EventType == eventcontract.EventObjectReadyV1 {
+		return ReadyAIIntent(ctx, tx, input.AggregateID)
+	}
+	return nil
 }
 
 // AddEnvelopeContext is the context-aware writer used by service boundaries.

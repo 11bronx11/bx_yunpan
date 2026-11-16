@@ -3,7 +3,7 @@ set -euo pipefail
 deploy_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 env_file="$deploy_dir/.env"
 build=true
-ai_split=false
+ai_split=true
 observability=false
 redis_split=false
 search_indexer=false
@@ -14,9 +14,10 @@ parser_replicas=
 usage() {
   cat <<'USAGE'
 Usage: ./deploy/up.sh [--no-build] [--distributed-workers] [--ai-split] [--redis-split] [--search-indexer] [--search-backends] [--observability] [--api-replicas N] [--aisvc-replicas N] [--parser-replicas N]
-Core default: async-control, committer, upload/object/media/gc workers; independent business/control migrations.
+Core default: async-control, committer, upload/object/media/gc workers; independent business/control/AI migrations. AI uses explicit roles by default.
+--ai-split is a compatibility alias; combined AI execution has retired.
 --distributed-workers is retained as an alias for the default explicit roles.
-The script stops old business/async writers before migration and imports retained work without clearing queues or data.
+The script stops old business/async writers before migration and hands off retained AI work without clearing queues or data.
 USAGE
 }
 while (($#)); do
@@ -55,21 +56,23 @@ if [[ ${AI_ENABLED:-true} == true && ${AI_EMBEDDING_DIMENSION:-1024} != 1024 ]];
   echo 'AI_EMBEDDING_DIMENSION must match vector(1024).' >&2; exit 1
 fi
 profiles=(--profile app)
-services=(postgres async-postgres redis rabbitmq minio minio-init migrate migrate-control async-reader-init async-import api web async-control committer upload-worker object-worker media-worker gc-worker)
-targets=(migrate api async-import async-control committer upload-worker object-worker media-worker gc-worker web)
+services=(postgres async-postgres redis rabbitmq minio minio-init migrate migrate-control async-reader-init api web async-control committer upload-worker object-worker media-worker gc-worker)
+targets=(migrate api async-control committer upload-worker object-worker media-worker gc-worker web)
 if [[ ${AI_ENABLED:-true} == true ]]; then
-  targets+=(aisvc)
-  if [[ "$ai_split" == true ]]; then
-    profiles+=(--profile ai-split); services+=(ai-query ai-indexer); export AISVC_GRPC_TARGET=ai-query:8082
-  else profiles+=(--profile ai); services+=(aisvc); fi
+  targets+=(core-internal ai-query ai-committer ai-content-worker ai-embedding-worker ai-summary-worker ai-text-projector ai-vector-projector ai-migrate)
+  profiles+=(--profile ai-split); services+=(ai-postgres migrate-ai ai-role-init core-internal ai-query ai-committer ai-content-worker ai-embedding-worker ai-summary-worker)
+  if [[ "$search_indexer" == true || ${SEARCH_INDEX_ENABLED:-false} == true || "$search_backends" == true ]]; then
+    if [[ -n ${SEARCH_ES_ENDPOINT:-} || "$search_backends" == true ]]; then services+=(ai-text-projector); fi
+    if [[ -n ${SEARCH_QDRANT_ENDPOINT:-} || "$search_backends" == true ]]; then services+=(ai-vector-projector); fi
+  fi
   if [[ ${PARSER_REMOTE_ENABLED:-true} == true ]]; then profiles+=(--profile parser); services+=(parser-svc); targets+=(parser-svc); fi
 fi
 if [[ "$redis_split" == true ]]; then
   profiles+=(--profile redis-split); services+=(redis-coordination redis-cache)
   export REDIS_COORDINATION_ADDR=redis-coordination:6379 REDIS_CACHE_ADDR=redis-cache:6379
 fi
-if [[ "$search_indexer" == true || ${SEARCH_INDEX_ENABLED:-false} == true ]]; then
-  profiles+=(--profile search); services+=(search-indexer); targets+=(search-indexer); export SEARCH_INDEX_ENABLED=true
+if [[ "$search_indexer" == true || ${SEARCH_INDEX_ENABLED:-false} == true || "$search_backends" == true ]]; then
+  export SEARCH_INDEX_ENABLED=true
 fi
 if [[ "$search_backends" == true ]]; then
   profiles+=(--profile search-external); services+=(elasticsearch qdrant)
@@ -81,17 +84,20 @@ compose=(docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml")
 if [[ "$build" == true ]]; then "$deploy_dir/build.sh" "${targets[@]}"; fi
 # Fence the old execution authority before either migration/import or new
 # producers can run. Containers/queues/volumes are preserved for inspection.
-"${compose[@]}" --profile app --profile distributed --profile legacy-aliases --profile ai --profile ai-split --profile search --profile parser stop api worker outbox-relay maintenance-worker object-worker media-worker upload-worker aisvc ai-query ai-indexer search-indexer parser-svc async-control committer gc-worker
+"${compose[@]}" --profile app --profile distributed --profile legacy-aliases --profile ai --profile ai-split --profile search --profile parser stop api worker outbox-relay maintenance-worker object-worker media-worker upload-worker aisvc ai-query ai-indexer search-indexer parser-svc async-control committer gc-worker core-internal ai-committer ai-content-worker ai-embedding-worker ai-summary-worker ai-text-projector ai-vector-projector
 export ASYNC_LEGACY_WRITERS_STOPPED=true
+export AI_LEGACY_WRITERS_STOPPED=true
 # Complete the cutover before launching any new business writer. API itself
 # keeps no dependency on control PG/MQ; this ordering belongs to deployment.
-COMPOSE_PARALLEL_LIMIT=${COMPOSE_PARALLEL_LIMIT:-1} "${compose[@]}" "${profiles[@]}" up -d --no-build async-import
-"${compose[@]}" "${profiles[@]}" wait async-import
+COMPOSE_PARALLEL_LIMIT=${COMPOSE_PARALLEL_LIMIT:-1} "${compose[@]}" "${profiles[@]}" up -d --no-build migrate migrate-control async-reader-init
+yunpan_wait_one_shots compose migrate migrate-control async-reader-init
+if [[ ${AI_ENABLED:-true} == true ]]; then "$deploy_dir/ai-upgrade.sh" prepare; fi
 scale=()
 [[ -z "$api_replicas" ]] || scale+=(--scale "api=$api_replicas")
 if [[ -n "$aisvc_replicas" ]]; then
-  if [[ "$ai_split" == true ]]; then scale+=(--scale "ai-query=$aisvc_replicas"); else scale+=(--scale "aisvc=$aisvc_replicas"); fi
+  scale+=(--scale "ai-query=$aisvc_replicas")
 fi
 [[ -z "$parser_replicas" ]] || scale+=(--scale "parser-svc=$parser_replicas")
 COMPOSE_PARALLEL_LIMIT=${COMPOSE_PARALLEL_LIMIT:-1} "${compose[@]}" "${profiles[@]}" up -d --no-build --wait --wait-timeout 240 "${scale[@]}" "${services[@]}"
+if [[ ${AI_ENABLED:-true} == true ]]; then echo "AI historical rebuild is resumable; inspect ./deploy/ai-upgrade.sh verify, then archive when complete."; fi
 echo "BX YunPan is ready: http://${APP_BIND_IP:-127.0.0.1}:${WEB_PORT:-3000}"

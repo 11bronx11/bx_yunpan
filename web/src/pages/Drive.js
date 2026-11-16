@@ -111,6 +111,7 @@ const Drive = () => {
   const [renaming, setRenaming] = useState(false);
   const [moveTarget, setMoveTarget] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
+  const [fileInfo, setFileInfo] = useState(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareTarget, setShareTarget] = useState(null);
   const [previews, setPreviews] = useState({});
@@ -281,6 +282,7 @@ const Drive = () => {
     if (key === 'move') setMoveTarget(file);
     if (key === 'rename') openRename(file);
     if (key === 'ai') setAITarget(file);
+    if (key === 'ask') window.location.assign(`/ask?file=${encodeURIComponent(file.id)}&name=${encodeURIComponent(file.name)}`);
   };
 
   const compactFileMenu = file => ({
@@ -289,6 +291,7 @@ const Drive = () => {
       { key: 'delete', icon: <DeleteOutlined />, label: '删除', danger: true },
       { key: 'share', icon: <LinkOutlined />, label: '分享' },
       { key: 'ai', icon: <RobotOutlined />, label: 'AI 索引' },
+      { key: 'ask', icon: <RobotOutlined />, label: '问此文件' },
       { key: 'move', icon: <FolderOpenOutlined />, label: '移动到' },
       { key: 'rename', icon: <EditOutlined />, label: '重命名' },
     ],
@@ -303,6 +306,7 @@ const Drive = () => {
   const moreFileMenu = file => ({
     items: [
       { key: 'ai', icon: <RobotOutlined />, label: 'AI 索引' },
+      { key: 'ask', icon: <RobotOutlined />, label: '问此文件' },
       { key: 'move', icon: <FolderOpenOutlined />, label: '移动到' },
       { key: 'rename', icon: <EditOutlined />, label: '重命名' },
     ],
@@ -364,7 +368,7 @@ const Drive = () => {
       },
       style: { cursor: 'pointer' },
     };
-    return { tabIndex: 0, 'aria-label': `文件 ${item.name}` };
+    return { tabIndex: 0, 'aria-label': `文件 ${item.name}`, onClick: () => setFileInfo(item), onKeyDown: event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setFileInfo(item); } }, style: { cursor: 'pointer' } };
   };
 
   if (!root || !folder) return <ProductPage>{loadError ? <ErrorNotice type="error" showIcon message={loadError} /> : <GraphicEmpty title="正在打开你的云盘" description="目录与对象索引加载中。" />}</ProductPage>;
@@ -378,8 +382,11 @@ const Drive = () => {
     <Modal open={Boolean(renameTarget)} title="重命名文件" okText="保存" cancelText="取消" confirmLoading={renaming} onOk={handleRename} onCancel={() => setRenameTarget(null)} destroyOnClose><Input autoFocus aria-label="新文件名" value={renameName} onChange={event => setRenameName(event.target.value)} onPressEnter={handleRename} placeholder="新文件名" /></Modal>
     <MoveFileModal open={Boolean(moveTarget)} file={moveTarget} root={root} currentFolderId={folder} onCancel={() => setMoveTarget(null)} onMoved={handleMoved} />
     <AIIndexModal file={aiTarget} open={Boolean(aiTarget)} onClose={() => setAITarget(null)} onStatusChange={handleAIStatusChange} />
-    <FileSummaryModal file={summaryTarget} open={Boolean(summaryTarget)} onClose={() => setSummaryTarget(null)} />
+    <FileSummaryModal onDownload={() => summaryTarget && handleDownload(summaryTarget)} onAsk={() => summaryTarget && navigate(`/ask?file=${encodeURIComponent(summaryTarget.id)}&name=${encodeURIComponent(summaryTarget.name)}`)} file={summaryTarget} open={Boolean(summaryTarget)} onClose={() => setSummaryTarget(null)} />
     <Modal open={Boolean(imagePreview)} title={imagePreview?.name || '图片预览'} footer={null} width={920} centered destroyOnClose onCancel={() => setImagePreview(null)}><PreviewShell>{imagePreview && <img src={imagePreview.url} alt={imagePreview.name} />}</PreviewShell></Modal>
+    <Modal open={Boolean(fileInfo)} title={fileInfo?.name || '文件信息'} onCancel={() => setFileInfo(null)} footer={<Button onClick={() => fileInfo && handleDownload(fileInfo)}>下载原文件</Button>}>
+      <p>此类型暂不支持在线预览，可下载查看。</p><p>{fileInfo?.mime_type}</p>
+    </Modal>
     <ShareModal open={Boolean(shareTarget)} file={shareTarget} onCancel={() => setShareTarget(null)} />
     <ImportShareModal open={shareOpen} folderId={folder} targetLabel={crumbs.map(item => item.name === '/' ? '根目录' : item.name).join(' / ')} onCancel={() => setShareOpen(false)} onImported={() => loadFolder(folder)} />
   </Workspace></ProductPage>;

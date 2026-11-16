@@ -222,7 +222,7 @@ func (p *dashScopeProvider) Embeddings(ctx context.Context, texts []string) ([][
 }
 
 func (p *dashScopeProvider) Enrich(ctx context.Context, text string) (Insight, error) {
-	prompt := "请对以下文档生成JSON，只包含summary、tags、language。summary不超过200字，tags最多5个。\n\n" + limitRunes(text, 12000)
+	prompt := "请对以下文档生成JSON，只包含summary、tags、language。summary不超过200字，tags最多5个。\n\n" + text
 	content, err := p.chat(ctx, p.chatModel, []map[string]any{{"role": "user", "content": prompt}}, true)
 	if err != nil {
 		return Insight{}, err

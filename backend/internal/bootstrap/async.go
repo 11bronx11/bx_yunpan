@@ -14,6 +14,7 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"gorm.io/gorm"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/aisystem"
 	"github.com/11bronx11/bx_yunpan/backend/internal/asynccontrol"
 	"github.com/11bronx11/bx_yunpan/backend/internal/asyncjobs"
 	"github.com/11bronx11/bx_yunpan/backend/internal/asyncprotocol"
@@ -21,8 +22,10 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/identity"
 	"github.com/11bronx11/bx_yunpan/backend/internal/media"
 	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
+	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dependencies"
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/serviceauth"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/tracing"
 	"github.com/11bronx11/bx_yunpan/backend/internal/upload"
 )
@@ -46,12 +49,19 @@ func asyncStore(deps *dependencies.AsyncSet, cfg config.Config) *asynccontrol.St
 	s.BatchRows = cfg.Async.BatchRows
 	s.BatchBytes = cfg.Async.BatchBytes
 	s.BatchWait = cfg.Async.BatchWait
+	aisystem.Register(s.Registry)
+	planner := &aisystem.Planner{TextEpoch: cfg.AITextEpoch(), VectorEpoch: cfg.AIVectorEpoch(), TargetNamespace: cfg.AISplit.ProjectionNamespace, TargetEpoch: cfg.AIProjectionEpoch(), Profile: cfg.AIProfile()}
+	s.PlanContinuations = planner.Continuations
+	s.PlanFailure = planner.Failure
+	s.Observe = planner.Observe
+	s.AfterTerminal = planner.Finish
 	return s
 }
 
 // RunAsync wires only the dependencies required by one explicit role. Core
 // compute roles cannot obtain a business write connection from this assembly.
 func RunAsync(ctx context.Context, cfg config.Config, logger *slog.Logger, role string) error {
+	ctx = outbox.WithAIProfile(ctx, cfg.AISplit.ProfileID, cfg.AISplit.ProfileRevision)
 	shutdown, err := tracing.Setup(ctx, cfg.Tracing, "bx-"+role)
 	if err != nil {
 		return err
@@ -81,7 +91,12 @@ func RunAsync(ctx context.Context, cfg config.Config, logger *slog.Logger, role 
 		if err := s.DB.WithContext(ctx).Exec("UPDATE queue_budgets SET inflight_limit=?,owner_limit=?,result_high=?", cfg.Async.QueueLimit, cfg.Async.OwnerLimit, cfg.Async.ResultHigh).Error; err != nil {
 			return err
 		}
-		relay := &asynccontrol.Relay{Control: s, Business: deps.Read, Source: "business-primary", Rows: cfg.Async.RelayRows, Bytes: cfg.Async.RelayBytes, Plan: (&asyncjobs.Planner{Read: deps.Read, AI: cfg.AI.Enabled, Search: cfg.Search.Enabled, GCDelay: cfg.Outbox.GCDelay, OutputSafety: cfg.Async.OutputSafety}).Plan}
+		processingKey, err := serviceauth.Private(cfg.AISplit.ProcessingSigningSeed)
+		if err != nil && cfg.AI.Enabled {
+			return err
+		}
+		aiPlanner := &aisystem.Planner{TextEpoch: cfg.AITextEpoch(), VectorEpoch: cfg.AIVectorEpoch(), TargetNamespace: cfg.AISplit.ProjectionNamespace, TargetEpoch: cfg.AIProjectionEpoch(), Profile: cfg.AIProfile(), ProcessingKey: processingKey}
+		relay := &asynccontrol.Relay{Control: s, Business: deps.Read, Source: "business-primary", Rows: cfg.Async.RelayRows, Bytes: cfg.Async.RelayBytes, Plan: (&asyncjobs.Planner{Read: deps.Read, AI: cfg.AI.Enabled, Search: cfg.Search.Enabled, GCDelay: cfg.Outbox.GCDelay, OutputSafety: cfg.Async.OutputSafety, AIIntent: aiPlanner.Intent}).Plan}
 		return runAsyncGroup(ctx,
 			func(c context.Context) error {
 				return relay.Run(c, cfg.App.InstanceID, cfg.Async.PollMin, cfg.Async.PollMax, logger)

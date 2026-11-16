@@ -39,6 +39,13 @@ func NewBroker(url string, shards int, prefix ...string) *Broker {
 func (b *Broker) WorkQueue(queue string) string { return b.Prefix + ".work." + queue }
 func (b *Broker) ResultQueue(shard int) string  { return fmt.Sprintf("%s.result.%02d", b.Prefix, shard) }
 
+func (b *Broker) ResultQueueFor(target string, shard int) string {
+	if target == EffectAI {
+		return fmt.Sprintf("%s.result.ai.%02d", b.Prefix, shard)
+	}
+	return b.ResultQueue(shard)
+}
+
 func (b *Broker) dial(ctx context.Context) (*amqp.Connection, net.Conn, error) {
 	var socket net.Conn
 	conn, err := amqp.DialConfig(b.URL, amqp.Config{Heartbeat: 10 * time.Second, Locale: "en_US", Dial: func(network, address string) (net.Conn, error) {
@@ -82,14 +89,16 @@ func (b *Broker) declare(ch *amqp.Channel) error {
 		}
 		return ch.QueueBind(name, name, b.Prefix, false, nil)
 	}
-	for _, q := range []string{"upload", "object", "media", "gc", "ai", "search"} {
+	for _, q := range WorkQueues() {
 		if err := declare(b.WorkQueue(q), false); err != nil {
 			return err
 		}
 	}
 	for shard := 0; shard < b.Shards; shard++ {
-		if err := declare(b.ResultQueue(shard), true); err != nil {
-			return err
+		for _, target := range []string{EffectCore, EffectAI} {
+			if err := declare(b.ResultQueueFor(target, shard), true); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
