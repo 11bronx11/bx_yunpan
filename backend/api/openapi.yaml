@@ -1292,7 +1292,8 @@ components:
           nullable: true
         ai_status:
           type: string
-          enum: [pending, processing, indexed, failed, unsupported]
+          description: Aggregated AI index status; processing includes queued builds. Unavailable status reads may omit this field.
+          enum: [missing, processing, indexed, failed]
           nullable: true
         version:
           type: integer
@@ -1862,9 +1863,14 @@ components:
         coverage: {$ref: '#/components/schemas/AICoverage'}
         file_id:
           $ref: '#/components/schemas/UUID'
+        ai_status:
+          type: string
+          description: Aggregated AI index status for the existing four-state UI.
+          enum: [missing, processing, indexed, failed]
         status:
           type: string
-          enum: [pending, processing, indexed, failed, unsupported]
+          description: Compatibility alias of ai_status.
+          enum: [missing, processing, indexed, failed]
         summary:
           type: string
           nullable: true
@@ -1877,8 +1883,10 @@ components:
           nullable: true
         pipeline_version:
           type: string
+          description: Parser, chunker, and summary strategy/prompt versions from the active published results.
         model_version:
           type: string
+          description: Summary and embedding model names from the active published results.
         error_code:
           type: string
           nullable: true

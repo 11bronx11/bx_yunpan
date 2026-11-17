@@ -25,4 +25,4 @@ message BatchCapabilitiesRequest { repeated ObjectRef objects=1; }
 message ObjectCapabilities { ObjectRef object=1; Capabilities capabilities=2; }
 message BatchCapabilitiesResponse { repeated ObjectCapabilities items=1; }
 message GetOverviewRequest { string grant=1; string file_id=2; }
-message OverviewResponse { string file_id=1; Capabilities capabilities=2; string summary=3; repeated string tags=4; string language=5; string preview_kind=6; string preview_state=7; Coverage coverage=8; }
+message OverviewResponse { string file_id=1; Capabilities capabilities=2; string summary=3; repeated string tags=4; string language=5; string preview_kind=6; string preview_state=7; Coverage coverage=8; string model_version=9; string pipeline_version=10; }

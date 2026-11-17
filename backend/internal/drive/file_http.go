@@ -1,6 +1,7 @@
 package drive
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 
@@ -13,6 +14,12 @@ import (
 type FileHTTP struct {
 	manager      *FileManager
 	authenticate gin.HandlerFunc
+	fileStatuses func(context.Context, uuid.UUID, []FileView)
+}
+
+func (h *FileHTTP) WithFileStatuses(load func(context.Context, uuid.UUID, []FileView)) *FileHTTP {
+	h.fileStatuses = load
+	return h
 }
 
 func NewFileHTTP(manager *FileManager, authenticate gin.HandlerFunc) *FileHTTP {
@@ -39,6 +46,11 @@ func (h *FileHTTP) get(c *gin.Context) {
 	if err != nil {
 		new(HTTP).writeError(c, err)
 		return
+	}
+	if h.fileStatuses != nil {
+		files := []FileView{file}
+		h.fileStatuses(c.Request.Context(), ownerID, files)
+		file = files[0]
 	}
 	c.JSON(http.StatusOK, FileResponse(file))
 }

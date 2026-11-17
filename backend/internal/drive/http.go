@@ -1,6 +1,7 @@
 package drive
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -15,6 +16,14 @@ type HTTP struct {
 	service         *Service
 	authenticate    gin.HandlerFunc
 	childrenLimiter gin.HandlerFunc
+	fileStatuses    func(context.Context, uuid.UUID, []FileView)
+}
+
+// WithFileStatuses enriches authorized HTTP results after reading core metadata.
+// AI availability must not prevent listing a directory.
+func (h *HTTP) WithFileStatuses(load func(context.Context, uuid.UUID, []FileView)) *HTTP {
+	h.fileStatuses = load
+	return h
 }
 
 func NewHTTP(service *Service, authenticate gin.HandlerFunc, childrenLimiter ...gin.HandlerFunc) *HTTP {
@@ -66,6 +75,9 @@ func (h *HTTP) children(c *gin.Context) {
 	if err != nil {
 		h.writeError(c, err)
 		return
+	}
+	if h.fileStatuses != nil {
+		h.fileStatuses(c.Request.Context(), ownerID, files)
 	}
 	items := make([]gin.H, 0, len(folders)+len(files))
 	for _, folder := range folders {

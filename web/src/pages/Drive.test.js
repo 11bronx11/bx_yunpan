@@ -218,6 +218,13 @@ test('an opaque file row can receive keyboard focus to reveal desktop actions', 
   renderDrive();
   const row = await screen.findByRole('row', { name: /archive.bin/ });
   expect(row).toHaveAttribute('tabindex', '0');
+  fireEvent.click(row);
+  fireEvent.keyDown(row, { key: 'Enter' });
+  fireEvent.keyDown(row, { key: ' ' });
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(getFileAI).not.toHaveBeenCalled();
+  expect(getPreview).not.toHaveBeenCalled();
+  expect(getDownloadURL).not.toHaveBeenCalled();
 });
 
 test('repeated Enter submits a folder creation only once while it is pending', async () => {

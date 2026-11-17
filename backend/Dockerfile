@@ -1,6 +1,7 @@
 ARG DOCKER_REGISTRY=docker.io
 ARG GO_VERSION=1.25.13
 FROM ${DOCKER_REGISTRY}/library/golang:${GO_VERSION}-alpine AS build
+LABEL io.bronx.yunpan.build-stage="go"
 
 ARG GO_PROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GO_PROXY}

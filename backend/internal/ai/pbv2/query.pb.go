@@ -1195,17 +1195,19 @@ func (x *GetOverviewRequest) GetFileId() string {
 }
 
 type OverviewResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	FileId        string                 `protobuf:"bytes,1,opt,name=file_id,json=fileId,proto3" json:"file_id,omitempty"`
-	Capabilities  *Capabilities          `protobuf:"bytes,2,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
-	Summary       string                 `protobuf:"bytes,3,opt,name=summary,proto3" json:"summary,omitempty"`
-	Tags          []string               `protobuf:"bytes,4,rep,name=tags,proto3" json:"tags,omitempty"`
-	Language      string                 `protobuf:"bytes,5,opt,name=language,proto3" json:"language,omitempty"`
-	PreviewKind   string                 `protobuf:"bytes,6,opt,name=preview_kind,json=previewKind,proto3" json:"preview_kind,omitempty"`
-	PreviewState  string                 `protobuf:"bytes,7,opt,name=preview_state,json=previewState,proto3" json:"preview_state,omitempty"`
-	Coverage      *Coverage              `protobuf:"bytes,8,opt,name=coverage,proto3" json:"coverage,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	FileId          string                 `protobuf:"bytes,1,opt,name=file_id,json=fileId,proto3" json:"file_id,omitempty"`
+	Capabilities    *Capabilities          `protobuf:"bytes,2,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
+	Summary         string                 `protobuf:"bytes,3,opt,name=summary,proto3" json:"summary,omitempty"`
+	Tags            []string               `protobuf:"bytes,4,rep,name=tags,proto3" json:"tags,omitempty"`
+	Language        string                 `protobuf:"bytes,5,opt,name=language,proto3" json:"language,omitempty"`
+	PreviewKind     string                 `protobuf:"bytes,6,opt,name=preview_kind,json=previewKind,proto3" json:"preview_kind,omitempty"`
+	PreviewState    string                 `protobuf:"bytes,7,opt,name=preview_state,json=previewState,proto3" json:"preview_state,omitempty"`
+	Coverage        *Coverage              `protobuf:"bytes,8,opt,name=coverage,proto3" json:"coverage,omitempty"`
+	ModelVersion    string                 `protobuf:"bytes,9,opt,name=model_version,json=modelVersion,proto3" json:"model_version,omitempty"`
+	PipelineVersion string                 `protobuf:"bytes,10,opt,name=pipeline_version,json=pipelineVersion,proto3" json:"pipeline_version,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *OverviewResponse) Reset() {
@@ -1292,6 +1294,20 @@ func (x *OverviewResponse) GetCoverage() *Coverage {
 		return x.Coverage
 	}
 	return nil
+}
+
+func (x *OverviewResponse) GetModelVersion() string {
+	if x != nil {
+		return x.ModelVersion
+	}
+	return ""
+}
+
+func (x *OverviewResponse) GetPipelineVersion() string {
+	if x != nil {
+		return x.PipelineVersion
+	}
+	return ""
 }
 
 var File_ai_v2_query_proto protoreflect.FileDescriptor
@@ -1399,7 +1415,7 @@ const file_ai_v2_query_proto_rawDesc = "" +
 	"\x05items\x18\x01 \x03(\v2 .yunpan.ai.v2.ObjectCapabilitiesR\x05items\"C\n" +
 	"\x12GetOverviewRequest\x12\x14\n" +
 	"\x05grant\x18\x01 \x01(\tR\x05grant\x12\x17\n" +
-	"\afile_id\x18\x02 \x01(\tR\x06fileId\"\xb1\x02\n" +
+	"\afile_id\x18\x02 \x01(\tR\x06fileId\"\x81\x03\n" +
 	"\x10OverviewResponse\x12\x17\n" +
 	"\afile_id\x18\x01 \x01(\tR\x06fileId\x12>\n" +
 	"\fcapabilities\x18\x02 \x01(\v2\x1a.yunpan.ai.v2.CapabilitiesR\fcapabilities\x12\x18\n" +
@@ -1408,7 +1424,10 @@ const file_ai_v2_query_proto_rawDesc = "" +
 	"\blanguage\x18\x05 \x01(\tR\blanguage\x12!\n" +
 	"\fpreview_kind\x18\x06 \x01(\tR\vpreviewKind\x12#\n" +
 	"\rpreview_state\x18\a \x01(\tR\fpreviewState\x122\n" +
-	"\bcoverage\x18\b \x01(\v2\x16.yunpan.ai.v2.CoverageR\bcoverage2\xc8\x02\n" +
+	"\bcoverage\x18\b \x01(\v2\x16.yunpan.ai.v2.CoverageR\bcoverage\x12#\n" +
+	"\rmodel_version\x18\t \x01(\tR\fmodelVersion\x12)\n" +
+	"\x10pipeline_version\x18\n" +
+	" \x01(\tR\x0fpipelineVersion2\xc8\x02\n" +
 	"\x0eAIQueryService\x12C\n" +
 	"\x06Search\x12\x1b.yunpan.ai.v2.SearchRequest\x1a\x1c.yunpan.ai.v2.SearchResponse\x12:\n" +
 	"\x03Ask\x12\x18.yunpan.ai.v2.AskRequest\x1a\x19.yunpan.ai.v2.AskResponse\x12d\n" +

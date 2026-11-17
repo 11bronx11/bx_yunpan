@@ -1,9 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Space, Modal, Skeleton, Tag } from 'antd';
+import { Modal, Skeleton, Tag } from 'antd';
 import { FileTextOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import styled from '@emotion/styled';
 import { getFileAI } from '../services/ai';
-import { StatusTag } from './design/ProductUI';
 
 export const AI_SUMMARY_LIMIT = 240;
 
@@ -24,47 +23,36 @@ const SummaryModal = styled(Modal)`
   }
 
   .ant-modal-header { margin-bottom: 0; padding-bottom: 16px; border-bottom: 1px solid var(--divider); background: transparent; }
-  .ant-modal-title { padding-right: 28px; color: var(--ink); font-family: var(--body-font); font-size: 16px; font-weight: 600; }
-  .ant-modal-footer { margin-top: 20px; }
-  .ant-modal-footer .ant-btn {
-    min-width: 80px;
-    min-height: 40px;
-    padding-inline: 20px;
-    border-color: var(--control-border);
-    border-radius: var(--radius-pill);
-    color: var(--ink);
-    background: var(--white);
-    box-shadow: none;
-  }
-  .ant-modal-footer .ant-btn:hover { border-color: var(--ink); color: var(--ink); background: var(--surface-hover); }
+  .ant-modal-title { padding-right: 28px; color: var(--ink); font-family: var(--body-font); font-size: 16px; font-weight: 600; line-height: 1.5; }
 
   @media (max-width: 620px) {
     && { max-width: calc(100% - 32px); }
     .ant-modal-content { padding: 20px; }
-    .ant-modal-footer .ant-btn { min-height: 44px; }
   }
 `;
 
 const ModalTitle = styled.div`
   display: flex;
   gap: 8px;
-  align-items: center;
+  align-items: flex-start;
 
-  .anticon { flex: 0 0 auto; color: var(--text-secondary); }
-  span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .anticon { flex: 0 0 auto; margin-top: 4px; color: var(--text-secondary); }
+  span:last-child { min-width: 0; overflow-wrap: anywhere; }
 `;
 
 const Content = styled.div`
   display: grid;
-  gap: 18px;
+  gap: 16px;
   align-content: start;
+  max-height: min(65vh, 560px);
+  overflow-y: auto;
   padding-top: 20px;
 `;
 
 const Unavailable = styled.div`
   display: grid;
-  min-height: 160px;
-  gap: 14px;
+  min-height: 112px;
+  gap: 12px;
   align-content: center;
   justify-items: center;
   padding: 28px 16px;
@@ -86,18 +74,35 @@ const Summary = styled.p`
   font-size: 15px;
   line-height: 1.85;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 `;
 
 const Metadata = styled.div`
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
+
+  .ant-tag {
+    max-width: 100%;
+    margin: 0;
+    padding: 3px 9px;
+    border-color: var(--divider-strong);
+    border-radius: var(--radius-control);
+    color: var(--text-secondary);
+    background: var(--surface-soft);
+    font-size: 12px;
+    line-height: 18px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .overview-label { color: var(--ink); background: var(--mint); }
 `;
 
 const unavailableMessage = '暂时无法查看AI摘要';
 
-const FileSummaryModal = ({ file, open, onClose, onDownload, onAsk }) => {
+const FileSummaryModal = ({ file, open, onClose }) => {
   const [document, setDocument] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -123,29 +128,28 @@ const FileSummaryModal = ({ file, open, onClose, onDownload, onAsk }) => {
   }, [file?.id, open]);
 
   const summary = useMemo(() => truncateSummary(document?.summary), [document?.summary]);
-  const available = Boolean(summary) && (document?.capabilities?.summary?.available ?? document?.status === 'indexed');
-  const previewState = document?.preview?.state || document?.capabilities?.summary?.latest_build?.state;
-  const stateMessage = error || ({ pending: '概览正在准备，文本就绪后仍可问答', failed: '概览生成失败，已就绪的文本仍可问答', unsupported: '此类型暂不支持概览，可下载查看' }[previewState] || unavailableMessage);
+  const indexed = (document?.ai_status || document?.status) === 'indexed';
+  const available = Boolean(summary) && indexed;
 
   return <SummaryModal
     open={open}
     title={<ModalTitle><FileTextOutlined /><span title={file?.name}>{file?.name || '文档摘要'}</span></ModalTitle>}
-    width={560}
+    width={600}
     centered
     destroyOnClose
     onCancel={onClose}
-    footer={<Space>{onAsk && <Button disabled={!document?.capabilities?.askable} onClick={onAsk}>问此文件</Button>}{onDownload && <Button onClick={onDownload}>下载</Button>}<Button onClick={onClose}>关闭</Button></Space>}
+    footer={null}
   >
-    <Content aria-live="polite" aria-busy={loading}>
+    <Content as="article" aria-label="AI 概览" aria-live="polite" aria-busy={loading}>
       {loading && <Skeleton active paragraph={{ rows: 5 }} title={false} />}
       {!loading && (error || !available) && <Unavailable>
         <InfoCircleOutlined aria-hidden="true" />
-        <p>{stateMessage}</p>
+        <p>{error || unavailableMessage}</p>
       </Unavailable>}
       {!loading && available && <>
         <Summary>{summary}</Summary>
-        <Metadata>
-          <StatusTag tone="mint">AI 摘要</StatusTag>
+        <Metadata aria-label="概览标签">
+          <Tag className="overview-label">AI 概览</Tag>
           {document.language && <Tag>{document.language.toUpperCase()}</Tag>}
           {document.tags?.map(tag => <Tag key={tag}>{tag}</Tag>)}
         </Metadata>

@@ -96,6 +96,30 @@ func (e AICoverageMode) Valid() bool {
 	}
 }
 
+// Defines values for AIDocumentAiStatus.
+const (
+	AIDocumentAiStatusFailed     AIDocumentAiStatus = "failed"
+	AIDocumentAiStatusIndexed    AIDocumentAiStatus = "indexed"
+	AIDocumentAiStatusMissing    AIDocumentAiStatus = "missing"
+	AIDocumentAiStatusProcessing AIDocumentAiStatus = "processing"
+)
+
+// Valid indicates whether the value is a known member of the AIDocumentAiStatus enum.
+func (e AIDocumentAiStatus) Valid() bool {
+	switch e {
+	case AIDocumentAiStatusFailed:
+		return true
+	case AIDocumentAiStatusIndexed:
+		return true
+	case AIDocumentAiStatusMissing:
+		return true
+	case AIDocumentAiStatusProcessing:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AIDocumentPreviewKind.
 const (
 	AIDocumentPreviewKindDocumentSummary AIDocumentPreviewKind = "document_summary"
@@ -146,11 +170,10 @@ func (e AIDocumentPreviewState) Valid() bool {
 
 // Defines values for AIDocumentStatus.
 const (
-	AIDocumentStatusFailed      AIDocumentStatus = "failed"
-	AIDocumentStatusIndexed     AIDocumentStatus = "indexed"
-	AIDocumentStatusPending     AIDocumentStatus = "pending"
-	AIDocumentStatusProcessing  AIDocumentStatus = "processing"
-	AIDocumentStatusUnsupported AIDocumentStatus = "unsupported"
+	AIDocumentStatusFailed     AIDocumentStatus = "failed"
+	AIDocumentStatusIndexed    AIDocumentStatus = "indexed"
+	AIDocumentStatusMissing    AIDocumentStatus = "missing"
+	AIDocumentStatusProcessing AIDocumentStatus = "processing"
 )
 
 // Valid indicates whether the value is a known member of the AIDocumentStatus enum.
@@ -160,11 +183,9 @@ func (e AIDocumentStatus) Valid() bool {
 		return true
 	case AIDocumentStatusIndexed:
 		return true
-	case AIDocumentStatusPending:
+	case AIDocumentStatusMissing:
 		return true
 	case AIDocumentStatusProcessing:
-		return true
-	case AIDocumentStatusUnsupported:
 		return true
 	default:
 		return false
@@ -194,11 +215,10 @@ func (e AIScopeMode) Valid() bool {
 
 // Defines values for AskableFilePageItemsAiStatus.
 const (
-	AskableFilePageItemsAiStatusFailed      AskableFilePageItemsAiStatus = "failed"
-	AskableFilePageItemsAiStatusIndexed     AskableFilePageItemsAiStatus = "indexed"
-	AskableFilePageItemsAiStatusPending     AskableFilePageItemsAiStatus = "pending"
-	AskableFilePageItemsAiStatusProcessing  AskableFilePageItemsAiStatus = "processing"
-	AskableFilePageItemsAiStatusUnsupported AskableFilePageItemsAiStatus = "unsupported"
+	AskableFilePageItemsAiStatusFailed     AskableFilePageItemsAiStatus = "failed"
+	AskableFilePageItemsAiStatusIndexed    AskableFilePageItemsAiStatus = "indexed"
+	AskableFilePageItemsAiStatusMissing    AskableFilePageItemsAiStatus = "missing"
+	AskableFilePageItemsAiStatusProcessing AskableFilePageItemsAiStatus = "processing"
 )
 
 // Valid indicates whether the value is a known member of the AskableFilePageItemsAiStatus enum.
@@ -208,11 +228,9 @@ func (e AskableFilePageItemsAiStatus) Valid() bool {
 		return true
 	case AskableFilePageItemsAiStatusIndexed:
 		return true
-	case AskableFilePageItemsAiStatusPending:
+	case AskableFilePageItemsAiStatusMissing:
 		return true
 	case AskableFilePageItemsAiStatusProcessing:
-		return true
-	case AskableFilePageItemsAiStatusUnsupported:
 		return true
 	default:
 		return false
@@ -269,11 +287,10 @@ func (e ErrorEnvelopeInvalidFilesReason) Valid() bool {
 
 // Defines values for FileEntryAiStatus.
 const (
-	FileEntryAiStatusFailed      FileEntryAiStatus = "failed"
-	FileEntryAiStatusIndexed     FileEntryAiStatus = "indexed"
-	FileEntryAiStatusPending     FileEntryAiStatus = "pending"
-	FileEntryAiStatusProcessing  FileEntryAiStatus = "processing"
-	FileEntryAiStatusUnsupported FileEntryAiStatus = "unsupported"
+	FileEntryAiStatusFailed     FileEntryAiStatus = "failed"
+	FileEntryAiStatusIndexed    FileEntryAiStatus = "indexed"
+	FileEntryAiStatusMissing    FileEntryAiStatus = "missing"
+	FileEntryAiStatusProcessing FileEntryAiStatus = "processing"
 )
 
 // Valid indicates whether the value is a known member of the FileEntryAiStatus enum.
@@ -283,11 +300,9 @@ func (e FileEntryAiStatus) Valid() bool {
 		return true
 	case FileEntryAiStatusIndexed:
 		return true
-	case FileEntryAiStatusPending:
+	case FileEntryAiStatusMissing:
 		return true
 	case FileEntryAiStatusProcessing:
-		return true
-	case FileEntryAiStatusUnsupported:
 		return true
 	default:
 		return false
@@ -782,23 +797,34 @@ type AICoverageMode string
 
 // AIDocument defines model for AIDocument.
 type AIDocument struct {
-	Capabilities AICapabilities `json:"capabilities"`
-	Coverage     *AICoverage    `json:"coverage,omitempty"`
-	ErrorCode    *string        `json:"error_code,omitempty"`
+	// AiStatus Aggregated AI index status for the existing four-state UI.
+	AiStatus     *AIDocumentAiStatus `json:"ai_status,omitempty"`
+	Capabilities AICapabilities      `json:"capabilities"`
+	Coverage     *AICoverage         `json:"coverage,omitempty"`
+	ErrorCode    *string             `json:"error_code,omitempty"`
 
 	// FileId Example: 0198a1f0-7b2a-7000-8000-000000000001
-	FileId          UUID    `json:"file_id"`
-	Language        *string `json:"language,omitempty"`
-	ModelVersion    *string `json:"model_version,omitempty"`
+	FileId   UUID    `json:"file_id"`
+	Language *string `json:"language,omitempty"`
+
+	// ModelVersion Summary and embedding model names from the active published results.
+	ModelVersion *string `json:"model_version,omitempty"`
+
+	// PipelineVersion Parser, chunker, and summary strategy/prompt versions from the active published results.
 	PipelineVersion *string `json:"pipeline_version,omitempty"`
 	Preview         struct {
 		Kind  *AIDocumentPreviewKind  `json:"kind,omitempty"`
 		State *AIDocumentPreviewState `json:"state,omitempty"`
 	} `json:"preview"`
+
+	// Status Compatibility alias of ai_status.
 	Status  *AIDocumentStatus `json:"status,omitempty"`
 	Summary *string           `json:"summary,omitempty"`
 	Tags    *[]string         `json:"tags,omitempty"`
 }
+
+// AIDocumentAiStatus Aggregated AI index status for the existing four-state UI.
+type AIDocumentAiStatus string
 
 // AIDocumentPreviewKind defines model for AIDocument.Preview.Kind.
 type AIDocumentPreviewKind string
@@ -806,7 +832,7 @@ type AIDocumentPreviewKind string
 // AIDocumentPreviewState defines model for AIDocument.Preview.State.
 type AIDocumentPreviewState string
 
-// AIDocumentStatus defines model for AIDocument.Status.
+// AIDocumentStatus Compatibility alias of ai_status.
 type AIDocumentStatus string
 
 // AIRetrieval defines model for AIRetrieval.
@@ -862,6 +888,7 @@ type AskResponse struct {
 // AskableFilePage defines model for AskableFilePage.
 type AskableFilePage struct {
 	Items []struct {
+		// AiStatus Aggregated AI index status; processing includes queued builds. Unavailable status reads may omit this field.
 		AiStatus     *AskableFilePageItemsAiStatus `json:"ai_status,omitempty"`
 		Capabilities *AICapabilities               `json:"capabilities,omitempty"`
 		CreatedAt    Timestamp                     `json:"created_at"`
@@ -889,7 +916,7 @@ type AskableFilePage struct {
 	ScanIncomplete bool     `json:"scan_incomplete"`
 }
 
-// AskableFilePageItemsAiStatus defines model for AskableFilePage.Items.AiStatus.
+// AskableFilePageItemsAiStatus Aggregated AI index status; processing includes queued builds. Unavailable status reads may omit this field.
 type AskableFilePageItemsAiStatus string
 
 // AskableFilePageItemsType defines model for AskableFilePage.Items.Type.
@@ -1039,6 +1066,7 @@ type ErrorEnvelopeInvalidFilesReason string
 
 // FileEntry defines model for FileEntry.
 type FileEntry struct {
+	// AiStatus Aggregated AI index status; processing includes queued builds. Unavailable status reads may omit this field.
 	AiStatus  *FileEntryAiStatus `json:"ai_status,omitempty"`
 	CreatedAt Timestamp          `json:"created_at"`
 
@@ -1062,7 +1090,7 @@ type FileEntry struct {
 	Version      int64         `json:"version"`
 }
 
-// FileEntryAiStatus defines model for FileEntry.AiStatus.
+// FileEntryAiStatus Aggregated AI index status; processing includes queued builds. Unavailable status reads may omit this field.
 type FileEntryAiStatus string
 
 // FileEntryType defines model for FileEntry.Type.

@@ -31,6 +31,25 @@ type Computer struct {
 	Project            func(context.Context, string, aiprotocol.Input) (any, int64, error)
 }
 
+// Keep provider response details out of task errors while retaining their
+// classification for the worker's retry decision.
+type modelBuildError struct {
+	stage string
+	cause error
+}
+
+func (e *modelBuildError) Error() string {
+	if ai.IsProviderPermanent(e.cause) {
+		return e.stage + ".rejected"
+	}
+	return e.stage + ".unavailable"
+}
+func (e *modelBuildError) Unwrap() error { return e.cause }
+
+func IsPermanentComputeError(err error) bool {
+	return errors.Is(err, asynccontrol.ErrInvalid) || ai.IsProviderPermanent(err) || ai.IsParsePermanent(err)
+}
+
 func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.RawMessage, computeErr error) {
 	in, err := decode[aiprotocol.Input](t.Input)
 	started := time.Now()
@@ -144,18 +163,18 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.
 			return nil, errors.New("ai.vector.input_missing")
 		}
 		vectors := vectorData{}
-		for offset := 0; offset < len(children); offset += 32 {
+		for offset := 0; offset < len(children); offset += ai.EmbeddingBatchSize {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			end := min(offset+32, len(children))
+			end := min(offset+ai.EmbeddingBatchSize, len(children))
 			texts := []string{}
 			for _, ch := range children[offset:end] {
 				texts = append(texts, ch.Content)
 			}
 			vs, err := c.Embedding.Embeddings(ctx, texts)
 			if err != nil {
-				return nil, errors.New("embedding.unavailable")
+				return nil, &modelBuildError{stage: "embedding", cause: err}
 			}
 			if len(vs) != len(texts) {
 				return nil, asynccontrol.ErrInvalid
@@ -189,7 +208,7 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.
 		for _, part := range parts {
 			insight, err = c.Summary.Enrich(ctx, part)
 			if err != nil {
-				return nil, errors.New("summary.unavailable")
+				return nil, &modelBuildError{stage: "summary", cause: err}
 			}
 			if strings.TrimSpace(insight.Summary) == "" {
 				return nil, errors.New("ai.summary.empty")
@@ -203,7 +222,7 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.
 			}
 			insight, err = c.Summary.Enrich(ctx, combined)
 			if err != nil {
-				return nil, errors.New("summary.unavailable")
+				return nil, &modelBuildError{stage: "summary", cause: err}
 			}
 			if strings.TrimSpace(insight.Summary) == "" {
 				return nil, errors.New("ai.summary.empty")

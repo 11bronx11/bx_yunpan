@@ -293,10 +293,8 @@ func (h *HTTP) overview(c *gin.Context) {
 	}
 	out := asMap(resp)
 	out["preview"] = gin.H{"kind": resp.PreviewKind, "state": resp.PreviewState}
-	out["status"] = "pending"
-	if resp.Capabilities.Text.Available {
-		out["status"] = "indexed"
-	}
+	out["status"] = indexStatus(resp.Capabilities)
+	out["ai_status"] = out["status"]
 	c.JSON(200, out)
 }
 

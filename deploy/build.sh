@@ -6,6 +6,8 @@ root_dir=$(cd -- "$deploy_dir/.." && pwd)
 env_file="$deploy_dir/.env"
 
 command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "python3 is required for image retention" >&2; exit 1; }
+command -v flock >/dev/null 2>&1 || { echo "flock is required to serialize builds and image cleanup" >&2; exit 1; }
 [[ -f "$env_file" ]] || { echo "Missing $env_file; run ./deploy/init-env.sh first." >&2; exit 1; }
 
 # shellcheck disable=SC1091
@@ -83,6 +85,13 @@ for target in "${targets[@]}"; do
   esac
 done
 
+# Share one lock across builds from this checkout so cleanup cannot race another
+# build's temporarily unreferenced outputs. Docker still protects other containers.
+mkdir -p "$root_dir/.cache"
+exec 9>"$root_dir/.cache/docker-build.lock"
+flock 9
+python3 "$deploy_dir/image_cleanup.py" protect --tag "$image_tag" "${targets[@]}"
+
 build_limits=(
   --memory "$memory_limit"
   --memory-swap "$memory_swap_limit"
@@ -133,3 +142,9 @@ for target in "${targets[@]}"; do
       "$root_dir/backend"
   fi
 done
+
+# set -e reaches this only when every requested image has built successfully.
+# Cleanup failure must be visible without turning a successful build into a failure.
+if ! python3 "$deploy_dir/image_cleanup.py" cleanup --tag "$image_tag"; then
+  echo "Images built successfully, but old-image cleanup did not complete; see errors above." >&2
+fi

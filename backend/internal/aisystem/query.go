@@ -183,6 +183,27 @@ func (q *Query) GetOverview(ctx context.Context, r *pbv2.GetOverviewRequest) (*p
 		return nil, status.Error(codes.Unavailable, "ai.unavailable")
 	}
 	out := &pbv2.OverviewResponse{FileId: f.FileId, Capabilities: caps, PreviewKind: "none", PreviewState: "unsupported", Coverage: &pbv2.Coverage{Mode: "source", Exhaustive: false}}
+	// Report the versions of these published results, even while a rebuild is
+	// pending. The query process's current profile may describe a newer build.
+	var models, pipeline []string
+	if caps.Source.Available {
+		var source struct{ ParserProfileVersion string }
+		if err := q.DB.WithContext(ctx).Table("ai_published_sources").Select("parser_profile_version").Where("id=?", caps.Source.VersionId).Take(&source).Error; err != nil {
+			return nil, status.Error(codes.Unavailable, "ai.unavailable")
+		}
+		if source.ParserProfileVersion != "" {
+			pipeline = append(pipeline, source.ParserProfileVersion)
+		}
+	}
+	if caps.Text.Available {
+		var content struct{ ChunkerVersion string }
+		if err := q.DB.WithContext(ctx).Table("ai_published_content").Select("chunker_version").Where("id=?", caps.Text.VersionId).Take(&content).Error; err != nil {
+			return nil, status.Error(codes.Unavailable, "ai.unavailable")
+		}
+		if content.ChunkerVersion != "" {
+			pipeline = append(pipeline, content.ChunkerVersion)
+		}
+	}
 	if strings.HasPrefix(f.MimeType, "image/") {
 		out.PreviewKind = "image_thumbnail"
 		out.PreviewState = "available"
@@ -191,8 +212,8 @@ func (q *Query) GetOverview(ctx context.Context, r *pbv2.GetOverviewRequest) (*p
 		out.PreviewState = caps.Summary.LatestBuild.State
 		if caps.Summary.Available {
 			var summary struct {
-				Summary, Language, Coverage string
-				Tags                        json.RawMessage
+				Summary, Language, Coverage, ChatModel, StrategyVersion, PromptVersion string
+				Tags                                                                   json.RawMessage
 			}
 			if err := q.DB.WithContext(ctx).Table("ai_published_summaries").Where("id=?", caps.Summary.VersionId).Take(&summary).Error; err != nil {
 				return nil, status.Error(codes.Unavailable, "ai.unavailable")
@@ -202,8 +223,28 @@ func (q *Query) GetOverview(ctx context.Context, r *pbv2.GetOverviewRequest) (*p
 			_ = json.Unmarshal(summary.Tags, &out.Tags)
 			out.PreviewState = "available"
 			out.Coverage.Exhaustive = summary.Coverage == "complete"
+			if summary.ChatModel != "" {
+				models = append(models, summary.ChatModel)
+			}
+			if summary.StrategyVersion != "" {
+				pipeline = append(pipeline, summary.StrategyVersion)
+			}
+			if summary.PromptVersion != "" {
+				pipeline = append(pipeline, "prompt:"+summary.PromptVersion)
+			}
 		}
 	}
+	if caps.Vector.Available {
+		var embedding struct{ Model string }
+		if err := q.DB.WithContext(ctx).Table("ai_published_sets").Select("model").Where("id=?", caps.Vector.VersionId).Take(&embedding).Error; err != nil {
+			return nil, status.Error(codes.Unavailable, "ai.unavailable")
+		}
+		if embedding.Model != "" {
+			models = append(models, embedding.Model)
+		}
+	}
+	out.ModelVersion = strings.Join(models, "+")
+	out.PipelineVersion = strings.Join(pipeline, " · ")
 	_, err = q.Core.ValidateEvidence(ctx, &corepb.ValidateEvidenceRequest{Grant: r.Grant, Refs: []*corepb.EvidenceRef{evidenceRef(f)}})
 	if err != nil {
 		return nil, err

@@ -84,6 +84,8 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		defer closeRegistry()
 		aiHTTP.Client = pbv2.NewAIQueryServiceClient(conn)
 	}
+	driveHTTP.WithFileStatuses(aiHTTP.FileStatuses)
+	fileHTTP.WithFileStatuses(aiHTTP.FileStatuses)
 
 	router := httpapi.NewRouter(httpapi.RouterConfig{
 		Environment:     cfg.App.Env,

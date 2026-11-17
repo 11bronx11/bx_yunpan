@@ -220,7 +220,7 @@ func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, rol
 		return fmt.Errorf("unknown AI role %s", role)
 	}
 	worker := func(c context.Context, q string, n int) error {
-		return store.RunWorker(c, broker, q, n, computer.Compute, func(e error) bool { return errors.Is(e, asynccontrol.ErrInvalid) }, logger)
+		return store.RunWorker(c, broker, q, n, computer.Compute, aisystem.IsPermanentComputeError, logger)
 	}
 	if role == "ai-content-worker" {
 		return runAsyncGroup(ctx, func(c context.Context) error { return worker(c, queue, cfg.Async.Concurrency) }, func(c context.Context) error { return worker(c, "ai-maintenance", 1) })

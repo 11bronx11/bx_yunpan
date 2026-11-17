@@ -60,6 +60,10 @@ type scopeClient struct {
 	invalid bool
 }
 
+func (c *scopeClient) BatchGetFileRefs(context.Context, *corepb.FileRefsRequest, ...grpc.CallOption) (*corepb.FileRefsResponse, error) {
+	return &corepb.FileRefsResponse{Files: []*corepb.FileRef{c.file}}, nil
+}
+
 func (c *scopeClient) OpenRetrievalScope(context.Context, *corepb.OpenScopeRequest, ...grpc.CallOption) (*corepb.ScopeResponse, error) {
 	return &corepb.ScopeResponse{SnapshotId: "fixture"}, nil
 }

@@ -37,6 +37,10 @@ type AnswerResult struct {
 
 const maxSummaryRunes = 240
 
+// EmbeddingBatchSize stays within the supported DashScope models' batch limits.
+// Share it between the legacy indexer and the independent AI compute role.
+const EmbeddingBatchSize = 10
+
 type Provider interface {
 	Embeddings(context.Context, []string) ([][]float32, error)
 	Enrich(context.Context, string) (Insight, error)
@@ -49,6 +53,10 @@ var (
 	errProviderQuota     = errors.New("AI provider quota exhausted")
 	errProviderPermanent = errors.New("AI provider rejected request")
 )
+
+// IsProviderPermanent reports request failures that cannot recover by retrying
+// the same input, such as invalid parameters or rejected credentials.
+func IsProviderPermanent(err error) bool { return errors.Is(err, errProviderPermanent) }
 
 const maxProviderResponseBytes = 8 << 20
 

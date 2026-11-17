@@ -47,18 +47,19 @@ const Summary = styled.p`
 `;
 
 const statusMeta = {
-  missing: { label: '尚未建立', tone: undefined },
-  pending: { label: '等待构建', tone: 'blue' },
+  missing: { label: '未建立', tone: undefined },
+  pending: { label: '正在构建', tone: 'blue' },
   processing: { label: '正在构建', tone: 'blue' },
-  indexed: { label: '已完成', tone: 'mint' },
+  indexed: { label: '已索引', tone: 'mint' },
   failed: { label: '构建失败', tone: 'coral' },
   unsupported: { label: '构建失败', tone: 'coral' },
-  canceled: { label: '已取消', tone: undefined },
-  unconfirmed: { label: '结果待确认', tone: undefined },
+  canceled: { label: '未建立', tone: undefined },
+  unconfirmed: { label: '未建立', tone: undefined },
 };
 
 const isActiveTask = task => task && (task.status === 'pending' || task.status === 'running');
 const isFailedIndex = status => status === 'failed' || status === 'unsupported';
+const isTerminalTask = task => task && !isActiveTask(task);
 const buildMessageKey = 'index-build';
 
 const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
@@ -80,11 +81,12 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
     try {
       const value = await getFileAI(file.id, { signal });
       if (signal?.aborted) return null;
-      setDocument(value);
-      setMissing(false);
-      setTask(current => current?.status === 'succeeded' ? { ...current, resultStatus: value.status } : current);
-      onStatusChange?.(file.id, value.status);
-      return value;
+      const current = { ...value, status: value.ai_status || value.status || 'missing' };
+      setDocument(current);
+      setMissing(current.status === 'missing');
+      setTask(task => isTerminalTask(task) ? { ...task, resultStatus: current.status } : task);
+      onStatusChange?.(file.id, current.status);
+      return current;
     } catch (error) {
       if (error.name === 'AbortError' || signal?.aborted) return null;
       if (error.status === 404) {
@@ -128,11 +130,12 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
         const current = await getAIJob(activeTaskID, { signal: controller.signal });
         if (stopped) return;
         setLoadError('');
-        if (current.status === 'succeeded' || current.status === 'failed' || current.status === 'canceled') {
+        if (isTerminalTask(current)) {
           const result = await refreshDocument(controller.signal, true);
           if (stopped) return;
           setTask({ ...current, resultStatus: result?.status });
-          if (current.status === 'failed' || (current.status === 'succeeded' && isFailedIndex(result?.status))) {
+          if (['failed', 'partial_success', 'needs_attention'].includes(current.status) || (current.status === 'succeeded' && isFailedIndex(result?.status))) {
+            onStatusChange?.(file.id, 'failed');
             message.open({ key: buildMessageKey, type: 'error', content: '构建失败' });
           } else if (current.status === 'canceled') {
             message.open({ key: buildMessageKey, type: 'info', content: '构建已取消' });
@@ -162,7 +165,7 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [activeTaskID, message, open, refreshDocument]);
+  }, [activeTaskID, file?.id, message, onStatusChange, open, refreshDocument]);
 
   const startReprocess = async () => {
     const controller = view.current;
@@ -174,6 +177,7 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
       const value = await reprocessFileAI(file.id);
       if (controller.signal.aborted) return;
       setTask(value);
+      onStatusChange?.(file.id, 'processing');
       message.open({ key: buildMessageKey, type: 'success', content: '索引构建请求已提交' });
     } catch (error) {
       if (!controller.signal.aborted) message.open({ key: buildMessageKey, type: 'error', content: '构建失败' });
@@ -189,11 +193,12 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
   // In particular, older workers can report succeeded with an unsupported index.
   let status = document?.status || (missing ? 'missing' : 'pending');
   if (isActiveTask(task)) status = task.status === 'pending' ? 'pending' : 'processing';
-  else if (task?.status === 'failed' || task?.status === 'canceled') status = task.status;
+  else if (['failed', 'partial_success', 'needs_attention'].includes(task?.status)) status = 'failed';
+  else if (task?.status === 'canceled') status = document?.status === 'indexed' ? 'indexed' : 'missing';
   else if (task?.status === 'succeeded') {
     status = task.resultStatus === 'indexed' ? 'indexed' : isFailedIndex(task.resultStatus) ? 'failed' : 'unconfirmed';
   }
-  const meta = statusMeta[status] || statusMeta.pending;
+  const meta = statusMeta[status] || statusMeta.missing;
   const active = submitting || isActiveTask(task) || status === 'processing' || status === 'pending';
   const failed = isFailedIndex(status);
   const progressStatus = failed ? 'exception' : status === 'indexed' ? 'success' : isActiveTask(task) ? 'active' : 'normal';

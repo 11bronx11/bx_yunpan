@@ -156,7 +156,6 @@ const Transfers = () => {
             </ProgressMeta>
           </ProgressCell>
           <RowActions>
-            {task.status === 'completed' && (task.completedFile?.id || task.session?.completed_entry_id) && <Tooltip title="加入问答"><Button aria-label={`加入问答 ${task.name}`} icon={<FileSearchOutlined />} onClick={() => window.location.assign(`/ask?file=${encodeURIComponent(task.completedFile?.id || task.session.completed_entry_id)}&name=${encodeURIComponent(task.name)}`)} /></Tooltip>}
             {task.status === 'interrupted' && <Upload maxCount={1} showUploadList={false} beforeUpload={file => selectResumeFile(task.id, file)}><Tooltip title="选择原文件继续"><Button aria-label={`选择原文件继续 ${task.name}`} icon={<FileSearchOutlined />} /></Tooltip></Upload>}
             {canPause && <Tooltip title="暂停"><Button aria-label={`暂停 ${task.name}`} icon={<PauseOutlined />} onClick={() => pauseUpload(task.id)} /></Tooltip>}
             {canResume && <Tooltip title={task.status === 'paused' ? '继续' : '重试'}><Button aria-label={`${task.status === 'paused' ? '继续' : '重试'} ${task.name}`} icon={task.status === 'paused' ? <PlayCircleOutlined /> : <RedoOutlined />} onClick={() => resumeUpload(task.id)} /></Tooltip>}

@@ -5,6 +5,7 @@ ARG UBUNTU_MIRROR=http://mirrors.aliyun.com/ubuntu-ports/
 ARG PYTHON_PACKAGE_INDEX=https://mirrors.aliyun.com/pypi/simple
 
 FROM ${DOCKER_REGISTRY}/library/golang:${GO_VERSION}-alpine AS go-build
+LABEL io.bronx.yunpan.build-stage="parser-go"
 ARG GO_PROXY=https://goproxy.cn,direct
 ARG GO_BUILD_PARALLELISM=1
 ARG GO_BUILD_MAX_PROCS=2

@@ -27,7 +27,7 @@ import (
 
 const (
 	pipelineVersion    = "document-index-v5-" + rag.DefaultChunker
-	embeddingBatchSize = 10
+	embeddingBatchSize = EmbeddingBatchSize
 )
 
 var (

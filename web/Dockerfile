@@ -1,6 +1,7 @@
 ARG DOCKER_REGISTRY=docker.io
 ARG NODE_VERSION=22.23.0
 FROM ${DOCKER_REGISTRY}/library/node:${NODE_VERSION}-alpine AS build
+LABEL io.bronx.yunpan.build-stage="node"
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --no-audit --no-fund
