@@ -75,7 +75,7 @@ const RowActions = styled.div`
   @media (max-width: 860px) { grid-column: 2; grid-row: 2; }
 `;
 
-const unfinishedStatuses = new Set(['queued', 'checking', 'uploading', 'pausing', 'paused', 'verifying', 'verification_pending', 'interrupted']);
+const unfinishedStatuses = new Set(['queued', 'checking', 'uploading', 'pausing', 'paused', 'completing', 'canceling', 'cancel_pending', 'verifying', 'verification_pending', 'interrupted']);
 const finishedStatuses = new Set(['completed', 'skipped']);
 
 const statusMeta = {
@@ -84,6 +84,9 @@ const statusMeta = {
   uploading: { label: '上传中', tone: 'mint' },
   pausing: { label: '正在暂停', tone: 'coral' },
   paused: { label: '已暂停', tone: 'coral' },
+  completing: { label: '服务器合并中', tone: 'blue' },
+  canceling: { label: '正在取消', tone: 'coral' },
+  cancel_pending: { label: '取消待确认', tone: 'coral' },
   verifying: { label: '服务器校验中', tone: 'blue' },
   verification_pending: { label: '等待校验结果', tone: 'coral' },
   interrupted: { label: '上传已中断', tone: 'coral' },
@@ -134,9 +137,9 @@ const Transfers = () => {
         const meta = task.status === 'skipped' && task.errorCode === 'upload.name_conflict'
           ? { label: '同名冲突', tone: 'blue' }
           : statusMeta[task.status] || statusMeta.queued;
-        const canPause = ['queued', 'uploading'].includes(task.status);
+        const canPause = ['queued', 'checking', 'uploading'].includes(task.status);
         const canResume = ['paused', 'failed', 'verification_pending'].includes(task.status);
-        const canCancel = ['queued', 'checking', 'uploading', 'pausing', 'paused', 'interrupted'].includes(task.status);
+        const canCancel = ['queued', 'checking', 'uploading', 'pausing', 'paused', 'interrupted', 'cancel_pending'].includes(task.status);
         const canRemove = ['failed', 'canceled'].includes(task.status);
         const benignFeedback = task.status === 'skipped';
         const progressStatus = task.status === 'failed' ? 'exception' : undefined;
@@ -149,7 +152,7 @@ const Transfers = () => {
               <StatusTag tone={meta.tone}>{task.instant ? '秒传完成' : meta.label}</StatusTag>
               {task.error
                 ? <FeedbackText role={benignFeedback ? undefined : 'alert'} $benign={benignFeedback} title={task.error}>{task.error}</FeedbackText>
-                : <DetailText>{task.status === 'uploading' && task.speed > 0 ? `${formatSize(task.speed)}/s · ` : ''}{task.progress}%</DetailText>}
+                : <DetailText>{['completing', 'verifying'].includes(task.status) ? '文件已发送，正在处理' : <>{task.status === 'uploading' && task.speed > 0 ? `${formatSize(task.speed)}/s · ` : ''}{formatSize(task.transferred || 0)} / {formatSize(task.size)}</>}</DetailText>}
             </ProgressMeta>
           </ProgressCell>
           <RowActions>
@@ -157,7 +160,7 @@ const Transfers = () => {
             {task.status === 'interrupted' && <Upload maxCount={1} showUploadList={false} beforeUpload={file => selectResumeFile(task.id, file)}><Tooltip title="选择原文件继续"><Button aria-label={`选择原文件继续 ${task.name}`} icon={<FileSearchOutlined />} /></Tooltip></Upload>}
             {canPause && <Tooltip title="暂停"><Button aria-label={`暂停 ${task.name}`} icon={<PauseOutlined />} onClick={() => pauseUpload(task.id)} /></Tooltip>}
             {canResume && <Tooltip title={task.status === 'paused' ? '继续' : '重试'}><Button aria-label={`${task.status === 'paused' ? '继续' : '重试'} ${task.name}`} icon={task.status === 'paused' ? <PlayCircleOutlined /> : <RedoOutlined />} onClick={() => resumeUpload(task.id)} /></Tooltip>}
-            {canCancel && <Tooltip title="取消"><Button aria-label={`取消 ${task.name}`} danger icon={<CloseOutlined />} onClick={() => cancelUpload(task.id)} /></Tooltip>}
+            {canCancel && <Tooltip title="取消"><Button aria-label={`${task.status === 'cancel_pending' ? '重试取消' : '取消'} ${task.name}`} danger icon={<CloseOutlined />} onClick={() => cancelUpload(task.id)} /></Tooltip>}
             {canRemove && <Tooltip title="移除记录"><Button aria-label={`移除 ${task.name}`} icon={<DeleteOutlined />} onClick={() => removeUpload(task.id)} /></Tooltip>}
           </RowActions>
         </TransferRow>;

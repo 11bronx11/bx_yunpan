@@ -1,4 +1,7 @@
 import { api, clientError } from './api';
+import { multipartUpload } from './multipartUpload';
+import { uploadRequest } from './uploadRequest';
+import { uploadScheduler } from './uploadScheduler';
 import { hashFile } from './fileHash';
 import { createPollDelay, sleep } from './polling';
 
@@ -24,13 +27,14 @@ export const getPreview = (id, { signal } = {}) => api(`/api/v1/files/${id}/prev
 const randomId = () => window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 export const listActiveUploads = () => api('/api/v1/uploads?status=active');
-export const abortUpload = uploadId => api(`/api/v1/uploads/${uploadId}`, { method: 'DELETE' });
+export const abortUpload = (uploadId, control = {}) => uploadRequest(`/api/v1/uploads/${uploadId}`, { method: 'DELETE' }, control);
+export const getUpload = (uploadId, control = {}) => uploadRequest(`/api/v1/uploads/${uploadId}`, {}, control);
 
-const validateResumeFile = async (file, session) => {
+const validateResumeFile = async (file, session, signal) => {
   if (file.name !== session.filename || file.size !== session.size_bytes) {
     throw clientError('client.file_mismatch');
   }
-  const hash = await hashFile(file);
+  const hash = await hashFile(file, { signal });
   if (hash !== session.sha256) throw clientError('client.file_mismatch');
   return hash;
 };
@@ -38,6 +42,8 @@ const validateResumeFile = async (file, session) => {
 export const waitForUpload = async (session, onProgress, control = {}, pollInterval) => {
   const nextDelay = createPollDelay();
   let current = session;
+  control.onBackground?.(session);
+  control.onSession?.(session);
   for (;;) {
     if (control.isCanceled?.()) throw new DOMException('Upload canceled', 'AbortError');
     if (control.signal?.aborted) throw new DOMException('Upload canceled', 'AbortError');
@@ -51,10 +57,10 @@ export const waitForUpload = async (session, onProgress, control = {}, pollInter
       error.session = current;
       throw error;
     }
-    onProgress?.(95);
+    onProgress?.(99);
     await sleep(pollInterval ?? control.pollInterval ?? nextDelay(current.status, current.poll_after_ms), control.signal);
     if (control.isCanceled?.()) throw new DOMException('Upload canceled', 'AbortError');
-    current = await api(`/api/v1/uploads/${session.id}`, { signal: control.signal });
+    current = await uploadRequest(`/api/v1/uploads/${session.id}`, {}, control, 'poll');
     control.onSession?.(current);
   }
 };
@@ -66,14 +72,23 @@ export const uploadFile = async (file, folderId, onProgress, control = {}, exist
   }
   if (['completing', 'verifying'].includes(existingSession?.status)) return waitForUpload(existingSession, onProgress, control);
 
-  const hash = existingSession ? await validateResumeFile(file, existingSession) : await hashFile(file);
+  let session = existingSession ? await getUpload(existingSession.id, control) : null;
+  if (session && ['completing', 'verifying', 'completed'].includes(session.status)) return waitForUpload(session, onProgress, control);
+  if (session && ['failed', 'aborted', 'expired'].includes(session.status)) return waitForUpload(session, onProgress, control);
+  const releaseHash = await uploadScheduler.hash(control.signal);
+  let hash;
+  try {
+    hash = session ? await validateResumeFile(file, session, control.signal) : await hashFile(file, { signal: control.signal });
+  } finally { releaseHash(); }
   if (control.isCanceled?.()) throw new DOMException('Upload canceled', 'AbortError');
-  let session = existingSession;
+  if (control.isPaused?.()) return { paused: true, session };
   if (!session) {
-    const created = await api('/api/v1/uploads', {
+    const input = { folder_id: folderId, filename: file.name, sha256: hash, size_bytes: file.size, mime_type: file.type || 'application/octet-stream' };
+    control.creation = input;
+    const created = await uploadRequest('/api/v1/uploads', {
       method: 'POST', headers: { 'Idempotency-Key': control.idempotencyKey || `upload-${randomId()}` },
-      body: JSON.stringify({ folder_id: folderId, filename: file.name, sha256: hash, size_bytes: file.size, mime_type: file.type || 'application/octet-stream' }),
-    });
+      body: JSON.stringify(input),
+    }, control);
     if (created.mode === 'instant') return { instant: true, file: created.file };
     session = created.upload;
   }
@@ -85,7 +100,7 @@ export const uploadFile = async (file, folderId, onProgress, control = {}, exist
     await sleep(control.pollInterval ?? initializationDelay(session.status, session.poll_after_ms), control.signal);
     if (control.isCanceled?.()) throw new DOMException('Upload canceled', 'AbortError');
     if (control.isPaused?.()) return { paused: true, session };
-    session = await api(`/api/v1/uploads/${session.id}`, { signal: control.signal });
+    session = await getUpload(session.id, control);
     control.onSession?.(session);
   }
   if (session.status === 'completed') {
@@ -95,34 +110,19 @@ export const uploadFile = async (file, folderId, onProgress, control = {}, exist
   if (['completing', 'verifying'].includes(session.status)) return waitForUpload(session, onProgress, control);
   if (!['created', 'uploading'].includes(session.status)) throw clientError(session.error_code || 'upload.conflict');
 
-  const partSize = session.part_size;
-  const confirmed = new Set((session.confirmed_parts || []).map(part => part.part_number));
-  let confirmedBytes = (session.confirmed_parts || []).reduce((total, part) => total + part.size_bytes, 0);
-  onProgress?.(Math.round(Math.min(confirmedBytes / file.size, 1) * 90));
-  for (let index = 0; index < session.part_count; index += 1) {
-    if (control.isCanceled?.()) throw new DOMException('Upload canceled', 'AbortError');
-    if (control.isPaused?.()) return { paused: true, session };
-    const partNumber = index + 1;
-    if (confirmed.has(partNumber)) continue;
-    const presigned = await api(`/api/v1/uploads/${session.id}/parts/presign`, { method: 'POST', body: JSON.stringify({ part_numbers: [partNumber] }) });
-    const part = presigned.parts[0];
-    const body = file.slice(index * partSize, Math.min((index + 1) * partSize, file.size));
-    let response;
-    try {
-      response = await fetch(part.url, { method: 'PUT', body, signal: control.signal });
-    } catch (error) {
-      if (error.name === 'AbortError') throw error;
-      throw clientError('client.network');
-    }
-    if (!response.ok) throw new Error(`分片 ${partNumber} 上传失败`);
-    const etag = (response.headers.get('ETag') || response.headers.get('etag') || `part-${partNumber}`).replaceAll('"', '');
-    session = await api(`/api/v1/uploads/${session.id}/parts/confirm`, { method: 'POST', body: JSON.stringify({ parts: [{ part_number: partNumber, etag, size_bytes: body.size }] }) });
-    confirmed.add(partNumber);
-    confirmedBytes += body.size;
-    control.onSession?.(session);
-    onProgress?.(Math.round(Math.min(confirmedBytes / file.size, 1) * 90));
+  const result = await multipartUpload(file, session, onProgress, control);
+  if (result.paused) return result;
+  session = result.session;
+  if (control.isPaused?.()) return { paused: true, session };
+  if (control.signal?.aborted || control.isCanceled?.()) throw new DOMException('Upload canceled', 'AbortError');
+  try {
+    session = await uploadRequest(`/api/v1/uploads/${session.id}/complete`, { method: 'POST' }, control);
+  } catch (error) {
+    if (control.signal?.aborted) throw error;
+    const current = await getUpload(session.id, control);
+    if (!['completing', 'verifying', 'completed'].includes(current.status)) throw error;
+    session = current;
   }
-  session = await api(`/api/v1/uploads/${session.id}/complete`, { method: 'POST' });
   control.onSession?.(session);
   return waitForUpload(session, onProgress, control);
 };

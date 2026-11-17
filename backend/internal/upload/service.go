@@ -33,6 +33,7 @@ import (
 var (
 	ErrNotFound      = errors.New("upload not found")
 	ErrConflict      = errors.New("upload conflict")
+	ErrPartConflict  = errors.New("confirmed upload part conflict")
 	ErrFileExists    = errors.New("file already exists")
 	ErrNameConflict  = errors.New("file name already exists in folder")
 	ErrInvalidInput  = errors.New("invalid upload input")
@@ -328,9 +329,25 @@ func (s *Service) ListActive(userID uuid.UUID) ([]Session, error) {
 }
 
 func (s *Service) PresignParts(ctx context.Context, userID, sessionID uuid.UUID, partNumbers []int) (map[int]string, time.Time, error) {
-	session, err := s.Get(userID, sessionID)
-	if err != nil || (session.Status != StatusCreated && session.Status != StatusUploading) {
+	if len(partNumbers) == 0 || len(partNumbers) > 20 {
+		return nil, time.Time{}, ErrInvalidInput
+	}
+	var session Session
+	if err := s.db.WithContext(ctx).Where("id = ? AND user_id = ?", sessionID, userID).Take(&session).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, time.Time{}, ErrNotFound
+		}
+		return nil, time.Time{}, err
+	}
+	if (session.Status != StatusCreated && session.Status != StatusUploading) || !session.ExpiresAt.After(time.Now()) || session.StorageUploadID == "" {
 		return nil, time.Time{}, ErrConflict
+	}
+	seen := make(map[int]bool, len(partNumbers))
+	for _, number := range partNumbers {
+		if number < 1 || number > session.PartCount || seen[number] {
+			return nil, time.Time{}, ErrInvalidInput
+		}
+		seen[number] = true
 	}
 	expires := s.config.PartURLTTL
 	expiresAt := time.Now().UTC().Add(expires)
@@ -349,34 +366,14 @@ func (s *Service) PresignParts(ctx context.Context, userID, sessionID uuid.UUID,
 	return result, expiresAt, nil
 }
 
-func (s *Service) ConfirmParts(userID, sessionID uuid.UUID, parts []ConfirmedPart) (Session, error) {
-	session, err := s.Get(userID, sessionID)
-	if err != nil || (session.Status != StatusCreated && session.Status != StatusUploading) {
-		return Session{}, ErrConflict
-	}
-	err = s.db.Transaction(func(tx *gorm.DB) error {
-		for _, confirmed := range parts {
-			if confirmed.PartNumber < 1 || confirmed.PartNumber > session.PartCount || len(confirmed.ETag) == 0 || len(confirmed.ETag) > 512 || confirmed.SizeBytes <= 0 || (confirmed.Checksum != nil && len(*confirmed.Checksum) > 512) {
-				return ErrInvalidInput
-			}
-			part := Part{SessionID: session.ID, PartNumber: confirmed.PartNumber, ETag: confirmed.ETag, SizeBytes: confirmed.SizeBytes, Checksum: confirmed.Checksum, CompletedAt: time.Now().UTC()}
-			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "session_id"}, {Name: "part_number"}}, DoUpdates: clause.AssignmentColumns([]string{"etag", "size_bytes", "checksum", "completed_at"})}).Create(&part).Error; err != nil {
-				return err
-			}
-		}
-		return tx.Model(&Session{}).Where("id = ? AND status IN ?", session.ID, []string{StatusCreated, StatusUploading}).Update("status", StatusUploading).Error
-	})
-	if err != nil {
-		return Session{}, err
-	}
-	return s.Get(userID, sessionID)
-}
-
 func (s *Service) Complete(ctx context.Context, userID, sessionID uuid.UUID) (Session, error) {
 	var session Session
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND user_id = ?", sessionID, userID).Take(&session).Error; err != nil {
-			return ErrNotFound
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
 		}
 		if session.Status == StatusVerifying || session.Status == StatusCompleted {
 			return nil
@@ -387,8 +384,24 @@ func (s *Service) Complete(ctx context.Context, userID, sessionID uuid.UUID) (Se
 		if session.Status != StatusUploading && session.Status != StatusCreated {
 			return ErrConflict
 		}
-		var partCount int64
-		if err := tx.Model(&Part{}).Where("session_id = ?", session.ID).Count(&partCount).Error; err != nil || int(partCount) != session.PartCount {
+		if !session.ExpiresAt.After(time.Now()) {
+			return ErrConflict
+		}
+		var parts []Part
+		if err := tx.Where("session_id = ?", session.ID).Order("part_number").Find(&parts).Error; err != nil {
+			return err
+		}
+		if len(parts) != session.PartCount {
+			return ErrConflict
+		}
+		var bytes int64
+		for i, part := range parts {
+			if part.PartNumber != i+1 || part.SizeBytes != expectedPartSize(session, part.PartNumber) || part.ETag == "" {
+				return ErrConflict
+			}
+			bytes += part.SizeBytes
+		}
+		if bytes != session.SizeBytes {
 			return ErrConflict
 		}
 		if strings.TrimSpace(session.StorageUploadID) == "" {
@@ -418,7 +431,10 @@ func (s *Service) Abort(ctx context.Context, userID, sessionID uuid.UUID) error 
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var session Session
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND user_id = ?", sessionID, userID).Take(&session).Error; err != nil {
-			return ErrNotFound
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
 		}
 		if session.Status == StatusAborted || session.Status == StatusFailed {
 			return nil

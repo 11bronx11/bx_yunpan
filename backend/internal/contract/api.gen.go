@@ -723,6 +723,21 @@ func (e ListActiveUploadsParamsStatus) Valid() bool {
 	}
 }
 
+// Defines values for ConfirmUploadPartsParamsView.
+const (
+	Delta ConfirmUploadPartsParamsView = "delta"
+)
+
+// Valid indicates whether the value is a known member of the ConfirmUploadPartsParamsView enum.
+func (e ConfirmUploadPartsParamsView) Valid() bool {
+	switch e {
+	case Delta:
+		return true
+	default:
+		return false
+	}
+}
+
 // AICapabilities defines model for AICapabilities.
 type AICapabilities struct {
 	Askable *bool         `json:"askable,omitempty"`
@@ -918,6 +933,18 @@ type Citation struct {
 
 	// SourceVersionId Example: 0198a1f0-7b2a-7000-8000-000000000001
 	SourceVersionId *UUID `json:"source_version_id,omitempty"`
+}
+
+// ConfirmPartsDelta defines model for ConfirmPartsDelta.
+type ConfirmPartsDelta struct {
+	AcknowledgedParts []struct {
+		PartNumber int   `json:"part_number"`
+		SizeBytes  int64 `json:"size_bytes"`
+	} `json:"acknowledged_parts"`
+	Status string `json:"status"`
+
+	// UploadId Example: 0198a1f0-7b2a-7000-8000-000000000001
+	UploadId UUID `json:"upload_id"`
 }
 
 // ConfirmPartsRequest defines model for ConfirmPartsRequest.
@@ -1543,6 +1570,20 @@ type CompleteUploadParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// ConfirmUploadPartsParams defines parameters for ConfirmUploadParts.
+type ConfirmUploadPartsParams struct {
+	// View Optional delta returns only parts acknowledged for this request.
+	View *ConfirmUploadPartsParamsView `form:"view,omitempty" json:"view,omitempty"`
+}
+
+// ConfirmUploadPartsParamsView defines parameters for ConfirmUploadParts.
+type ConfirmUploadPartsParamsView string
+
+// ConfirmUploadParts200JSONResponseBody defines parameters for ConfirmUploadParts.
+type ConfirmUploadParts200JSONResponseBody struct {
+	union json.RawMessage
+}
+
 // AskFilesJSONRequestBody defines body for AskFiles for application/json ContentType.
 type AskFilesJSONRequestBody = AskRequest
 
@@ -1792,6 +1833,68 @@ func (t DriveItem) MarshalJSON() ([]byte, error) {
 }
 
 func (t *DriveItem) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsUploadSession returns the union data inside the ConfirmUploadParts200JSONResponseBody as a UploadSession
+func (t ConfirmUploadParts200JSONResponseBody) AsUploadSession() (UploadSession, error) {
+	var body UploadSession
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromUploadSession overwrites any union data inside the ConfirmUploadParts200JSONResponseBody as the provided UploadSession
+func (t *ConfirmUploadParts200JSONResponseBody) FromUploadSession(v UploadSession) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeUploadSession performs a merge with any union data inside the ConfirmUploadParts200JSONResponseBody, using the provided UploadSession
+func (t *ConfirmUploadParts200JSONResponseBody) MergeUploadSession(v UploadSession) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsConfirmPartsDelta returns the union data inside the ConfirmUploadParts200JSONResponseBody as a ConfirmPartsDelta
+func (t ConfirmUploadParts200JSONResponseBody) AsConfirmPartsDelta() (ConfirmPartsDelta, error) {
+	var body ConfirmPartsDelta
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromConfirmPartsDelta overwrites any union data inside the ConfirmUploadParts200JSONResponseBody as the provided ConfirmPartsDelta
+func (t *ConfirmUploadParts200JSONResponseBody) FromConfirmPartsDelta(v ConfirmPartsDelta) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeConfirmPartsDelta performs a merge with any union data inside the ConfirmUploadParts200JSONResponseBody, using the provided ConfirmPartsDelta
+func (t *ConfirmUploadParts200JSONResponseBody) MergeConfirmPartsDelta(v ConfirmPartsDelta) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t ConfirmUploadParts200JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *ConfirmUploadParts200JSONResponseBody) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
 	return err
 }

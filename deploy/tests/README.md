@@ -46,3 +46,25 @@ ASYNC_PLAYWRIGHT_MODULE="$PWD/artifacts/async-validation/browser-runner/node_mod
 浏览器执行三次独立 context，包含 1440/390 视口、实际表单登录、新建目录、选文件上传、`/storage` PUT、下载 SHA、刷新和第二标签页；截图、trace 和结果保存在进程输出目录。trace、`private-env.json` 和 `browser-fixture.json` 包含测试登录/连接信息，不应公开发布。
 
 这套入口覆盖有限的单机场景；不代表完整测试计划已通过，也不提供跨主机、基础设施集群、跨库 PITR 或容量认证。完整范围和首轮失败原因见本轮验证报告。
+
+
+上传窗口核心冒烟：
+
+`upload-smoke.py` 只执行上传相关的核心链路并等待浏览器，不运行现有 async-process.py 的故障演练。需要先启动专用 PG、MinIO、RabbitMQ 和 Redis，并提供已有 TEST_* 私有配置；会创建并保留新的业务/控制数据库、bucket 和测试账号，退出时只停止自己启动的应用与 Nginx 进程。输出中的 private-env.json、browser-fixture.json 和浏览器 trace 为私有验收材料。
+
+```bash
+# backend 下，串行构建本次实际使用的角色
+GOTOOLCHAIN=go1.25.13 go build -p=1 -o /absolute/upload-smoke/binaries/ \
+  ./cmd/api ./cmd/async-control ./cmd/committer ./cmd/upload-worker ./cmd/object-worker ./cmd/migrate
+
+# 仓库根目录，web/build 应为当前源码的 npm run build 输出
+PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/upload-smoke.py \
+  --config /private/test-env.json --output /absolute/upload-smoke/run \
+  --binaries /absolute/upload-smoke/binaries --web-root "$PWD/web/build"
+
+# 输出 BROWSER_READY 后另一个终端运行
+ASYNC_PLAYWRIGHT_MODULE=/absolute/browser-runner/node_modules/playwright \
+  node deploy/tests/upload-browser.cjs /absolute/upload-smoke/run
+```
+
+浏览器覆盖单文件 4 片并发、暂停收尾批量确认、刷新后选择原文件只传缺失片、最终下载 SHA-256，以及 1440/390 视口截图。PUT 的短延迟仅用于稳定观察暂停操作。此入口不构成性能或深度故障验证。

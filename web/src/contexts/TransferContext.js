@@ -1,14 +1,17 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { abortUpload, listActiveUploads, uploadFile, waitForUpload } from '../services/drive';
+import { abortUpload, getUpload, listActiveUploads, uploadFile, waitForUpload } from '../services/drive';
+import { releasePendingParts } from '../services/uploadScheduler';
+import { uploadPolicy } from '../services/uploadPolicy';
+import { uploadRequest } from '../services/uploadRequest';
 import { useAuth } from './AuthContext';
 
 const TransferContext = createContext(null);
 
 export const MAX_BATCH_FILES = 10;
-export const MAX_CONCURRENT_UPLOADS = 4;
+export const MAX_CONCURRENT_UPLOADS = uploadPolicy.files;
 
 const terminalStatuses = new Set(['completed', 'skipped', 'failed', 'canceled']);
-const persistedStatuses = new Set(['queued', 'checking', 'uploading', 'pausing', 'paused', 'verifying', 'verification_pending', 'interrupted']);
+const persistedStatuses = new Set(['queued', 'checking', 'uploading', 'pausing', 'paused', 'completing', 'canceling', 'cancel_pending', 'verifying', 'verification_pending', 'interrupted']);
 const activeStatuses = new Set([...persistedStatuses]);
 const storageKey = userId => `bx-yunpan:uploads:${userId}`;
 const randomId = () => window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -34,12 +37,14 @@ const storedUpload = task => ({
   session: task.session,
   idempotencyKey: task.idempotencyKey,
   createdAt: task.createdAt,
+  cancelRequested: task.cancelRequested,
+  creation: task.creation || task.control?.creation,
 });
 
 const sessionProgress = session => {
-  if (session.status === 'verifying') return 90;
+  if (['completing', 'verifying'].includes(session.status)) return 99;
   const bytes = (session.confirmed_parts || []).reduce((total, part) => total + part.size_bytes, 0);
-  return Math.round(Math.min(bytes / session.size_bytes, 1) * 90);
+  return Math.min(99, Math.floor(bytes / session.size_bytes * 100));
 };
 
 const recoveredUpload = (session, local) => {
@@ -52,9 +57,10 @@ const recoveredUpload = (session, local) => {
     name: session.filename,
     size: session.size_bytes,
     mimeType: local?.mimeType || 'application/octet-stream',
-    status: ['completing', 'verifying'].includes(session.status) ? 'verifying' : 'interrupted',
+    status: local?.cancelRequested ? 'cancel_pending' : ['completing', 'verifying'].includes(session.status) ? session.status : 'interrupted',
+    cancelRequested: local?.cancelRequested,
     progress,
-    transferred: Math.round(session.size_bytes * progress / 100),
+    transferred: ['completing', 'verifying'].includes(session.status) ? session.size_bytes : (session.confirmed_parts || []).reduce((sum, p) => sum + p.size_bytes, 0),
     speed: 0,
     session,
     idempotencyKey: local?.idempotencyKey,
@@ -66,7 +72,7 @@ const recoveredUpload = (session, local) => {
 const localInterruptedUpload = local => ({
   ...local,
   file: null,
-  status: 'interrupted',
+  status: local.cancelRequested ? 'cancel_pending' : 'interrupted',
   progress: local.progress || 0,
   transferred: local.transferred || 0,
   speed: 0,
@@ -79,13 +85,19 @@ export const TransferProvider = ({ children }) => {
   const [uploads, setUploads] = useState([]);
   const uploadsRef = useRef(uploads);
   const activeUploads = useRef(new Set());
+  const transferSlots = useRef(new Set());
+  const controls = useRef(new Map());
+  const cancelControls = useRef(new Map());
   const ownerId = useRef(null);
   const hydratedOwner = useRef(null);
 
   useEffect(() => { uploadsRef.current = uploads; }, [uploads]);
 
   useEffect(() => () => {
+    controls.current.forEach(control => { control.canceled = true; control.abortController.abort(); });
+    cancelControls.current.forEach(controller => controller.abort());
     uploadsRef.current.forEach(task => {
+      releasePendingParts(task.pendingParts);
       if (task.control) {
         task.control.canceled = true;
         task.control.abortController.abort();
@@ -98,7 +110,13 @@ export const TransferProvider = ({ children }) => {
     if (!ready) return undefined;
     const nextOwnerId = user?.id || null;
     if (ownerId.current !== nextOwnerId) {
+      controls.current.forEach(control => { control.canceled = true; control.abortController.abort(); });
+      cancelControls.current.forEach(controller => controller.abort());
+      controls.current.clear();
+      cancelControls.current.clear();
+      transferSlots.current.clear();
       uploadsRef.current.forEach(task => {
+        releasePendingParts(task.pendingParts);
         if (task.control) {
           task.control.canceled = true;
           task.control.abortController.abort();
@@ -139,17 +157,20 @@ export const TransferProvider = ({ children }) => {
 
   useEffect(() => {
     if (!ready || !user?.id || hydratedOwner.current !== user.id) return;
-    const records = uploads.filter(task => persistedStatuses.has(task.status)).map(storedUpload);
-    try {
-      if (records.length > 0) localStorage.setItem(storageKey(user.id), JSON.stringify(records));
-      else localStorage.removeItem(storageKey(user.id));
-    } catch {
-      // Uploads still work in-memory when browser storage is unavailable.
-    }
+    const persist = () => {
+      const records = uploadsRef.current.filter(task => persistedStatuses.has(task.status) || (task.status === 'failed' && task.session)).map(storedUpload);
+      try {
+        if (records.length > 0) localStorage.setItem(storageKey(user.id), JSON.stringify(records));
+        else localStorage.removeItem(storageKey(user.id));
+      } catch { /* In-memory transfers still work when storage is unavailable. */ }
+    };
+    const timer = setTimeout(persist, 300);
+    window.addEventListener('pagehide', persist);
+    return () => { clearTimeout(timer); window.removeEventListener('pagehide', persist); };
   }, [ready, uploads, user?.id]);
 
   useEffect(() => {
-    const hasBrowserUpload = uploads.some(task => task.file && ['queued', 'checking', 'uploading', 'pausing'].includes(task.status));
+    const hasBrowserUpload = uploads.some(task => task.file && ['queued', 'checking', 'uploading', 'pausing', 'canceling'].includes(task.status));
     if (!hasBrowserUpload) return undefined;
     const warnBeforeUnload = event => {
       event.preventDefault();
@@ -160,113 +181,91 @@ export const TransferProvider = ({ children }) => {
   }, [uploads]);
 
   const updateUpload = useCallback((id, change) => {
-    setUploads(current => current.map(task => {
-      if (task.id !== id) return task;
-      return { ...task, ...(typeof change === 'function' ? change(task) : change) };
-    }));
+    const next = uploadsRef.current.map(task => task.id === id ? { ...task, ...(typeof change === 'function' ? change(task) : change) } : task);
+    uploadsRef.current = next;
+    setUploads(next);
   }, []);
 
   const runUpload = useCallback(async id => {
     if (activeUploads.current.has(id)) return;
     const task = uploadsRef.current.find(item => item.id === id);
-    if (!task || !['queued', 'verifying'].includes(task.status)) return;
-    if (task.status === 'queued' && !task.file) {
-      updateUpload(id, { status: 'interrupted', error: null });
-      return;
-    }
-
+    const background = ['completing', 'verifying'].includes(task?.status);
+    if (!task || (!background && task.status !== 'queued')) return;
+    if (!background && !task.file) { updateUpload(id, { status: 'interrupted' }); return; }
     activeUploads.current.add(id);
+    if (!background) transferSlots.current.add(id);
+    const runOwner = ownerId.current;
     const abortController = new AbortController();
+    let finished;
     const control = {
-      paused: false,
-      canceled: false,
-      signal: abortController.signal,
-      abortController,
-      idempotencyKey: task.idempotencyKey,
-      isPaused: () => control.paused,
-      isCanceled: () => control.canceled,
-      onSession: session => updateUpload(id, current => ({
-        session,
-        status: ['completing', 'verifying'].includes(session.status) ? 'verifying' : (current.status === 'checking' ? 'uploading' : current.status),
-      })),
+      paused: false, canceled: false, signal: abortController.signal, abortController,
+      idempotencyKey: task.idempotencyKey, pendingParts: task.pendingParts || new Map(),
+      session: task.session, creation: task.creation,
+      done: new Promise(resolve => { finished = resolve; }),
+      isPaused: () => control.paused, isCanceled: () => control.canceled,
     };
-    const startedAt = Date.now();
-    let lastBytes = Math.round(task.size * (task.progress || 0) / 100);
-    let lastTime = startedAt;
-    const onProgress = progress => {
+    controls.current.set(id, control);
+    const current = () => ownerId.current === runOwner && controls.current.get(id) === control && !control.canceled;
+    control.onSession = session => {
+      control.session = session;
+      if (!current()) return;
+      updateUpload(id, item => ({ session, creation: control.creation,
+        status: ['completing', 'verifying'].includes(session.status) ? session.status : item.status === 'checking' ? 'uploading' : item.status,
+      }));
+    };
+    control.onBackground = () => {
+      if (!current()) return;
+      transferSlots.current.delete(id);
+      updateUpload(id, { speed: 0 });
+    };
+    let lastWire = 0, lastTime = Date.now();
+    control.onBytes = bytes => {
+      if (!current()) return;
       const now = Date.now();
-      const transferred = Math.round(task.size * progress / 100);
-      const elapsed = Math.max(now - lastTime, 1) / 1000;
-      const speed = Math.max(0, Math.round((transferred - lastBytes) / elapsed));
-      lastBytes = transferred;
-      lastTime = now;
-      updateUpload(id, { progress, transferred, speed });
+      const speed = Math.max(0, Math.round((bytes.wireBytes - lastWire) * 1000 / Math.max(now - lastTime, 1)));
+      lastWire = bytes.wireBytes; lastTime = now;
+      updateUpload(id, { ...bytes, speed });
     };
-
-    updateUpload(id, {
-      status: task.status === 'verifying' ? 'verifying' : 'checking',
-      control,
-      error: null,
-      startedAt,
-      speed: 0,
-    });
+    const onProgress = progress => { if (current()) updateUpload(id, { progress }); };
+    updateUpload(id, { status: background ? task.status : 'checking', control, pendingParts: control.pendingParts,
+      error: null, startedAt: Date.now(), speed: 0 });
     try {
-      const result = task.status === 'verifying'
-        ? await waitForUpload(task.session, onProgress, control)
+      const result = background ? await waitForUpload(task.session, onProgress, control)
         : await uploadFile(task.file, task.folderId, onProgress, control, task.session);
-
-      if (control.canceled) return;
-      if (result.paused) {
-        updateUpload(id, { status: 'paused', session: result.session, control: null, speed: 0 });
-        return;
-      }
-      updateUpload(id, {
-        status: 'completed',
-        progress: 100,
-        transferred: task.size,
-        speed: 0,
-        control: null,
-        session: result.session || task.session,
-        instant: Boolean(result.instant),
-        completedFile: result.file || null,
-        completedAt: Date.now(),
-      });
+      control.result = result;
+      if (!current()) return;
+      if (result.paused) { updateUpload(id, { status: 'paused', session: result.session, control: null, speed: 0 }); return; }
+      updateUpload(id, { status: 'completed', progress: 100, transferred: task.size, speed: 0, control: null,
+        session: result.session || control.session, instant: Boolean(result.instant), completedFile: result.file,
+        completedAt: Date.now(), pendingParts: null, creation: null });
     } catch (error) {
-      if (control.canceled) return;
+      if (!current()) return;
       if (['upload.file_exists', 'upload.name_conflict'].includes(error.code)) {
-        const duplicateContent = error.code === 'upload.file_exists';
-        updateUpload(id, { status: 'skipped', progress: duplicateContent ? 100 : 0, transferred: 0, speed: 0, control: null, error: error.message, errorCode: error.code });
-      } else if (error.code === 'client.file_mismatch') {
-        updateUpload(id, { status: 'interrupted', file: null, speed: 0, control: null, error: error.message });
-      } else if (error.code === 'client.verify_timeout') {
-        updateUpload(id, { status: 'verification_pending', speed: 0, control: null, error: error.message });
+        updateUpload(id, { status: 'skipped', progress: error.code === 'upload.file_exists' ? 100 : 0,
+          speed: 0, control: null, error: error.message, errorCode: error.code });
       } else {
-        const serverTerminal = ['failed', 'aborted', 'expired'].includes(error.uploadStatus);
-        updateUpload(id, {
-          status: error.name === 'AbortError' ? 'canceled' : 'failed',
-          error: error.name === 'AbortError' ? null : (error.message || '上传失败，请重试'),
-          control: null,
-          speed: 0,
-          ...(serverTerminal ? {
-            session: null,
-            idempotencyKey: `upload-${randomId()}`,
-            progress: 0,
-            transferred: 0,
-          } : {}),
-        });
+        const terminal = ['failed', 'aborted', 'expired'].includes(error.uploadStatus);
+        if (terminal) releasePendingParts(control.pendingParts);
+        updateUpload(id, { status: error.code === 'client.file_mismatch' ? 'interrupted' : 'failed',
+          error: error.message || '上传失败，请重试', control: null, speed: 0, creation: control.creation,
+          ...(error.code === 'client.file_mismatch' ? { file: null } : {}),
+          ...(terminal ? { session: null, pendingParts: null, creation: null, idempotencyKey: `upload-${randomId()}`, progress: 0, transferred: 0 } : {}) });
       }
     } finally {
-      activeUploads.current.delete(id);
-      setUploads(current => [...current]);
+      if (controls.current.get(id) === control) {
+        activeUploads.current.delete(id); transferSlots.current.delete(id); controls.current.delete(id);
+        if (ownerId.current === runOwner) setUploads([...uploadsRef.current]);
+      }
+      finished();
     }
   }, [updateUpload]);
 
   useEffect(() => {
-    const available = MAX_CONCURRENT_UPLOADS - activeUploads.current.size;
-    if (available <= 0) return;
-    uploads.filter(task => ['queued', 'verifying'].includes(task.status) && !activeUploads.current.has(task.id))
-      .slice(0, available)
-      .forEach(task => runUpload(task.id));
+    uploads.filter(task => ['completing', 'verifying'].includes(task.status) && !activeUploads.current.has(task.id)).forEach(task => runUpload(task.id));
+    const backgroundCount = uploads.filter(task => ['completing', 'verifying'].includes(task.status)).length;
+    if (backgroundCount >= uploadPolicy.background) return;
+    const available = Math.min(MAX_CONCURRENT_UPLOADS - transferSlots.current.size, uploadPolicy.background - backgroundCount);
+    if (available > 0) uploads.filter(task => task.status === 'queued' && !activeUploads.current.has(task.id)).slice(0, available).forEach(task => runUpload(task.id));
   }, [runUpload, uploads]);
 
   const enqueueUploads = useCallback((files, folderId, destination) => {
@@ -301,7 +300,7 @@ export const TransferProvider = ({ children }) => {
       updateUpload(id, { status: 'paused', speed: 0 });
       return;
     }
-    if (task.status === 'uploading' && task.control) {
+    if (['checking', 'uploading'].includes(task.status) && task.control) {
       task.control.paused = true;
       updateUpload(id, { status: 'pausing', speed: 0 });
     }
@@ -310,7 +309,7 @@ export const TransferProvider = ({ children }) => {
   const resumeUpload = useCallback(id => {
     const task = uploadsRef.current.find(item => item.id === id);
     if (!task || !['paused', 'failed', 'verification_pending'].includes(task.status)) return;
-    const status = task.session?.status === 'verifying' ? 'verifying' : 'queued';
+    const status = ['completing', 'verifying'].includes(task.session?.status) ? task.session.status : 'queued';
     updateUpload(id, { status, error: null, control: null, speed: 0 });
   }, [updateUpload]);
 
@@ -325,26 +324,58 @@ export const TransferProvider = ({ children }) => {
     return false;
   }, [updateUpload]);
 
-  const cancelUpload = useCallback(id => {
+  const cancelUpload = useCallback(async id => {
     const task = uploadsRef.current.find(item => item.id === id);
-    if (!task || terminalStatuses.has(task.status)) return;
-    if (task.control) {
-      task.control.canceled = true;
-      task.control.abortController.abort();
-    }
-    updateUpload(id, { status: 'canceled', control: null, speed: 0, error: null });
-    if (task.session?.id && task.session.status !== 'verifying') {
-      abortUpload(task.session.id).catch(error => {
-        updateUpload(id, { status: 'failed', error: `取消上传失败：${error.message}` });
-      });
-    }
+    if (!task || terminalStatuses.has(task.status) || cancelControls.current.has(id)) return;
+    const runOwner = ownerId.current;
+    const running = controls.current.get(id);
+    releasePendingParts(task.pendingParts);
+    if (running) { running.canceled = true; running.abortController.abort(); }
+    const controller = new AbortController();
+    cancelControls.current.set(id, controller);
+    const current = () => ownerId.current === runOwner && !controller.signal.aborted;
+    updateUpload(id, { status: 'canceling', cancelRequested: true, speed: 0, error: null });
+    try {
+      if (running) await running.done;
+      if (!current()) return;
+      if (running?.result?.file) {
+        updateUpload(id, { status: 'completed', cancelRequested: false, progress: 100, completedFile: running.result.file, control: null });
+        return;
+      }
+      let session = running?.session || task.session;
+      const creation = running?.creation || task.creation;
+      if (!session && creation) {
+        const created = await uploadRequest('/api/v1/uploads', { method: 'POST', headers: { 'Idempotency-Key': task.idempotencyKey }, body: JSON.stringify(creation) }, { signal: controller.signal });
+        if (created.mode === 'instant') {
+          if (current()) updateUpload(id, { status: 'completed', cancelRequested: false, progress: 100, completedFile: created.file, control: null });
+          return;
+        }
+        session = created.upload;
+      }
+      if (session) {
+        updateUpload(id, { session, creation });
+        try { await abortUpload(session.id, { signal: controller.signal }); }
+        catch (error) {
+          const latest = await getUpload(session.id, { signal: controller.signal });
+          if (['completing', 'verifying', 'completed'].includes(latest.status)) {
+            if (current()) updateUpload(id, { status: latest.status === 'completed' ? 'completed' : latest.status, session: latest,
+              cancelRequested: false, control: null, progress: latest.status === 'completed' ? 100 : 99 });
+            return;
+          }
+          if (latest.status !== 'aborted') throw error;
+        }
+      }
+      if (current()) updateUpload(id, { status: 'canceled', cancelRequested: false, control: null, pendingParts: null, creation: null });
+    } catch (error) {
+      if (current()) updateUpload(id, { status: 'cancel_pending', control: null, creation: running?.creation || task.creation, error: `取消待确认：${error.message}` });
+    } finally { if (cancelControls.current.get(id) === controller) cancelControls.current.delete(id); }
   }, [updateUpload]);
 
   const removeUpload = useCallback(id => {
     const task = uploadsRef.current.find(item => item.id === id);
     if (!task || !['failed', 'canceled'].includes(task.status)) return;
-    const remove = () => setUploads(current => current.filter(item => item.id !== id));
-    if (task.status === 'failed' && task.session?.id && task.session.status !== 'verifying') {
+    const remove = () => { releasePendingParts(task.pendingParts); setUploads(current => current.filter(item => item.id !== id)); };
+    if (task.status === 'failed' && task.session?.id && !['completing', 'verifying'].includes(task.session.status)) {
       abortUpload(task.session.id).then(remove).catch(error => updateUpload(id, { error: `移除失败：${error.message}` }));
       return;
     }

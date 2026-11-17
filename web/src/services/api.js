@@ -21,6 +21,11 @@ const errorMessages = {
   'upload.not_found': '上传任务不存在或已经过期',
   'upload.file_exists': '网盘中已存在相同内容，本次未重复上传',
   'upload.name_conflict': '当前目录已存在同名文件，请重命名后上传',
+  'upload.part_conflict': '分片确认与服务器记录冲突，请重新创建上传任务',
+  'client.upload_timeout': '上传请求超时，请稍后重试',
+  'client.upload_part': '分片上传失败，请重试',
+  'client.upload_etag': '未能取得分片确认信息，请重试',
+  'client.upload_response': '上传确认响应异常，请重试',
   'upload.conflict': '上传状态已发生变化，请刷新后重试',
   'upload.invalid_input': '上传信息不完整，请重新选择文件',
   'upload.hash_mismatch': '文件完整性校验失败，请重新上传',
@@ -91,6 +96,8 @@ const parseResponse = async response => {
     const code = data?.error?.code;
     const error = new Error(errorMessage(code, response.status));
     error.status = response.status;
+    const retryAfter = response.headers.get('Retry-After');
+    error.retryAfter = /^\d+$/.test(retryAfter || '') ? Number(retryAfter) * 1000 : Math.max(0, Date.parse(retryAfter) - Date.now()) || 0;
     error.code = code;
     error.details = data?.error?.details;
     error.invalidFiles = data?.invalid_files || [];

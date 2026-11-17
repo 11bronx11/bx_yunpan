@@ -121,6 +121,11 @@ func (h *HTTP) presign(c *gin.Context) {
 }
 
 func (h *HTTP) confirm(c *gin.Context) {
+	view := c.Query("view")
+	if view != "" && view != "delta" {
+		h.writeError(c, ErrInvalidInput)
+		return
+	}
 	var request struct {
 		Parts []struct {
 			PartNumber int     `json:"part_number"`
@@ -142,9 +147,17 @@ func (h *HTTP) confirm(c *gin.Context) {
 		h.writeError(c, ErrNotFound)
 		return
 	}
-	session, err := h.service.ConfirmParts(userID, uploadID, parts)
+	session, err := h.service.ConfirmPartsContext(c.Request.Context(), userID, uploadID, parts, view == "delta")
 	if err != nil {
 		h.writeError(c, err)
+		return
+	}
+	if view == "delta" {
+		acknowledged := make([]gin.H, 0, len(session.ConfirmedParts))
+		for _, part := range session.ConfirmedParts {
+			acknowledged = append(acknowledged, gin.H{"part_number": part.PartNumber, "size_bytes": part.SizeBytes})
+		}
+		c.JSON(http.StatusOK, gin.H{"upload_id": session.ID, "status": session.Status, "acknowledged_parts": acknowledged})
 		return
 	}
 	c.JSON(http.StatusOK, sessionResponse(session))
@@ -189,6 +202,8 @@ func (h *HTTP) writeError(c *gin.Context, err error) {
 		c.JSON(http.StatusConflict, httpapi.ErrorEnvelope(c, "upload.file_exists", "file already exists in drive"))
 	case errors.Is(err, ErrConflict):
 		c.JSON(http.StatusConflict, httpapi.ErrorEnvelope(c, "upload.conflict", "upload state or file name conflict"))
+	case errors.Is(err, ErrPartConflict):
+		c.JSON(http.StatusConflict, httpapi.ErrorEnvelope(c, "upload.part_conflict", "uploaded part conflicts with an acknowledged part"))
 	case errors.Is(err, ErrInvalidInput):
 		c.JSON(http.StatusUnprocessableEntity, httpapi.ErrorEnvelope(c, "upload.invalid_input", "invalid upload request"))
 	default:

@@ -15,10 +15,11 @@ jest.mock('../services/drive', () => ({
 }));
 
 const Probe = () => {
-  const { uploads, enqueueUploads } = useTransfers();
+  const { uploads, enqueueUploads, cancelUpload } = useTransfers();
   return <div>
     <button type="button" onClick={() => enqueueUploads([new File(['data'], 'sample.txt', { type: 'text/plain' })], 'folder-1', '根目录')}>添加</button>
-    {uploads.map(task => <span key={task.id} data-error-code={task.errorCode}>{task.status}:{task.name}:{task.progress}</span>)}
+    <button type="button" onClick={() => enqueueUploads(Array.from({ length: 5 }, (_, i) => new File(['data'], `file-${i}.txt`)), 'folder-1', '根目录')}>添加五个</button>
+    {uploads.map(task => <div key={task.id}><span data-error-code={task.errorCode}>{task.status}:{task.name}:{task.progress}</span><button type="button" onClick={() => cancelUpload(task.id)}>取消 {task.name}</button></div>)}
   </div>;
 };
 
@@ -53,7 +54,7 @@ test('restores an active multipart session as interrupted after refresh', async 
 
   renderTransfers();
 
-  expect(await screen.findByText('interrupted:resume.bin:45')).toBeInTheDocument();
+  expect(await screen.findByText('interrupted:resume.bin:50')).toBeInTheDocument();
 });
 
 test('keeps completed uploads visible but removes them from refresh storage', async () => {
@@ -106,4 +107,37 @@ test.each([false, true])('hydration preserves a newly queued upload (request fai
     else resolveList({ items: [] });
   });
   expect(screen.getByText('checking:sample.txt:0')).toBeInTheDocument();
+});
+
+
+test('background completion releases the transfer slot for the next queued file', async () => {
+  listActiveUploads.mockResolvedValue({ items: [] });
+  uploadFile.mockImplementation((file, folder, progress, control) => {
+    control.onSession({ id: file.name, status: 'completing' });
+    control.onBackground();
+    return new Promise(() => {});
+  });
+  renderTransfers();
+  await waitFor(() => expect(listActiveUploads).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole('button', { name: '添加五个' }));
+  await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(5));
+});
+
+test('does not claim cancellation until the server accepts it', async () => {
+  listActiveUploads.mockResolvedValue({ items: [] });
+  let finishAbort;
+  abortUpload.mockImplementationOnce(() => new Promise(resolve => { finishAbort = resolve; }));
+  uploadFile.mockImplementation((file, folder, progress, control) => {
+    control.onSession({ id: 'cancel-session', status: 'uploading' });
+    return new Promise((resolve, reject) => control.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
+  });
+  renderTransfers();
+  await waitFor(() => expect(listActiveUploads).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole('button', { name: '添加', exact: true }));
+  await screen.findByText('uploading:sample.txt:0');
+  fireEvent.click(screen.getByRole('button', { name: '取消 sample.txt' }));
+  await waitFor(() => expect(abortUpload).toHaveBeenCalledTimes(1));
+  expect(screen.getByText('canceling:sample.txt:0')).toBeInTheDocument();
+  await act(async () => finishAbort());
+  expect(await screen.findByText('canceled:sample.txt:0')).toBeInTheDocument();
 });

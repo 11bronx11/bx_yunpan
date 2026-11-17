@@ -511,6 +511,12 @@ paths:
       operationId: confirmUploadParts
       parameters:
         - $ref: '#/components/parameters/UploadId'
+        - name: view
+          in: query
+          description: Optional delta returns only parts acknowledged for this request.
+          schema:
+            type: string
+            enum: [delta]
       requestBody:
         required: true
         content:
@@ -519,11 +525,13 @@ paths:
               $ref: '#/components/schemas/ConfirmPartsRequest'
       responses:
         '200':
-          description: Parts recorded idempotently
+          description: Parts recorded atomically and idempotently. Conflicting previously acknowledged values return upload.part_conflict (409).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UploadSession'
+                oneOf:
+                  - $ref: '#/components/schemas/UploadSession'
+                  - $ref: '#/components/schemas/ConfirmPartsDelta'
         '409':
           $ref: '#/components/responses/Conflict'
   /api/v1/uploads/{uploadId}/complete:
@@ -1521,12 +1529,13 @@ components:
           minimum: 1
         etag:
           type: string
-          maxLength: 256
+          maxLength: 512
         size_bytes:
           type: integer
           format: int64
-          minimum: 0
+          minimum: 1
         checksum:
+          maxLength: 512
           type: string
           nullable: true
     ConfirmPartsRequest:
@@ -1536,10 +1545,32 @@ components:
         parts:
           type: array
           minItems: 1
-          maxItems: 10000
+          maxItems: 100
           items:
             $ref: '#/components/schemas/ConfirmedPart'
       additionalProperties: false
+    ConfirmPartsDelta:
+      type: object
+      required: [upload_id, status, acknowledged_parts]
+      properties:
+        upload_id:
+          $ref: '#/components/schemas/UUID'
+        status:
+          type: string
+        acknowledged_parts:
+          type: array
+          maxItems: 100
+          items:
+            type: object
+            required: [part_number, size_bytes]
+            properties:
+              part_number:
+                type: integer
+                minimum: 1
+              size_bytes:
+                type: integer
+                format: int64
+                minimum: 1
     Share:
       type: object
       required: [id, file_id, created_at, version]

@@ -1,6 +1,9 @@
 import { api } from './api';
 import { deleteFolder, getChildren, moveFile, uploadFile, waitForUpload } from './drive';
 import { hashFile } from './fileHash';
+import { uploadPart } from './uploadPart';
+jest.mock('./uploadPart', () => ({ uploadPart: jest.fn() }));
+beforeEach(() => { uploadPart.mockResolvedValue('etag'); hashFile.mockResolvedValue('a'.repeat(64)); });
 
 jest.mock('./api', () => ({
   api: jest.fn(),
@@ -37,10 +40,7 @@ test('encodes directory pagination and forwards request cancellation', async () 
 });
 
 test('resume skips confirmed parts and uploads only missing parts', async () => {
-  const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
-    ok: true,
-    headers: { get: () => '"etag-2"' },
-  });
+  const fetchMock = uploadPart;
   const session = {
     id: 'upload-1',
     status: 'uploading',
@@ -53,11 +53,12 @@ test('resume skips confirmed parts and uploads only missing parts', async () => 
     confirmed_parts: [{ part_number: 1, size_bytes: 4 }],
   };
   hashFile.mockResolvedValue(session.sha256);
+  let completing = false;
   api.mockImplementation(async (path, options = {}) => {
     if (path.endsWith('/parts/presign')) return { parts: [{ part_number: 2, url: 'https://storage.test/part-2' }] };
-    if (path.endsWith('/parts/confirm')) return { ...session, confirmed_parts: [{ part_number: 1, size_bytes: 4 }, { part_number: 2, size_bytes: 4 }] };
-    if (path.endsWith('/complete')) return { ...session, status: 'verifying' };
-    if (path === '/api/v1/uploads/upload-1') return { ...session, status: 'completed', completed_entry_id: 'file-1' };
+    if (path.includes('/parts/confirm')) return { ...session, confirmed_parts: [{ part_number: 1, size_bytes: 4 }, { part_number: 2, size_bytes: 4 }] };
+    if (path.endsWith('/complete')) { completing = true; return { ...session, status: 'verifying' }; }
+    if (path === '/api/v1/uploads/upload-1') return completing ? { ...session, status: 'completed', completed_entry_id: 'file-1' } : session;
     throw new Error(`unexpected API call: ${path} ${options.method || 'GET'}`);
   });
 
@@ -70,7 +71,7 @@ test('resume skips confirmed parts and uploads only missing parts', async () => 
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(result.file.id).toBe('file-1');
 
-	fetchMock.mockRestore();
+	fetchMock.mockClear();
 });
 
 test('server verification keeps polling beyond the old timeout', async () => {
@@ -138,7 +139,7 @@ test('asynchronous create waits for initialization before signing parts', async 
   let initialized = false;
   let initializedAtPresign = false;
   let completing = false;
-  const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({ ok: true, headers: { get: () => 'etag' } });
+  const fetchMock = uploadPart;
   api.mockImplementation(async path => {
     if (path === '/api/v1/uploads') return { mode: 'multipart', upload: session };
     if (path === '/api/v1/uploads/async-upload') {
@@ -147,16 +148,16 @@ test('asynchronous create waits for initialization before signing parts', async 
     }
     if (path.endsWith('/parts/presign')) {
       initializedAtPresign = initialized;
-      return { parts: [{ url: 'https://storage.test/part' }] };
+      return { parts: [{ part_number: 1, url: 'https://storage.test/part' }] };
     }
-    if (path.endsWith('/parts/confirm')) return { ...session, status: 'uploading' };
+    if (path.includes('/parts/confirm')) return { ...session, status: 'uploading', confirmed_parts: [{ part_number: 1, size_bytes: 3 }] };
     if (path.endsWith('/complete')) { completing = true; return { ...session, status: 'completing' }; }
     throw new Error(path);
   });
   const result = await uploadFile(new File(['abc'], 'async.txt'), 'folder-1', jest.fn(), { pollInterval: 0 });
   expect(result.file.id).toBe('async-file');
   expect(initializedAtPresign).toBe(true);
-  fetchMock.mockRestore();
+  fetchMock.mockClear();
 });
 
 test('resuming completion polls without requiring the original file', async () => {
