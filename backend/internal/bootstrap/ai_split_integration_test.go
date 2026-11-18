@@ -102,7 +102,8 @@ func TestAISplitRealDependencies(t *testing.T) {
 	rabbit.Path = "/" + vhost
 	t.Setenv("TEST_RABBITMQ_URL", rabbit.String())
 	var esFail, qdFail atomic.Bool
-	proxy := func(key string, fail *atomic.Bool) string {
+	var esGate, qdGate atomic.Pointer[onlineProjectionGate]
+	proxy := func(key string, fail *atomic.Bool, gate *atomic.Pointer[onlineProjectionGate]) string {
 		u, err := url.Parse(os.Getenv(key))
 		if err != nil {
 			t.Fatal(err)
@@ -113,12 +114,17 @@ func TestAISplitRealDependencies(t *testing.T) {
 				http.Error(w, "fixture unavailable", 503)
 				return
 			}
+			if r.Method == http.MethodPost && (strings.HasSuffix(r.URL.Path, "/_search") || strings.HasSuffix(r.URL.Path, "/points/query")) {
+				if hold := gate.Load(); hold != nil && !hold.wait(r.Context()) {
+					return
+				}
+			}
 			forward.ServeHTTP(w, r)
 		}))
 		t.Cleanup(server.Close)
 		return server.URL
 	}
-	esEndpoint, qdEndpoint := proxy("TEST_SEARCH_ES_ENDPOINT", &esFail), proxy("TEST_SEARCH_QDRANT_ENDPOINT", &qdFail)
+	esEndpoint, qdEndpoint := proxy("TEST_SEARCH_ES_ENDPOINT", &esFail, &esGate), proxy("TEST_SEARCH_QDRANT_ENDPOINT", &qdFail, &qdGate)
 	roleDSNs := map[string]string{}
 	for _, kind := range []string{"query", "compute", "commit"} {
 		role := "ai_" + kind + "_" + suffix
@@ -504,6 +510,9 @@ func TestAISplitRealDependencies(t *testing.T) {
 		}
 	}
 	t.Log("real upload -> source -> parent/child text -> vectors/summary -> independent ES/QD -> Search/Ask -> citations and summary-only user job: PASS")
+	if os.Getenv("TEST_AI_ONLINE") == "true" {
+		runAIOnlineChecks(t, ctx, base, token, root, a, b, &esFail, &qdFail, &qdGate, upload)
+	}
 	if ready := os.Getenv("TEST_AI_BROWSER_READY_FILE"); ready != "" {
 		raw, _ := json.Marshal(map[string]any{"base_url": browserBase, "api": base, "storage": "http://" + cfg.Storage.Endpoint, "username": username, "password": password, "file_ids": []string{a, b}, "root": root})
 		if err := os.WriteFile(ready, raw, 0o600); err != nil {

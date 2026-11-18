@@ -76,8 +76,9 @@ func ClientInterceptors(o ClientOptions) []grpc.DialOption {
 			}
 			err = invoke(ctx, method, req, reply, cc, opts...)
 			code := status.Code(err)
-			done(code != codes.Unavailable && code != codes.DeadlineExceeded && code != codes.Internal && code != codes.Unknown)
-			if err == nil || n+1 == attempts || code != codes.Unavailable {
+			requestUnavailable := isRequestUnavailable(err)
+			done(requestUnavailable || code != codes.Unavailable && code != codes.DeadlineExceeded && code != codes.Internal && code != codes.Unknown)
+			if err == nil || requestUnavailable || n+1 == attempts || code != codes.Unavailable {
 				return err
 			}
 			base, cap := o.RetryBase, o.RetryCap

@@ -23,7 +23,13 @@ func TestBatchConfirmationAndFrozenReplay(t *testing.T) {
 	if err != nil || len(got.ConfirmedParts) != 3 {
 		t.Fatalf("confirmation: %+v %v", got, err)
 	}
-	firstTime := got.ConfirmedParts[0].CompletedAt.Round(time.Microsecond)
+	// Compare persisted timestamps: PG stores microseconds, while the first
+	// delta response can still carry the Go timestamp's nanoseconds.
+	stored, err := f.service.Get(f.userID, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstTime := stored.ConfirmedParts[0].CompletedAt
 	got, err = f.service.ConfirmPartsContext(context.Background(), f.userID, session.ID, parts[:1], true)
 	if err != nil || len(got.ConfirmedParts) != 1 || got.ConfirmedParts[0].PartNumber != 3 {
 		t.Fatalf("delta: %+v %v", got, err)

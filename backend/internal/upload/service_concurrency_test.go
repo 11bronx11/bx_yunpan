@@ -167,6 +167,7 @@ func newConcurrencyFixture(t *testing.T) concurrencyFixture {
 		SessionTTL: 24 * time.Hour, PartURLTTL: 15 * time.Minute, CleanupInterval: time.Minute, CleanupBatch: 100,
 	})
 	service.core = storage
+	service.storage = newFakeUploadStorage()
 	t.Cleanup(func() {
 		_ = db.Exec("DELETE FROM outbox_events WHERE aggregate_type = 'upload_session' AND aggregate_id IN (SELECT id FROM upload_sessions WHERE user_id = ?)", userID).Error
 		_ = db.Exec("DELETE FROM users WHERE id = ?", userID).Error

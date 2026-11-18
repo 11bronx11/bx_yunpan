@@ -24,6 +24,8 @@ type redisRequestLimiter struct {
 	limits RateLimits
 }
 
+const rateLimitTimeout = 100 * time.Millisecond
+
 var incrementWindow = redis.NewScript(`
 local count = redis.call("INCR", KEYS[1])
 if count == 1 then
@@ -41,6 +43,10 @@ func (l *redisRequestLimiter) Allow(ctx context.Context, ownerID uuid.UUID, scop
 	if limit <= 0 {
 		return true, nil
 	}
+	// Coordination is optional on the online path. A Redis connection that
+	// accepts TCP but stops replying must not consume the Search/Ask budget.
+	ctx, cancel := context.WithTimeout(ctx, rateLimitTimeout)
+	defer cancel()
 	window := time.Now().UTC().Unix() / 60
 	key := fmt.Sprintf("ai:rate:%s:%s:%d", scope, ownerID, window)
 	count, err := incrementWindow.Run(ctx, l.client, []string{key}, 120).Int64()

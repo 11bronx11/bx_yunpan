@@ -139,5 +139,5 @@ func (s *Set) AdvisoryProbes() []health.Probe {
 }
 
 func newRedisClient(addr, password string, db int) *redis.Client {
-	return redis.NewClient(&redis.Options{Addr: addr, Password: password, DB: db})
+	return redis.NewClient(&redis.Options{Addr: addr, Password: password, DB: db, ContextTimeoutEnabled: true})
 }

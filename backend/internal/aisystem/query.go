@@ -17,6 +17,7 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai/rag"
 	"github.com/11bronx11/bx_yunpan/backend/internal/aiprotocol"
 	corepb "github.com/11bronx11/bx_yunpan/backend/internal/core/pb"
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -54,6 +55,8 @@ type activeFile struct {
 	Object
 	File *corepb.FileRef
 }
+
+var errVectorScopeNotReady = errors.New("vector.scope_not_ready")
 
 func (q *Query) scope(ctx context.Context, grant string) (*corepb.ScopeResponse, []activeFile, error) {
 	opened, err := q.Core.OpenRetrievalScope(ctx, &corepb.OpenScopeRequest{Grant: grant})
@@ -429,15 +432,17 @@ func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, quer
 		}
 	}
 	if mode != "fulltext" {
-		if !q.Profile.EnableVectors || q.Provider == nil || len(sets) == 0 {
+		if !q.Profile.EnableVectors || q.Provider == nil {
 			vectorErr = errors.New("vector.not_ready")
+		} else if len(sets) == 0 {
+			vectorErr = errVectorScopeNotReady
 		} else {
 			var compatible []string
 			err := q.DB.WithContext(ctx).Table("ai_published_sets").Where("id=ANY(?::uuid[]) AND provider=? AND model=? AND revision=? AND dimension=1024", pq.Array(sets), q.Profile.EmbeddingProvider, q.Profile.EmbeddingModel, q.Profile.EmbeddingRevision).Pluck("id::text", &compatible).Error
 			if err != nil {
 				vectorErr = err
 			} else if len(compatible) == 0 {
-				vectorErr = errors.New("vector.model_incompatible")
+				vectorErr = errVectorScopeNotReady
 			} else {
 				if len(compatible) != len(sets) {
 					meta.Reasons = append(meta.Reasons, "vector.model_incompatible")
@@ -498,6 +503,9 @@ func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, quer
 	if mode == "semantic" && vectorErr != nil {
 		if errors.Is(vectorErr, ai.ErrQuota) {
 			return nil, meta, ai.GRPCStatus(ai.ErrQuota).Err()
+		}
+		if errors.Is(vectorErr, errVectorScopeNotReady) {
+			return nil, meta, grpcx.RequestUnavailable("ai.semantic_unavailable")
 		}
 		return nil, meta, status.Error(codes.Unavailable, "ai.semantic_unavailable")
 	}

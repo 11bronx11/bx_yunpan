@@ -409,7 +409,10 @@ func (s *Service) Complete(ctx context.Context, userID, sessionID uuid.UUID) (Se
 		}
 		result := tx.Model(&Session{}).Where("id = ? AND user_id = ? AND status IN ?", session.ID, userID, []string{StatusCreated, StatusUploading}).
 			Updates(map[string]any{"status": StatusCompleting, "version": gorm.Expr("version + 1"), "updated_at": time.Now().UTC()})
-		if result.Error != nil || result.RowsAffected != 1 {
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
 			return ErrConflict
 		}
 		session.Status = StatusCompleting
@@ -436,7 +439,7 @@ func (s *Service) Abort(ctx context.Context, userID, sessionID uuid.UUID) error 
 			}
 			return err
 		}
-		if session.Status == StatusAborted || session.Status == StatusFailed {
+		if session.Status == StatusAborted || session.Status == StatusFailed || session.Status == StatusExpired {
 			return nil
 		}
 		if session.Status == StatusCompleted || session.Status == StatusVerifying || session.Status == StatusCompleting {
@@ -500,23 +503,10 @@ func (s *Service) expireOne(ctx context.Context, sessionID uuid.UUID) (bool, err
 		if (session.Status != StatusInitializing && session.Status != StatusCreated && session.Status != StatusUploading) || session.ExpiresAt.After(time.Now().UTC()) {
 			return nil
 		}
-		if err := s.quota.ReleaseQuota(tx, session.UserID, session.ReservedBytes); err != nil {
+		// The fallback scan must preserve the same cleanup guarantees as the
+		// scheduled expiry result, including uploads whose create result is late.
+		if err := s.failAsync(tx, session, StatusExpired, "upload.expired"); err != nil {
 			return err
-		}
-		if err := tx.Model(&session).Updates(map[string]any{
-			"status": StatusExpired, "reserved_bytes": 0, "updated_at": time.Now().UTC(), "version": gorm.Expr("version + 1"),
-		}).Error; err != nil {
-			return err
-		}
-		if session.StorageUploadID != "" {
-			_, err := enqueueUploadOperation(tx, storageops.Input{
-				OperationType: storageops.MultipartAbort, IdempotencyKey: "multipart.abort:" + session.ID.String(),
-				UploadSessionID: &session.ID, SourceBucket: session.Bucket, SourceKey: session.ObjectKey,
-				StorageUploadID: session.StorageUploadID,
-			})
-			if err != nil {
-				return err
-			}
 		}
 		changed = true
 		return nil
