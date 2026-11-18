@@ -336,15 +336,6 @@ func (q *Query) pgText(ctx context.Context, ids []string, query string, k int) (
 	return rows, err
 }
 
-func (q *Query) pgVector(ctx context.Context, ids []string, vector []float32, k int) ([]ranked, error) {
-	var rows []ranked
-	if len(ids) == 0 {
-		return nil, errors.New("vector.not_ready")
-	}
-	err := q.DB.WithContext(ctx).Raw(`WITH eligible AS MATERIALIZED (SELECT child_id,embedding FROM ai_published_vectors WHERE embedding_set_id::text=ANY(?::text[])) SELECT child_id AS id,1-(embedding <=> ?::vector) AS score FROM eligible ORDER BY embedding <=> ?::vector,child_id LIMIT ?`, pq.Array(ids), vectorLiteral(vector), vectorLiteral(vector), k).Scan(&rows).Error
-	return rows, err
-}
-
 // Branch ranks are merged by raw score across all authorized batches before RRF.
 // A request embeds its question once, including selected multi-file requests.
 func (q *Query) retrieve(ctx context.Context, files []activeFile, query, mode string, k int) ([]candidate, *pbv2.Retrieval, error) {
@@ -442,7 +433,7 @@ func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, quer
 			vectorErr = errors.New("vector.not_ready")
 		} else {
 			var compatible []string
-			err := q.DB.WithContext(ctx).Table("ai_published_sets").Where("id::text=ANY(?::text[]) AND provider=? AND model=? AND revision=? AND dimension=1024", pq.Array(sets), q.Profile.EmbeddingProvider, q.Profile.EmbeddingModel, q.Profile.EmbeddingRevision).Pluck("id::text", &compatible).Error
+			err := q.DB.WithContext(ctx).Table("ai_published_sets").Where("id=ANY(?::uuid[]) AND provider=? AND model=? AND revision=? AND dimension=1024", pq.Array(sets), q.Profile.EmbeddingProvider, q.Profile.EmbeddingModel, q.Profile.EmbeddingRevision).Pluck("id::text", &compatible).Error
 			if err != nil {
 				vectorErr = err
 			} else if len(compatible) == 0 {
