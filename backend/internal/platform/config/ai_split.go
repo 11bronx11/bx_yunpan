@@ -75,6 +75,12 @@ func (c Config) validateAISplit() error {
 	if c.AI.Dimension != 1024 || a.ScopeLimit < 50 || a.ScopeLimit > 100000 || a.SummaryCalls < 2 {
 		return errors.New("invalid AI dimension or resource budgets")
 	}
+	if c.AI.Provider != "fake" && c.AI.Provider != "dashscope" {
+		return errors.New("AI_PROVIDER must be fake or dashscope")
+	}
+	if c.AI.RequestTimeout <= 0 || a.ReadTimeout <= 0 {
+		return errors.New("AI model and core read timeouts must be positive")
+	}
 	needsModel := (c.Role == "ai-embedding-worker" && a.Vectors) || (c.Role == "ai-summary-worker" && a.Summary) || (c.Role == "ai-query" && (a.Ask || a.Vectors || c.AI.RerankEnabled))
 	if needsModel && c.AI.Provider == "dashscope" && c.AI.APIKey == "" {
 		return errors.New("configured model role requires provider credentials")
@@ -83,7 +89,25 @@ func (c Config) validateAISplit() error {
 		if a.QueryToken == "" {
 			return errors.New("AI query service token required")
 		}
+		if a.QueryTimeout <= 0 || a.AskTimeout <= 0 || c.AI.RerankCandidates <= 0 || c.AI.RerankTopK <= 0 || c.AI.RerankTopK > c.AI.RerankCandidates || c.AI.RerankTimeout <= 0 {
+			return errors.New("invalid AI query or rerank budgets")
+		}
+		if c.AI.RerankEnabled && (strings.TrimSpace(c.AI.RerankModel) == "" || c.AI.Provider == "dashscope" && strings.TrimSpace(c.AI.RerankBaseURL) == "") {
+			return errors.New("enabled reranker requires model and provider endpoint")
+		}
+		if c.Search.ReadBackend != "postgres" && c.Search.ReadBackend != "es_qdrant" && c.Search.ReadBackend != "shadow" {
+			return errors.New("invalid AI search read backend")
+		}
+		if c.Search.ExternalTimeout <= 0 || c.Search.ShadowSampleRate < 0 || c.Search.ShadowSampleRate > 1 {
+			return errors.New("invalid AI external search budgets")
+		}
 		return nil
+	}
+	if c.Role == "ai-content-worker" && c.AI.MaxObjectBytes <= 0 {
+		return errors.New("AI content object size limit must be positive")
+	}
+	if (c.Role == "ai-text-projector" || c.Role == "ai-vector-projector") && c.Search.WriteTimeout <= 0 {
+		return errors.New("AI projection write timeout must be positive")
 	}
 	if c.Async.ControlDSN == "" || c.TaskQueue.URL == "" {
 		return errors.New("AI asynchronous roles require control PG and RabbitMQ")

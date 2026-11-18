@@ -54,8 +54,8 @@ type Builder struct {
 	metrics *Metrics
 }
 
-// NewBuilder 构造 resolver builder。用 resolver.Register 注册后，
-// grpc.NewClient("yunpan-etcd:///services/aisvc") 即可走它解析。
+// NewBuilder 构造连接专属的 resolver builder，通过 grpc.WithResolvers 传入。
+// 每个连接使用自己的 etcd 生命周期，避免并发修改 gRPC 全局注册表。
 func NewBuilder(client *clientv3.Client, logger *slog.Logger, metrics *Metrics) *Builder {
 	return &Builder{client: client, logger: logger, metrics: metrics}
 }

@@ -50,6 +50,7 @@ def main():
     sql("ai-postgres", "yunpan_ai_query", "SELECT * FROM ai_published_objects LIMIT 0", True, "A02", "query published view")
     for label, statement in {
         "query staging SELECT": "SELECT * FROM ai_artifact_manifests LIMIT 0",
+        "query summary checkpoint SELECT": "SELECT * FROM ai_summary_checkpoints LIMIT 0",
         "query private base SELECT": "SELECT * FROM ai_objects LIMIT 0",
         "query base UPDATE": "UPDATE ai_objects SET desired_source_seq=desired_source_seq WHERE false",
         "query view UPDATE": "UPDATE ai_published_objects SET desired_source_seq=desired_source_seq WHERE false",
@@ -59,6 +60,7 @@ def main():
     insert = f"INSERT INTO ai_artifact_manifests(artifact_id,task_id,generation,kind,input_digest,artifact_hash,typed_output_ref,row_count,byte_count,complete,data,object_id,content_generation) VALUES('{aid}','{task}',1,'ai.source.prepare','{'a'*64}','{'b'*64}','{output}',0,2,true,'{{}}','{obj}',1)"
     sql("ai-postgres", "yunpan_ai_compute", insert, True, "A03", "compute insert staging")
     sql("ai-postgres", "yunpan_ai_compute", "SELECT * FROM ai_published_objects LIMIT 0; SELECT * FROM ai_projection_catalog LIMIT 0", True, "A03", "compute published view/catalog")
+    sql("ai-postgres", "yunpan_ai_compute", "SELECT * FROM ai_summary_checkpoints LIMIT 0", True, "A03", "compute private summary checkpoints")
     for label, statement in {
         "compute staging SELECT": "SELECT * FROM ai_artifact_manifests LIMIT 0",
         "compute staging UPDATE": "UPDATE ai_artifact_manifests SET complete=false WHERE false",

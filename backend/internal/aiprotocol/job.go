@@ -5,9 +5,10 @@ import (
 )
 
 type JobFinish struct {
-	JobID    uuid.UUID         `json:"job_id"`
-	OwnerID  uuid.UUID         `json:"owner_id"`
-	ObjectID uuid.UUID         `json:"object_id"`
-	Outcomes map[string]string `json:"outcomes"`
-	Status   string            `json:"status"`
+	JobID       uuid.UUID            `json:"job_id"`
+	OwnerID     uuid.UUID            `json:"owner_id"`
+	ObjectID    uuid.UUID            `json:"object_id"`
+	Outcomes    map[string]string    `json:"outcomes"`
+	Status      string               `json:"status"`
+	VersionRefs map[string]uuid.UUID `json:"result_version_refs,omitempty"`
 }

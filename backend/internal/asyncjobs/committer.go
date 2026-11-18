@@ -146,7 +146,12 @@ func (c *Committer) commitTx(tx *gorm.DB, t asynccontrol.Task, r asynccontrol.Re
 				return decision, asynccontrol.ErrInvalid
 			}
 			body, _ := json.Marshal(finish.Outcomes)
-			if e := tx.Table("ai_job_requests").Where("job_id=? AND owner_id=?", finish.JobID, finish.OwnerID).Updates(map[string]any{"capability_outcomes": string(body), "finished_at": gorm.Expr("clock_timestamp()")}).Error; e != nil {
+			versions := finish.VersionRefs
+			if versions == nil {
+				versions = map[string]uuid.UUID{}
+			}
+			refs, _ := json.Marshal(versions)
+			if e := tx.Table("ai_job_requests").Where("job_id=? AND owner_id=?", finish.JobID, finish.OwnerID).Updates(map[string]any{"capability_outcomes": string(body), "result_version_refs": string(refs), "finished_at": gorm.Expr("clock_timestamp()")}).Error; e != nil {
 				return decision, e
 			}
 			err = tx.Table("async_tasks").Where("id=? AND owner_id=?", finish.JobID, finish.OwnerID).Updates(map[string]any{"status": finish.Status, "progress": 100, "version": gorm.Expr("version+1"), "updated_at": gorm.Expr("clock_timestamp()")}).Error

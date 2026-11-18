@@ -209,7 +209,14 @@ func (p *Publisher) Publish(ctx context.Context, t asynccontrol.Task, r asynccon
 func jsonValue(v any) datatypes.JSON { b, _ := json.Marshal(v); return b }
 func stringInt(v int64) string       { return strconv.FormatInt(v, 10) }
 func capability(tx *gorm.DB, i aiprotocol.Intent, cap string, seq int64, state, code string, task uuid.UUID) error {
-	return tx.Exec(`INSERT INTO ai_capability_status(object_id,content_generation,capability,desired_seq,latest_observed_seq,latest_build_state,error_code,source_task_id) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(object_id,content_generation,capability) DO UPDATE SET desired_seq=GREATEST(ai_capability_status.desired_seq,EXCLUDED.desired_seq),latest_observed_seq=EXCLUDED.latest_observed_seq,latest_build_state=EXCLUDED.latest_build_state,error_code=EXCLUDED.error_code,source_task_id=EXCLUDED.source_task_id,observed_at=clock_timestamp() WHERE EXCLUDED.latest_observed_seq>=ai_capability_status.latest_observed_seq AND EXCLUDED.latest_observed_seq>=ai_capability_status.desired_seq AND NOT (EXCLUDED.latest_observed_seq=ai_capability_status.latest_observed_seq AND ai_capability_status.latest_build_state='succeeded' AND EXCLUDED.latest_build_state<>'succeeded')`, i.ObjectID, i.ContentGeneration, cap, seq, seq, state, code, task).Error
+	return tx.Exec(`INSERT INTO ai_capability_status(object_id,content_generation,capability,desired_seq,latest_observed_seq,latest_build_state,error_code,source_task_id)
+VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(object_id,content_generation,capability) DO UPDATE SET
+desired_seq=GREATEST(ai_capability_status.desired_seq,EXCLUDED.desired_seq),latest_observed_seq=EXCLUDED.latest_observed_seq,
+latest_build_state=EXCLUDED.latest_build_state,error_code=EXCLUDED.error_code,source_task_id=EXCLUDED.source_task_id,observed_at=clock_timestamp()
+WHERE EXCLUDED.latest_observed_seq>=ai_capability_status.latest_observed_seq AND EXCLUDED.latest_observed_seq>=ai_capability_status.desired_seq
+AND NOT (EXCLUDED.latest_observed_seq=ai_capability_status.latest_observed_seq AND
+ ((ai_capability_status.latest_build_state='succeeded' AND EXCLUDED.latest_build_state<>'succeeded') OR
+  (ai_capability_status.latest_build_state='failed' AND EXCLUDED.latest_build_state='pending')))`, i.ObjectID, i.ContentGeneration, cap, seq, seq, state, code, task).Error
 }
 
 func insert(tx *gorm.DB, table string, row map[string]any) error {
@@ -320,11 +327,11 @@ func publishContent(tx *gorm.DB, kind string, in aiprotocol.Input, out aiprotoco
 			return err
 		}
 		for _, v := range d.Items {
-			var content string
-			if err := tx.Table("ai_child_chunks").Select("content").Where("id=? AND content_version_id=?", v.ChildID, in.ContentVersionID).Take(&content).Error; err != nil {
+			var child struct{ Content, HeadingPath string }
+			if err := tx.Table("ai_child_chunks").Select("content,heading_path").Where("id=? AND content_version_id=?", v.ChildID, in.ContentVersionID).Take(&child).Error; err != nil {
 				return err
 			}
-			if aiprotocol.Hash([]byte(content)) != v.TextHash || !validVector(v.Vector, 1024) {
+			if aiprotocol.Hash([]byte(embeddingText(in.Profile.Chunker, child.HeadingPath, child.Content))) != v.TextHash || !validVector(v.Vector, 1024) {
 				return asynccontrol.ErrConflict
 			}
 			if err := insert(tx, "ai_chunk_vectors", map[string]any{"embedding_set_id": out.OutputID, "child_id": v.ChildID, "content_version_id": in.ContentVersionID, "embedding": vectorLiteral(v.Vector), "input_text_hash": v.TextHash}); err != nil {

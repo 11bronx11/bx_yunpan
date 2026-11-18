@@ -130,3 +130,44 @@ func TestFrozenParentChildV1KeepsIDsAcrossEmptyBlocks(t *testing.T) {
 		t.Fatal("frozen v1 identity changed across empty block", e, got)
 	}
 }
+
+func TestFrozenParentChildV2KeepsRangesAndContextIsBounded(t *testing.T) {
+	version := uuid.New()
+	got, err := BuildParentChildVersion(version, []Section{{Text: "abc", HeadingPath: "heading"}}, "parent-child-v2")
+	key := fmt.Sprintf("%s:0:0:3:parent-child-v2", version)
+	if err != nil || len(got.Parents) != 1 || got.Parents[0].ID != uuid.NewSHA1(version, []byte(key)) || got.Children[0].Content != "abc" || got.Children[0].ParentEnd != 3 {
+		t.Fatal("frozen v2 identity or range changed", got, err)
+	}
+	passage := strings.Repeat("文", 500)
+	context := ContextualText(strings.Repeat("标题", 1000), passage, 600)
+	if EstimateTokens(context) > 600 || !strings.HasSuffix(context, passage) || !strings.HasPrefix(context, "标题") {
+		t.Fatal("context exceeded budget or altered source passage")
+	}
+	if ContextualText("heading", "heading\n\nbody", 600) != "heading\n\nbody" {
+		t.Fatal("heading duplicated")
+	}
+}
+
+func TestParentChildOverlongTableRowDoesNotInventTailRows(t *testing.T) {
+	block := Section{Text: "| 标题 | 数值 |\n| --- | --- |\n| " + strings.Repeat("中", 2000) + " | 1 |", Kind: KindTable, HasHeader: true, RowStart: 2, RowEnd: 2}
+	got, err := BuildParentChild(uuid.New(), []Section{block})
+	if err != nil || len(got.Children) < 3 {
+		t.Fatal("long row was not split", err)
+	}
+	for _, c := range got.Children {
+		if c.Location.RowStart != 2 || c.Location.RowEnd != 2 || !strings.Contains(c.Content, "中") || c.TokenCount > 600 {
+			t.Fatal("header-only phantom row or missing row context", c)
+		}
+	}
+	old, err := BuildParentChildVersion(uuid.New(), []Section{block}, "parent-child-v2")
+	if err != nil || len(old.Children) != len(got.Children)+1 {
+		t.Fatal("frozen v2 table output changed", err)
+	}
+}
+
+func TestParentChildSingleColumnTableHasCorrectRowRange(t *testing.T) {
+	got, err := BuildParentChild(uuid.New(), []Section{{Text: "| 标题 |\n| --- |\n| 内容 |", Kind: KindTable, HasHeader: true, RowStart: 2, RowEnd: 2}})
+	if err != nil || len(got.Children) != 1 || got.Children[0].Location.RowStart != 2 || got.Children[0].Location.RowEnd != 2 || strings.Count(got.Children[0].Content, "---") != 1 {
+		t.Fatal("single-column separator counted as a source row", got, err)
+	}
+}

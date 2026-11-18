@@ -141,6 +141,9 @@ func TestAISplitRealDependencies(t *testing.T) {
 				}
 			}
 			if kind == "compute" {
+				if err := aidb.Exec(fmt.Sprintf("GRANT SELECT ON %s.ai_summary_checkpoints TO %s", aiSchema, role)).Error; err != nil {
+					t.Fatal(err)
+				}
 				if err := aidb.Exec(fmt.Sprintf("GRANT SELECT ON %s.ai_projection_catalog TO %s", aiSchema, role)).Error; err != nil {
 					t.Fatal(err)
 				}
@@ -161,6 +164,9 @@ func TestAISplitRealDependencies(t *testing.T) {
 		t.Setenv(prefix+"_SIGNING_SEED", base64.RawURLEncoding.EncodeToString(priv.Seed()))
 		t.Setenv(prefix+"_PUBLIC_KEY", base64.RawURLEncoding.EncodeToString(pub))
 	}
+	t.Setenv("AI_RERANK_ENABLED", "true")
+	t.Setenv("AI_RERANK_CANDIDATES", "3")
+	t.Setenv("AI_RERANK_TOP_K", "2")
 	addr := func() string {
 		l, e := net.Listen("tcp", "127.0.0.1:0")
 		if e != nil {
@@ -465,6 +471,16 @@ func TestAISplitRealDependencies(t *testing.T) {
 	await("summary user job", func() bool {
 		return request("GET", "/api/v1/ai/jobs/"+job["job_id"].(string), nil, 200)["status"] == "succeeded"
 	})
+	finishedJob := request("GET", "/api/v1/ai/jobs/"+job["job_id"].(string), nil, 200)
+	refs, ok := finishedJob["result_version_refs"].(map[string]any)
+	if !ok || refs["summary"] == nil || len(refs) != 1 {
+		t.Fatal("summary-only job lost its published version reference", finishedJob)
+	}
+	updatedOverview := request("GET", "/api/v1/files/"+a+"/ai", nil, 200)
+	summaryCapability := updatedOverview["capabilities"].(map[string]any)["summary"].(map[string]any)
+	if refs["summary"] != summaryCapability["version_id"] {
+		t.Fatal("job version does not identify the published summary", refs, summaryCapability)
+	}
 	request("POST", "/api/v1/ai/ask", map[string]any{"question": "rollback", "scope": map[string]any{"mode": "selected", "file_ids": []string{uuid.NewString()}}}, 409)
 	request("POST", "/api/v1/ai/ask", map[string]any{"question": "rollback", "scope": map[string]any{"mode": "selected", "file_ids": []string{}}}, 400)
 	sourceFile := upload("safe-code.go", "package main\n// rollback 保留历史版本\nfunc main() {}\n", "application/octet-stream")
@@ -482,7 +498,7 @@ func TestAISplitRealDependencies(t *testing.T) {
 			tracedStages[span.Name] = true
 		}
 	}
-	for _, name := range []string{"ai.source.prepare", "ai.text.build", "ai.embedding.generate", "ai.summary.generate", "ai.publish", "ai.search", "ai.ask"} {
+	for _, name := range []string{"ai.source.prepare", "ai.text.build", "ai.embedding.generate", "ai.summary.generate", "ai.publish", "ai.search", "ai.ask", "ai.rerank"} {
 		if !tracedStages[name] {
 			t.Fatalf("distributed trace lost stage %s", name)
 		}

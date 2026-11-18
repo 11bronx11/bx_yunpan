@@ -64,3 +64,5 @@ docs/facts/2026-11-03/*
 !docs/facts/2026-11-03/process-topologies.json
 artifacts/
 !docs/AI_SPLIT_PARITY_AUDIT_2026-11-18.md
+!docs/AI_RAG_FLOW_AUDIT_2026-11-18.md
+!docs/AI_SPLIT_COMPLETENESS_REVIEW_2026-11-18.md

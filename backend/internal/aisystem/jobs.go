@@ -102,13 +102,23 @@ func (p *Planner) finishJob(tx *gorm.DB, s *asynccontrol.Store, t asynccontrol.T
 	if err := json.Unmarshal(agg.RequestedTargets, &targets); err != nil {
 		return err
 	}
-	var rows []struct{ Target, State string }
-	if err := tx.Raw(`SELECT l.target,t.state FROM ai_job_task_links l JOIN tasks t ON t.id=l.task_id WHERE l.job_id=?`, observer.JobID).Scan(&rows).Error; err != nil {
+	var rows []struct {
+		Target, State string
+		ResultBody    json.RawMessage
+	}
+	if err := tx.Raw(`SELECT l.target,t.state,r.body AS result_body FROM ai_job_task_links l JOIN tasks t ON t.id=l.task_id LEFT JOIN results r ON r.id=t.result_id WHERE l.job_id=?`, observer.JobID).Scan(&rows).Error; err != nil {
 		return err
 	}
 	states := map[string]string{}
+	versions := map[string]uuid.UUID{}
 	for _, r := range rows {
 		states[r.Target] = r.State
+		if r.State == asynccontrol.Succeeded && (r.Target == "source" || r.Target == "text" || r.Target == "vectors" || r.Target == "summary") {
+			var output aiprotocol.Output
+			if json.Unmarshal(r.ResultBody, &output) == nil && output.Validate() == nil && output.ObjectID == in.Intent.ObjectID && output.ContentGeneration == in.Intent.ContentGeneration {
+				versions[r.Target] = output.OutputID
+			}
+		}
 	}
 	outcomes := map[string]string{}
 	successful := 0
@@ -135,7 +145,7 @@ func (p *Planner) finishJob(tx *gorm.DB, s *asynccontrol.Store, t asynccontrol.T
 	} else if successful > 0 {
 		status = "partial_success"
 	}
-	finish := aiprotocol.JobFinish{JobID: observer.JobID, OwnerID: observer.OwnerID, ObjectID: in.Intent.ObjectID, Outcomes: outcomes, Status: status}
+	finish := aiprotocol.JobFinish{JobID: observer.JobID, OwnerID: observer.OwnerID, ObjectID: in.Intent.ObjectID, Outcomes: outcomes, Status: status, VersionRefs: versions}
 	b, _ := json.Marshal(finish)
 	child, err := s.EnsureTx(tx, asynccontrol.Spec{Kind: "ai.job.finish", SemanticKey: "ai.v2.job.finish:" + finish.JobID.String(), OwnerKey: t.OwnerKey, ResourceKey: t.ResourceKey, ShardKey: t.ShardKey, Input: b}, "job:"+finish.JobID.String())
 	if err != nil {

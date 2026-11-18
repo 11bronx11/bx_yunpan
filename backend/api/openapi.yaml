@@ -1947,6 +1947,11 @@ components:
       type: object
       required: [id, task_type, status, progress, attempt, created_at, updated_at]
       properties:
+        result_version_refs:
+          type: object
+          description: Published source, text, vectors or summary version IDs produced by this AI job. Existing jobs may have no recorded version references.
+          additionalProperties:
+            $ref: '#/components/schemas/UUID'
         id:
           $ref: '#/components/schemas/UUID'
         task_type:

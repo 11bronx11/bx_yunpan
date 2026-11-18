@@ -392,6 +392,10 @@ func inferKind(text string) string {
 }
 
 func splitTypedTable(section Section, heading, text string, options ChunkOptions) ([]Chunk, bool) {
+	return splitTypedTableTail(section, heading, text, options, true)
+}
+
+func splitTypedTableTail(section Section, heading, text string, options ChunkOptions, keepEmptyTail bool) ([]Chunk, bool) {
 	lines := nonEmptyLines(text)
 	if len(lines) == 0 {
 		return nil, false
@@ -399,7 +403,7 @@ func splitTypedTable(section Section, heading, text string, options ChunkOptions
 	headerCount := 0
 	if section.HasHeader {
 		headerCount = 1
-		if len(lines) > 1 && isTableSeparator(lines[1]) {
+		if len(lines) > 1 && (isTableSeparator(lines[1]) || !keepEmptyTail && isSingleColumnSeparator(lines[1])) {
 			headerCount = 2
 		}
 	}
@@ -420,7 +424,7 @@ func splitTypedTable(section Section, heading, text string, options ChunkOptions
 	}
 	currentStart := rowStart
 	flush := func() {
-		if len(rows) == 0 && header == "" {
+		if len(rows) == 0 && (header == "" || !keepEmptyTail) {
 			return
 		}
 		parts := make([]string, 0, len(rows)+headerCount)
@@ -491,6 +495,12 @@ func splitTypedTable(section Section, heading, text string, options ChunkOptions
 		result = append(result, chunkFromSection(section, KindTable, heading, content))
 	}
 	return result, false
+}
+
+func isSingleColumnSeparator(line string) bool {
+	cell := strings.TrimSpace(strings.Trim(strings.TrimSpace(line), "|"))
+	cell = strings.Trim(cell, ":")
+	return len(cell) >= 3 && strings.Trim(cell, "-") == ""
 }
 
 func chunkFromSection(section Section, kind, heading, content string) Chunk {

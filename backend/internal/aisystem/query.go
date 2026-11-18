@@ -39,6 +39,8 @@ type Query struct {
 	ShadowProjector  *Projector
 	ShadowSampleRate float64
 	ShadowRecorder   ai.ShadowRecorder
+	RerankCandidates int
+	RerankTopK       int
 }
 type candidate struct {
 	ID, ParentID, ContentVersionID, SourceID uuid.UUID
@@ -378,6 +380,11 @@ func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, quer
 	texts, refs := uniqueVersions(files, false)
 	sets, _ := uniqueVersions(files, true)
 	batchSize, branchK, mergeK := 200, k, k
+	if mode == "hybrid" {
+		// Response top-K must not prune each branch before cross-branch fusion.
+		// In particular, a shared rank-2 hit can beat either branch's rank-1 hit.
+		branchK, mergeK = max(k, 50), max(k, 50)
+	}
 	if perFile {
 		batchSize, branchK, mergeK = 1, 8, 400
 	}
@@ -552,28 +559,7 @@ func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, quer
 		}
 		return rows[i].Score > rows[j].Score
 	})
-	if len(rows) > 240 {
-		chosen := []candidate{}
-		seen := map[string]bool{}
-		used := map[uuid.UUID]bool{}
-		for _, c := range rows {
-			if !seen[c.File.FileId] {
-				chosen = append(chosen, c)
-				seen[c.File.FileId] = true
-				used[c.ID] = true
-			}
-		}
-		for _, c := range rows {
-			if len(chosen) >= 240 {
-				break
-			}
-			if !used[c.ID] {
-				chosen = append(chosen, c)
-				used[c.ID] = true
-			}
-		}
-		rows = chosen
-	}
+	rows = candidatePool(rows, 240, perFile)
 	return rows, meta, nil
 }
 
@@ -671,22 +657,35 @@ func (q *Query) Ask(ctx context.Context, r *pbv2.AskRequest) (response *pbv2.Ask
 		}
 	}
 	k, budget, parentLimit := 40, 8000, 12
+	candidateLimit := 60
 	if selected {
 		k, budget, parentLimit = 80, 12000, 24
+		candidateLimit = 100
+		if len(grant.Scope.FileIDs) > 1 {
+			candidateLimit = 240
+		}
+	}
+	if q.RerankCandidates > 0 {
+		candidateLimit = min(q.RerankCandidates, 240)
+		k = max(k, candidateLimit)
+	}
+	if q.RerankTopK > 0 {
+		parentLimit = min(parentLimit, q.RerankTopK)
 	}
 	rows, meta, err := q.retrieveScoped(ctx, files, r.Question, "hybrid", k, selected && len(grant.Scope.FileIDs) > 1)
 	if err != nil {
 		return nil, err
 	}
+	rows = candidatePool(rows, candidateLimit, selected && len(grant.Scope.FileIDs) > 1)
 	// No candidate text may leave this service before core revalidates it.
 	if err := q.validate(ctx, r.Grant, rows); err != nil {
 		return nil, err
 	}
 	if q.Reranker != nil && len(rows) > 0 {
-		count := min(len(rows), 100)
+		count := len(rows)
 		docs := make([]string, count)
 		for n, c := range rows[:count] {
-			docs[n] = c.Content
+			docs[n] = rag.ContextualText(c.HeadingPath, c.Content, 600)
 		}
 		rerankCtx, finishRerank := stageTrace(ctx, "ai.rerank")
 		scores, e := q.Reranker.Rerank(rerankCtx, r.Question, docs)
@@ -716,7 +715,8 @@ func (q *Query) Ask(ctx context.Context, r *pbv2.AskRequest) (response *pbv2.Ask
 		if parents[c.ParentID] || len(evidence) >= parentLimit {
 			return
 		}
-		tokens := rag.EstimateTokens(c.ParentContent)
+		parentContent := rag.ContextualText(c.HeadingPath, c.ParentContent, 2400)
+		tokens := rag.EstimateTokens(parentContent)
 		if tokens+int(meta.EvidenceTokens) > budget {
 			return
 		}
@@ -729,7 +729,7 @@ func (q *Query) Ask(ctx context.Context, r *pbv2.AskRequest) (response *pbv2.Ask
 			// One evidence text may support several authorized logical files.
 			cites = append(cites, citation(alias, id))
 		}
-		evidence = append(evidence, ai.Evidence{ID: id, FileName: c.File.Name, Content: c.ParentContent})
+		evidence = append(evidence, ai.Evidence{ID: id, FileName: c.File.Name, Content: parentContent})
 		used = append(used, c)
 		meta.EvidenceTokens += int32(tokens)
 	}

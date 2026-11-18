@@ -14,6 +14,7 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai/pbv2"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx"
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/registry"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -24,8 +25,38 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/resolver"
 	"google.golang.org/grpc/status"
 )
+
+func TestInternalClientsKeepResolversLocal(t *testing.T) {
+	before := resolver.Get(registry.Scheme)
+	cfg := config.Config{Registry: config.Registry{Enabled: true, Endpoints: []string{"127.0.0.1:1"}, DialTimeout: time.Second}}
+	var wg sync.WaitGroup
+	errors := make(chan error, 16)
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			conn, cleanup, err := internalClient(cfg, "ai-query-v2", "", "fixture")
+			if err == nil {
+				_ = conn.Close()
+			}
+			cleanup()
+			errors <- err
+		}()
+	}
+	wg.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if resolver.Get(registry.Scheme) != before {
+		t.Fatal("client changed the global resolver or borrowed another connection's lifecycle")
+	}
+}
 
 type rpcParityService struct {
 	pbv2.UnimplementedAIQueryServiceServer

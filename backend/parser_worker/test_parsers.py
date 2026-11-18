@@ -142,6 +142,7 @@ class ParserTests(unittest.TestCase):
         self.assertEqual([section["kind"] for section in result["sections"]], ["heading", "text", "list", "table"])
         self.assertIn("Overview", result["sections"][1]["heading_path"])
         self.assertIn("| alice | 7 |", result["sections"][3]["text"])
+        self.assertEqual(result["sections"][3]["heading_path"], "Overview")
 
     def test_images_pptx_and_unknown_binary_are_unsupported(self):
         for data, media_type in (

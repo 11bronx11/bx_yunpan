@@ -491,5 +491,5 @@ func (h *HTTP) job(c *gin.Context) {
 	}
 	var request core.JobRequest
 	_ = h.DB.WithContext(c.Request.Context()).Where("job_id=?", id).Find(&request).Error
-	c.JSON(200, gin.H{"id": job.ID, "status": job.Status, "progress": job.Progress, "task_type": job.TaskType, "error_code": job.ErrorCode, "error_message": job.ErrorMessage, "requested_targets": request.RequestedTargets, "capability_outcomes": request.CapabilityOutcomes, "poll_after_ms": 2000})
+	c.JSON(200, gin.H{"id": job.ID, "status": job.Status, "progress": job.Progress, "task_type": job.TaskType, "error_code": job.ErrorCode, "error_message": job.ErrorMessage, "requested_targets": request.RequestedTargets, "capability_outcomes": request.CapabilityOutcomes, "result_version_refs": request.ResultVersionRefs, "poll_after_ms": 2000})
 }

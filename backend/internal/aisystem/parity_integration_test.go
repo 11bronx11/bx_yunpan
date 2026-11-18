@@ -324,7 +324,11 @@ func TestShadowReadPreservesPGAndNeverDuplicatesEmbedding(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"hits": map[string]any{"hits": []any{map[string]any{"_score": 1, "_source": map[string]any{"child_id": children[0].String()}}}}})
 			return
 		}
-		_, _ = w.Write([]byte(`{}`))
+		if strings.Contains(r.URL.Path, "/_doc/") {
+			_, _ = w.Write([]byte(`{"result":"created","_shards":{"failed":0}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"acknowledged":true}`))
 	}))
 	defer server.Close()
 	projector := &Projector{DB: db, ES: server.URL, HTTP: server.Client()}

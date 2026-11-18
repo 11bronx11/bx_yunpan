@@ -205,19 +205,53 @@ func (p *Projector) projectDelete(ctx context.Context, backend string, in aiprot
 		d.Targets[n].Versions = append(d.Targets[n].Versions, r.ArtifactVersionID.String())
 	}
 	for _, target := range d.Targets {
-		if backend == "es" {
-			body := map[string]any{"query": map[string]any{"terms": map[string]any{"content_id": target.Versions}}}
-			if err := p.request(ctx, "POST", strings.TrimRight(p.ES, "/")+"/"+target.Name+"/_delete_by_query?conflicts=proceed&refresh=true", body, backend, nil); err != nil {
-				return nil, 0, err
-			}
-		} else {
-			body := map[string]any{"filter": map[string]any{"must": []any{map[string]any{"key": "set_id", "match": map[string]any{"any": target.Versions}}}}}
-			if err := p.request(ctx, "POST", strings.TrimRight(p.QD, "/")+"/collections/"+target.Name+"/points/delete?wait=true", body, backend, nil); err != nil {
-				return nil, 0, err
-			}
+		if err := p.deleteProjectionTarget(ctx, backend, target); err != nil {
+			return nil, 0, err
 		}
 	}
 	return d, int64(len(rows)), nil
+}
+
+// HTTP success is insufficient: ES reports partial failures in a 200 body,
+// and Qdrant must have completed the synchronous deletion before we forget it.
+func (p *Projector) deleteProjectionTarget(ctx context.Context, backend string, target cleanupTarget) error {
+	if backend == "es" {
+		var response struct {
+			TimedOut         *bool              `json:"timed_out"`
+			VersionConflicts *int64             `json:"version_conflicts"`
+			Failures         *[]json.RawMessage `json:"failures"`
+		}
+		body := map[string]any{"query": map[string]any{"terms": map[string]any{"content_id": target.Versions}}}
+		err := p.request(ctx, "POST", strings.TrimRight(p.ES, "/")+"/"+target.Name+"/_delete_by_query?conflicts=proceed&refresh=true", body, backend, &response)
+		if errors.Is(err, errProjectionMissing) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if response.TimedOut == nil || *response.TimedOut || response.VersionConflicts == nil || *response.VersionConflicts != 0 || response.Failures == nil || len(*response.Failures) != 0 {
+			return errors.New("projection.delete_incomplete")
+		}
+		return nil
+	}
+	var response struct {
+		Status string `json:"status"`
+		Result struct {
+			Status string `json:"status"`
+		} `json:"result"`
+	}
+	body := map[string]any{"filter": map[string]any{"must": []any{map[string]any{"key": "set_id", "match": map[string]any{"any": target.Versions}}}}}
+	err := p.request(ctx, "POST", strings.TrimRight(p.QD, "/")+"/collections/"+target.Name+"/points/delete?wait=true", body, backend, &response)
+	if errors.Is(err, errProjectionMissing) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if response.Status != "ok" || response.Result.Status != "completed" {
+		return errors.New("projection.delete_incomplete")
+	}
+	return nil
 }
 func publishDelete(tx *gorm.DB, in aiprotocol.Input, a Artifact) error {
 	d, err := decode[cleanupData](a.Data)

@@ -12,10 +12,12 @@ REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO yunpan_ai_query,yunpan_ai_compute,yunpan_ai_commit;
 GRANT SELECT ON ai_published_objects,ai_published_sources,ai_published_blocks,ai_published_content,ai_published_parents,ai_published_children,ai_published_sets,ai_published_vectors,ai_published_summaries,ai_published_capabilities,ai_published_targets,ai_published_projections TO yunpan_ai_query,yunpan_ai_compute;
 GRANT INSERT ON ai_artifact_manifests TO yunpan_ai_compute;
+GRANT SELECT ON ai_summary_checkpoints TO yunpan_ai_compute;
 GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO yunpan_ai_commit;
 -- Query cannot read staging even by guessing an artifact UUID. Compute cannot
 -- update an object/pointer/receipt or modify any published content row.
 REVOKE ALL ON ai_artifact_manifests FROM yunpan_ai_query;
+REVOKE ALL ON ai_summary_checkpoints FROM yunpan_ai_query;
 REVOKE UPDATE,DELETE ON ai_artifact_manifests FROM yunpan_ai_compute;
 ALTER ROLE yunpan_ai_query SET default_transaction_read_only=on;
 

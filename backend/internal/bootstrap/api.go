@@ -10,7 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	"google.golang.org/grpc/resolver"
+	"google.golang.org/grpc"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai"
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai/grpcclient"
@@ -171,13 +171,13 @@ func (b *splitAIBackend) RequestReprocess(ctx context.Context, ownerID, fileID u
 func newAIClient(cfg config.Config, logger *slog.Logger, registerer prometheus.Registerer) (*grpcclient.Client, func(), error) {
 	closeRegistry := func() {}
 	target := cfg.AIService.Target
+	var options []grpc.DialOption
 	if cfg.Registry.Enabled {
 		etcdClient, err := registry.Open(cfg.Registry)
 		if err != nil {
 			return nil, closeRegistry, err
 		}
-		// resolver 注册进 gRPC 的全局表，dial 目标改成 scheme URL 后由它解析。
-		resolver.Register(registry.NewBuilder(etcdClient, logger, registry.NewMetrics(registerer)))
+		options = append(options, grpc.WithResolvers(registry.NewBuilder(etcdClient, logger, registry.NewMetrics(registerer))))
 		target = registry.Scheme + "://" + cfg.Registry.Prefix
 		closeRegistry = func() { _ = etcdClient.Close() }
 	}
@@ -190,6 +190,7 @@ func newAIClient(cfg config.Config, logger *slog.Logger, registerer prometheus.R
 		}
 	}
 	client, err := grpcclient.New(grpcclient.Config{
+		DialOptions: options,
 		Target:      target,
 		CallTimeout: cfg.AIService.CallTimeout,
 		SearchRetry: retry(cfg.AIService.SearchMaxAttempts),

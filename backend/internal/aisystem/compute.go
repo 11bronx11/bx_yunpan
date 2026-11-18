@@ -60,7 +60,7 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.
 	defer func() {
 		slog.InfoContext(ctx, "AI computation completed", "task_id", t.ID, "request_id", in.Intent.RequestID, "job_id", in.Intent.JobID, "object_id", in.Intent.ObjectID, "content_generation", in.Intent.ContentGeneration, "kind", t.Kind, "duration_ms", time.Since(started).Milliseconds(), "failed", computeErr != nil)
 	}()
-	if err != nil || (t.Kind != "ai.artifact.gc" && in.Operation != "retire" && in.Intent.Validate() != nil) || (!computeProfileCompatible(in.Profile, c.Profile, in.Intent.MediaType) && t.Kind != "ai.artifact.gc" && t.Kind != "ai.object.tombstone" && t.Kind != "ai.capability.finish" && in.Operation != "delete" && in.Operation != "retire") {
+	if err != nil || (t.Kind != "ai.artifact.gc" && in.Operation != "retire" && in.Intent.Validate() != nil) || (!computeProfileCompatible(t.Kind, in.Profile, c.Profile, in.Intent.MediaType) && in.Operation != "delete" && in.Operation != "retire") {
 		return nil, asynccontrol.ErrInvalid
 	}
 	// Targeted rebuilds wait for their immutable prerequisites. They must not
@@ -172,8 +172,9 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.
 			return nil, errors.New("embedding.unavailable")
 		}
 		var children []struct {
-			ID      uuid.UUID
-			Content string
+			ID          uuid.UUID
+			Content     string
+			HeadingPath string
 		}
 		if err := c.DB.WithContext(ctx).Table("ai_published_children").Where("content_version_id=?", in.ContentVersionID).Order("ordinal").Find(&children).Error; err != nil {
 			return nil, err
@@ -189,7 +190,7 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.
 			end := min(offset+ai.EmbeddingBatchSize, len(children))
 			texts := []string{}
 			for _, ch := range children[offset:end] {
-				texts = append(texts, ch.Content)
+				texts = append(texts, embeddingText(in.Profile.Chunker, ch.HeadingPath, ch.Content))
 			}
 			vs, err := c.Embedding.Embeddings(ctx, texts)
 			if err != nil {
@@ -219,7 +220,7 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.
 		if len(parts) == 0 {
 			return nil, errors.New("ai.summary.empty")
 		}
-		insight, summaries, err := c.summarize(ctx, parts)
+		insight, summaries, err := c.summarizeTask(ctx, parts, t, in)
 		if err != nil {
 			return nil, err
 		}
@@ -305,14 +306,27 @@ func readBlocks(ctx context.Context, db *gorm.DB, id uuid.UUID) ([]rag.Section, 
 	return blocks, nil
 }
 
-func computeProfileCompatible(frozen, current aiprotocol.Profile, mediaType string) bool {
-	// Both implementations remain available: old work keeps its original IDs and ranges.
-	if frozen.Chunker == "parent-child-v1" {
-		current.Chunker = frozen.Chunker
+func computeProfileCompatible(kind string, frozen, current aiprotocol.Profile, mediaType string) bool {
+	// Only compare live dependencies this task actually calls. Frozen metadata,
+	// published inputs and projection model identities survive unrelated upgrades.
+	switch kind {
+	case "ai.intent.apply", "ai.project.text", "ai.project.vector", "ai.object.tombstone", "ai.capability.finish", "ai.artifact.gc":
+		return true
+	case "ai.source.prepare":
+		if aiprotocol.VisionImage(mediaType) {
+			return frozen.VisionProvider == current.VisionProvider && frozen.VisionModel == current.VisionModel
+		}
+		return frozen.Parser == current.Parser
+	case "ai.text.build":
+		// Each retained implementation executes its original IDs and exact ranges.
+		return rag.IsParentChildVersion(frozen.Chunker)
+	case "ai.embedding.generate":
+		return frozen.EmbeddingProvider == current.EmbeddingProvider && frozen.EmbeddingModel == current.EmbeddingModel &&
+			frozen.EmbeddingRevision == current.EmbeddingRevision && frozen.Dimension == current.Dimension
+	case "ai.summary.generate":
+		return frozen.SummaryProvider == current.SummaryProvider && frozen.SummaryModel == current.SummaryModel &&
+			frozen.SummaryRevision == current.SummaryRevision && frozen.Prompt == current.Prompt
+	default:
+		return false
 	}
-	if frozen.VisionProvider == "" && frozen.VisionModel == "" && !aiprotocol.VisionImage(mediaType) {
-		current.VisionProvider = ""
-		current.VisionModel = ""
-	}
-	return frozen.Digest() == current.Digest()
 }

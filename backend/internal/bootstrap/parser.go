@@ -25,7 +25,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/resolver"
 )
 
 const parserPipelineBaseVersion = "document-index-v5"
@@ -70,13 +69,14 @@ func newParserGateway(cfg config.Config, logger *slog.Logger, registerer prometh
 	}
 
 	target := cfg.Parser.Target
+	var options []grpc.DialOption
 	closeRegistry := noop
 	if cfg.Registry.Enabled {
 		client, err := registry.Open(cfg.Registry)
 		if err != nil {
 			return nil, noop, err
 		}
-		resolver.Register(registry.NewBuilder(client, logger, registry.NewMetrics(registerer)))
+		options = append(options, grpc.WithResolvers(registry.NewBuilder(client, logger, registry.NewMetrics(registerer))))
 		target = registry.Scheme + "://" + cfg.Parser.Prefix
 		closeRegistry = func() { _ = client.Close() }
 	}
@@ -86,7 +86,8 @@ func newParserGateway(cfg config.Config, logger *slog.Logger, registerer prometh
 		closeRegistry()
 		return nil, noop, err
 	}
-	remote, err := parserrpc.NewClient(target, cfg.Parser.CallTimeout, grpc.WithTransportCredentials(transport), grpc.WithUnaryInterceptor(serviceauth.UnaryClient(cfg.AISplit.ParserToken)))
+	options = append(options, grpc.WithTransportCredentials(transport), grpc.WithUnaryInterceptor(serviceauth.UnaryClient(cfg.AISplit.ParserToken)))
+	remote, err := parserrpc.NewClient(target, cfg.Parser.CallTimeout, options...)
 	if err != nil {
 		closeRegistry()
 		return nil, noop, err

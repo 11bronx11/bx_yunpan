@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const ParentChildVersion = "parent-child-v2"
+const ParentChildVersion = "parent-child-v3"
 
 var ErrParentChildResourceLimit = errors.New("parent-child resource limit")
 
@@ -40,10 +40,10 @@ func BuildParentChild(version uuid.UUID, blocks []Section) (ParentChild, error) 
 }
 
 func BuildParentChildVersion(version uuid.UUID, blocks []Section, implementation string) (ParentChild, error) {
-	if implementation != "parent-child-v1" && implementation != ParentChildVersion {
+	if !IsParentChildVersion(implementation) {
 		return ParentChild{}, fmt.Errorf("unsupported parent-child version")
 	}
-	groups := groupParentBlocks(blocks, implementation == ParentChildVersion)
+	groups := groupParentBlocks(blocks, implementation != "parent-child-v1")
 	out := ParentChild{Coverage: "complete"}
 	for ordinal, group := range groups {
 		if implementation == "parent-child-v1" {
@@ -54,12 +54,14 @@ func BuildParentChildVersion(version uuid.UUID, blocks []Section, implementation
 		if text == "" {
 			continue
 		}
-		if implementation == ParentChildVersion && typedSectionKind(block) == KindTable {
+		if implementation != "parent-child-v1" && typedSectionKind(block) == KindTable {
 			heading := block.HeadingPath
 			if heading == "" {
 				heading = block.Section
 			}
-			pieces, incomplete := splitTypedTable(block, heading, text, ChunkOptions{TokenBudget: 600})
+			// Frozen v2 keeps its table output; v3 omits the header-only tail
+			// produced after a long final row has already been emitted in pieces.
+			pieces, incomplete := splitTypedTableTail(block, heading, text, ChunkOptions{TokenBudget: 600}, implementation == "parent-child-v2")
 			if incomplete {
 				return ParentChild{}, ErrParentChildResourceLimit
 			}
@@ -113,6 +115,29 @@ func BuildParentChildVersion(version uuid.UUID, blocks []Section, implementation
 		out.Coverage = "none"
 	}
 	return out, nil
+}
+
+func IsParentChildVersion(version string) bool {
+	return version == "parent-child-v1" || version == "parent-child-v2" || version == ParentChildVersion
+}
+
+// ContextualText adds the section context separately from exact child/parent
+// ranges. A budget of zero preserves all terms for lexical indexing; model
+// inputs reserve space for the actual passage and cap the heading prefix.
+func ContextualText(heading, content string, budget int) string {
+	heading = strings.TrimSpace(heading)
+	if heading == "" || content == heading || strings.HasPrefix(content, heading+"\n") {
+		return content
+	}
+	if budget > 0 {
+		available := min(160, budget-EstimateTokens(content))
+		if available <= 0 {
+			return content
+		}
+		r := []rune(heading)
+		heading = strings.TrimSpace(string(r[:fittingTokenEnd(r, 0, available)]))
+	}
+	return heading + "\n\n" + content
 }
 
 func boundedEnd(r []rune, start, target, hard int) int {

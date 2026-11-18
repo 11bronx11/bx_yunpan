@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/ai/rag"
 	"github.com/11bronx11/bx_yunpan/backend/internal/aiprotocol"
 	"github.com/11bronx11/bx_yunpan/backend/internal/textsearch"
 	"github.com/google/uuid"
@@ -26,6 +27,9 @@ type Projector struct {
 	HTTP                              *http.Client
 	Epoch                             int64
 }
+
+var errProjectionMissing = errors.New("projection.target_missing")
+
 type projectionData struct {
 	Backend          string
 	TargetID         uuid.UUID
@@ -42,6 +46,19 @@ type indexedChild struct {
 	Content      string
 	Embedding    string
 	Ordinal      int
+	HeadingPath  string `json:"-"`
+}
+
+const textProjectionSchema = "text-schema-v3:heading-context:" + textsearch.Version
+
+func projectionRowsHash(rows []indexedChild, contextual bool) string {
+	if contextual {
+		rows = append([]indexedChild{}, rows...)
+		for i := range rows {
+			rows[i].Content = rag.ContextualText(rows[i].HeadingPath, rows[i].Content, 0)
+		}
+	}
+	return aiprotocol.HashJSON(rows)
 }
 
 func (p *Projector) request(ctx context.Context, method, url string, body any, backend string, out any) error {
@@ -70,7 +87,7 @@ func (p *Projector) request(ctx context.Context, method, url string, body any, b
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound && (strings.Contains(url, "/_delete_by_query?") || strings.Contains(url, "/points/delete?")) {
-		return nil
+		return errProjectionMissing
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return errors.New("projection.unavailable")
@@ -104,7 +121,7 @@ func (p *Projector) Project(ctx context.Context, kind string, in aiprotocol.Inpu
 	}
 	d := projectionData{Backend: backend, TargetID: targetID, TargetVersion: target, Epoch: in.TargetEpoch, ContentID: in.ContentVersionID, SetID: in.EmbeddingSetID, Operation: "upsert"}
 	var rows []indexedChild
-	q := p.DB.WithContext(ctx).Table("ai_published_children c").Select("c.id,c.parent_id,c.content,c.ordinal").Where("c.content_version_id=?", in.ContentVersionID).Order("c.ordinal")
+	q := p.DB.WithContext(ctx).Table("ai_published_children c").Select("c.id,c.parent_id,c.content,c.ordinal,c.heading_path").Where("c.content_version_id=?", in.ContentVersionID).Order("c.ordinal")
 	if backend == "qd" {
 		q = q.Select("c.id,c.parent_id,c.content,c.ordinal,v.embedding::text AS embedding").Joins("JOIN ai_published_vectors v ON v.child_id=c.id AND v.content_version_id=c.content_version_id AND v.embedding_set_id=?", in.EmbeddingSetID)
 	}
@@ -121,14 +138,17 @@ func (p *Projector) Project(ctx context.Context, kind string, in aiprotocol.Inpu
 			return nil, 0, err
 		}
 		for _, r := range rows {
-			doc := map[string]any{"content": r.Content, "content_normalized": textsearch.Normalize(r.Content), "content_search": textsearch.IndexText(r.Content), "lexical_version": textsearch.Version, "content_id": in.ContentVersionID.String(), "child_id": r.ID.String(), "parent_id": r.ParentID.String()}
+			text := rag.ContextualText(r.HeadingPath, r.Content, 0)
+			doc := map[string]any{"content": r.Content, "heading_path": r.HeadingPath, "content_normalized": textsearch.Normalize(text), "content_search": textsearch.IndexText(text), "lexical_version": textsearch.Version, "content_id": in.ContentVersionID.String(), "child_id": r.ID.String(), "parent_id": r.ParentID.String()}
 			id := in.ContentVersionID.String() + ":" + r.ID.String()
-			if err := p.request(ctx, "PUT", strings.TrimRight(endpoint, "/")+"/"+target+"/_doc/"+id+"?refresh=wait_for", doc, backend, nil); err != nil {
+			if err := p.writeTextChild(ctx, strings.TrimRight(endpoint, "/")+"/"+target+"/_doc/"+id+"?refresh=wait_for", doc); err != nil {
 				return nil, 0, err
 			}
 		}
 	} else {
-		_ = p.request(ctx, "PUT", strings.TrimRight(endpoint, "/")+"/collections/"+target, map[string]any{"vectors": map[string]any{"size": 1024, "distance": "Cosine"}}, backend, nil)
+		if err := p.ensureVectorCollection(ctx, target); err != nil {
+			return nil, 0, err
+		}
 		for offset := 0; offset < len(rows); offset += 64 {
 			points := []any{}
 			for _, r := range rows[offset:min(offset+64, len(rows))] {
@@ -138,14 +158,14 @@ func (p *Projector) Project(ctx context.Context, kind string, in aiprotocol.Inpu
 				}
 				points = append(points, map[string]any{"id": uuid.NewSHA1(in.EmbeddingSetID, []byte(r.ID.String())).String(), "vector": vector, "payload": map[string]any{"set_id": in.EmbeddingSetID.String(), "content_id": in.ContentVersionID.String(), "child_id": r.ID.String()}})
 			}
-			if err := p.request(ctx, "PUT", strings.TrimRight(endpoint, "/")+"/collections/"+target+"/points?wait=true", map[string]any{"points": points}, backend, nil); err != nil {
+			if err := p.writeVectorPoints(ctx, strings.TrimRight(endpoint, "/")+"/collections/"+target+"/points?wait=true", points); err != nil {
 				return nil, 0, err
 			}
 		}
 	}
 	d.ConfigDigest = configDigest
 	d.Count = len(rows)
-	d.Hash = aiprotocol.HashJSON(rows)
+	d.Hash = projectionRowsHash(rows, backend == "es")
 	return d, int64(len(rows)), nil
 }
 
@@ -164,21 +184,25 @@ func publishProjection(tx *gorm.DB, in aiprotocol.Input, a Artifact) error {
 	id, name, digest, identityErr := projectionIdentity(expectedBackend, in)
 	// Already accepted v1 results retain their publication path. They may be
 	// recorded, but online readers require the current lexical schema proof.
-	if expectedBackend == "es" && d.ConfigDigest == aiprotocol.HashJSON("text-schema-v1") {
-		id, name, digest, identityErr = projectionIdentityForSchema(expectedBackend, in, "text-schema-v1")
+	if expectedBackend == "es" {
+		for _, legacySchema := range []string{"text-schema-v1", "text-schema-v2:" + textsearch.Version} {
+			if d.ConfigDigest == aiprotocol.HashJSON(legacySchema) {
+				id, name, digest, identityErr = projectionIdentityForSchema(expectedBackend, in, legacySchema)
+			}
+		}
 	}
 	if identityErr != nil || d.Backend != expectedBackend || d.TargetID != id || d.TargetVersion != name || d.ConfigDigest != digest || d.Epoch != in.TargetEpoch || d.Operation != "upsert" {
 		return errors.New("projection.invalid_target")
 	}
 	var rows []indexedChild
-	queryRows := tx.Table("ai_child_chunks c").Select("c.id,c.parent_id,c.content,c.ordinal").Where("c.content_version_id=?", in.ContentVersionID).Order("c.ordinal")
+	queryRows := tx.Table("ai_child_chunks c").Select("c.id,c.parent_id,c.content,c.ordinal,c.heading_path").Where("c.content_version_id=?", in.ContentVersionID).Order("c.ordinal")
 	if d.Backend == "qd" {
 		queryRows = queryRows.Select("c.id,c.parent_id,c.content,c.ordinal,v.embedding::text AS embedding").Joins("JOIN ai_chunk_vectors v ON v.child_id=c.id AND v.content_version_id=c.content_version_id AND v.embedding_set_id=?", in.EmbeddingSetID)
 	}
 	if err := queryRows.Find(&rows).Error; err != nil {
 		return err
 	}
-	if len(rows) != d.Count || aiprotocol.HashJSON(rows) != d.Hash {
+	if len(rows) != d.Count || projectionRowsHash(rows, d.Backend == "es" && d.ConfigDigest == aiprotocol.HashJSON(textProjectionSchema)) != d.Hash {
 		return errors.New("projection.incomplete_manifest")
 	}
 	// Serialize coverage checks with other publishers before examining their
@@ -226,7 +250,7 @@ func publishProjection(tx *gorm.DB, in aiprotocol.Input, a Artifact) error {
 }
 
 func projectionIdentity(backend string, in aiprotocol.Input) (uuid.UUID, string, string, error) {
-	return projectionIdentityForSchema(backend, in, "text-schema-v2:"+textsearch.Version)
+	return projectionIdentityForSchema(backend, in, textProjectionSchema)
 }
 
 func projectionIdentityForSchema(backend string, in aiprotocol.Input, schema string) (uuid.UUID, string, string, error) {
@@ -264,7 +288,7 @@ func (p *Projector) external(ctx context.Context, backend string, versions []str
 	if err := p.DB.WithContext(ctx).Table("ai_published_targets").Where("backend=?", backend).Take(&target).Error; err != nil {
 		return nil, "", errors.New("projection.incomplete")
 	}
-	if backend == "es" && target.ConfigDigest != aiprotocol.HashJSON("text-schema-v2:"+textsearch.Version) {
+	if backend == "es" && target.ConfigDigest != aiprotocol.HashJSON(textProjectionSchema) {
 		return nil, "", errors.New("projection.incompatible_schema")
 	}
 	var covered int64

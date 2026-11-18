@@ -188,6 +188,10 @@ func TestProjectionCoverageAndResponseMatrix(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPut {
+			_, _ = w.Write([]byte(`{"result":"created","_shards":{"failed":0},"acknowledged":true}`))
+			return
+		}
 		_, _ = w.Write([]byte(response))
 	}))
 	defer server.Close()

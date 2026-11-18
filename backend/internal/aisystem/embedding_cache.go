@@ -6,8 +6,17 @@ import (
 	"math"
 	"time"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/ai/rag"
 	"github.com/11bronx11/bx_yunpan/backend/internal/aiprotocol"
 )
+
+func embeddingText(chunker, heading, content string) string {
+	if chunker == rag.ParentChildVersion {
+		return rag.ContextualText(heading, content, 600)
+	}
+	// Accepted/frozen v1 and v2 tasks keep their original model input and hash.
+	return content
+}
 
 func validVector(vector []float32, dimension int) bool {
 	if len(vector) != dimension {

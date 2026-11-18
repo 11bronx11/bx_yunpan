@@ -211,6 +211,7 @@ def parse_docx(data: bytes) -> tuple[list[dict[str, Any]], list[str]]:
             table_number += 1
             section = _docx_table_section(item, table_number)
             if section is not None:
+                section["heading_path"] = _heading_path(headings)
                 sections.append(section)
             continue
         text = str(getattr(item, "text", "") or "").strip()

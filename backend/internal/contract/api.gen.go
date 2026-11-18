@@ -1362,9 +1362,12 @@ type Task struct {
 	Progress     int           `json:"progress"`
 	ResourceId   *NullableUUID `json:"resource_id,omitempty"`
 	ResourceType *string       `json:"resource_type,omitempty"`
-	Status       TaskStatus    `json:"status"`
-	TaskType     string        `json:"task_type"`
-	UpdatedAt    Timestamp     `json:"updated_at"`
+
+	// ResultVersionRefs Published source, text, vectors or summary version IDs produced by this AI job. Existing jobs may have no recorded version references.
+	ResultVersionRefs *map[string]UUID `json:"result_version_refs,omitempty"`
+	Status            TaskStatus       `json:"status"`
+	TaskType          string           `json:"task_type"`
+	UpdatedAt         Timestamp        `json:"updated_at"`
 }
 
 // TaskStatus defines model for Task.Status.

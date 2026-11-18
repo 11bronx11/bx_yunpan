@@ -36,7 +36,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/resolver"
 	"gorm.io/gorm"
 )
 
@@ -48,7 +47,7 @@ func internalClient(cfg config.Config, name, target, token string, metrics ...*g
 		if err != nil {
 			return nil, cleanup, err
 		}
-		resolver.Register(registry.NewBuilder(etcd, slog.Default(), registry.NewMetrics(prometheus.NewRegistry())))
+		options = append(options, grpc.WithResolvers(registry.NewBuilder(etcd, slog.Default(), registry.NewMetrics(prometheus.NewRegistry()))))
 		target = registry.Scheme + ":///services/" + name
 		cleanup = func() { _ = etcd.Close() }
 	}
@@ -185,7 +184,7 @@ func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, rol
 			queryProjector.QD = ""
 		}
 		queryProjector.HTTP = &http.Client{Timeout: cfg.Search.ExternalTimeout}
-		svc := &aisystem.Query{DisableAsk: !cfg.AISplit.Ask, DB: db, Core: coreClient, Provider: ai.NewProvider(cfg.AI), Reranker: ai.NewReranker(cfg.AI), Profile: cfg.AIProfile(), Projector: &queryProjector, ScopeLimit: cfg.AISplit.ScopeLimit, EmbeddingCache: embeddingCache}
+		svc := &aisystem.Query{DisableAsk: !cfg.AISplit.Ask, DB: db, Core: coreClient, Provider: ai.NewProvider(cfg.AI), Reranker: ai.NewReranker(cfg.AI), RerankCandidates: cfg.AI.RerankCandidates, RerankTopK: cfg.AI.RerankTopK, Profile: cfg.AIProfile(), Projector: &queryProjector, ScopeLimit: cfg.AISplit.ScopeLimit, EmbeddingCache: embeddingCache}
 		if cfg.Search.ReadBackend == "shadow" {
 			svc.ShadowProjector = projector
 			svc.ShadowProjector.HTTP = &http.Client{Timeout: cfg.Search.ExternalTimeout}
@@ -226,6 +225,7 @@ func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, rol
 		return store.RunCommittersFor(ctx, broker, asynccontrol.EffectAI, cfg.App.InstanceID, publisher.Commit, logger)
 	}
 	parserTarget := cfg.Parser.Target
+	parserOptions := splitClientOptions(cfg, "parser", clientMetrics)
 	closeParserRegistry := func() {}
 	if cfg.Registry.Enabled && role == "ai-content-worker" {
 		client, e := registry.Open(cfg.Registry)
@@ -233,7 +233,7 @@ func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, rol
 			return e
 		}
 		closeParserRegistry = func() { _ = client.Close() }
-		resolver.Register(registry.NewBuilder(client, logger, registry.NewMetrics(prometheus.NewRegistry())))
+		parserOptions = append(parserOptions, grpc.WithResolvers(registry.NewBuilder(client, logger, registry.NewMetrics(prometheus.NewRegistry()))))
 		parserTarget = registry.Scheme + "://" + cfg.Parser.Prefix
 	}
 	defer closeParserRegistry()
@@ -241,7 +241,6 @@ func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, rol
 	if err != nil {
 		return err
 	}
-	parserOptions := splitClientOptions(cfg, "parser", clientMetrics)
 	parserOptions = append(parserOptions, grpc.WithTransportCredentials(transport), grpc.WithChainUnaryInterceptor(serviceauth.UnaryClient(cfg.AISplit.ParserToken)))
 	parser, err := parserrpc.NewClient(parserTarget, cfg.Parser.CallTimeout, parserOptions...)
 	if err != nil {
