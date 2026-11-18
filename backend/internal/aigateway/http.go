@@ -83,6 +83,48 @@ func (h *HTTP) grant(ctx context.Context, owner uuid.UUID, scope aiprotocol.Scop
 	return serviceauth.Sign(h.ScopeKey, "core-retrieval-v1", g.ExpiresAt, g)
 }
 
+// Legacy requests may supply both filters. Resolve their intersection in core
+// business SQL, then retain that grant's epochs when signing the selected scope.
+// A move or revocation during resolution must invalidate the resulting grant.
+func (h *HTTP) legacyAskGrant(ctx context.Context, owner uuid.UUID, selected aiprotocol.Scope, folder uuid.UUID) (string, error) {
+	if err := selected.Normalize(); err != nil {
+		return "", err
+	}
+	token, err := h.grant(ctx, owner, aiprotocol.Scope{Mode: "folder", FolderID: &folder, IncludeSubfolders: true})
+	if err != nil {
+		return "", err
+	}
+	public := h.ScopeKey.Public().(ed25519.PublicKey)
+	svc := &core.Service{DB: h.DB, ScopeKey: public}
+	if _, err := svc.OpenRetrievalScope(ctx, &corepb.OpenScopeRequest{Grant: token}); err != nil {
+		return "", err
+	}
+	ids := make([]string, 0, len(selected.FileIDs))
+	for _, id := range selected.FileIDs {
+		ids = append(ids, id.String())
+	}
+	refs, err := svc.BatchGetFileRefs(ctx, &corepb.FileRefsRequest{Grant: token, FileIds: ids})
+	if err != nil {
+		return "", err
+	}
+	if len(refs.Files) == 0 {
+		return "", status.Error(codes.FailedPrecondition, "ai.scope_invalid")
+	}
+	selected.FileIDs = nil
+	for _, f := range refs.Files {
+		selected.FileIDs = append(selected.FileIDs, uuid.MustParse(f.FileId))
+	}
+	if err := selected.Normalize(); err != nil {
+		return "", err
+	}
+	var g aiprotocol.ScopeGrant
+	if err := serviceauth.Verify(public, token, "core-retrieval-v1", &g); err != nil {
+		return "", status.Error(codes.Unavailable, "ai.unavailable")
+	}
+	g.Scope = selected
+	return serviceauth.Sign(h.ScopeKey, "core-retrieval-v1", g.ExpiresAt, g)
+}
+
 func (h *HTTP) available(c *gin.Context) bool {
 	if !h.Enabled || h.Client == nil {
 		h.fail(c, status.Error(codes.Unavailable, "ai.unavailable"))
@@ -130,6 +172,12 @@ func (h *HTTP) fail(c *gin.Context, err error) {
 			code = "ai.scope_too_large"
 			httpCode = 422
 			message = "文件范围超过本次查询预算"
+			for _, detail := range status.Convert(err).Details() {
+				if info, ok := detail.(*errdetails.ErrorInfo); ok && info.Domain == "ai.yunpan" && info.Reason == "ai.quota_exhausted" {
+					httpCode, code, message = ai.HTTPStatus(ai.ErrQuota)
+					break
+				}
+			}
 		case codes.DeadlineExceeded:
 			code = "ai.query_timeout"
 			httpCode = 504
@@ -243,7 +291,13 @@ func (h *HTTP) ask(c *gin.Context) {
 		scope = aiprotocol.Scope{Mode: "folder", FolderID: req.FolderID, IncludeSubfolders: true}
 	}
 	owner, _ := httpapi.PrincipalID(c)
-	grant, err := h.grant(c.Request.Context(), owner, scope)
+	var grant string
+	var err error
+	if req.Scope == nil && len(req.FileIDs) > 0 && req.FolderID != nil {
+		grant, err = h.legacyAskGrant(c.Request.Context(), owner, scope, *req.FolderID)
+	} else {
+		grant, err = h.grant(c.Request.Context(), owner, scope)
+	}
 	if err != nil {
 		h.fail(c, err)
 		return

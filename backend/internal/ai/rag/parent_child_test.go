@@ -72,16 +72,12 @@ func TestParentChildLargeMixedTextRemainsBounded(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	var joined strings.Builder
 	for _, p := range got.Parents {
-		joined.WriteString(p.Content)
 		if p.TokenCount > 2400 {
 			t.Fatal("unbounded parent")
 		}
 	}
-	if joined.String() != text {
-		t.Fatal("source text skipped or repeated")
-	}
+	assertParentWindowsCover(t, text, got.Parents)
 	for _, c := range got.Children {
 		if c.TokenCount > 600 {
 			t.Fatal("unbounded child")

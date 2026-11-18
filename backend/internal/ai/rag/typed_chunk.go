@@ -309,6 +309,22 @@ func preferredSplitEnd(runes []rune, start, minimum, end int, separators []strin
 }
 
 func overlapTokenStart(runes []rune, start, end, budget int) int {
+	next := contiguousOverlapStart(runes, start, end, budget)
+	// Prefer a complete clause or word within the available overlap. Without
+	// such a boundary, keep the contiguous suffix, including Chinese runes.
+	for i := next; i < end-1; i++ {
+		if overlapBoundary(runes[i]) || strings.ContainsRune("，、：:", runes[i]) {
+			return i + 1
+		}
+	}
+	return next
+}
+
+// contiguousOverlapStart counts a source suffix in linear time and retains the
+// whole suffix rather than trimming it at punctuation or whitespace. Parent
+// boundaries need this context even when the neighboring text has no word
+// separators. Re-estimating every suffix is quadratic on long whitespace runs.
+func contiguousOverlapStart(runes []rune, start, end, budget int) int {
 	if budget <= 0 {
 		return end
 	}
@@ -333,13 +349,6 @@ func overlapTokenStart(runes []rune, start, end, budget int) int {
 		}
 		count += cost
 		next--
-	}
-	// Prefer a complete clause or word within the available overlap. Without
-	// such a boundary, keep the contiguous suffix, including Chinese runes.
-	for i := next; i < end-1; i++ {
-		if overlapBoundary(runes[i]) || strings.ContainsRune("，、：:", runes[i]) {
-			return i + 1
-		}
 	}
 	return next
 }
@@ -396,6 +405,10 @@ func splitTypedTable(section Section, heading, text string, options ChunkOptions
 }
 
 func splitTypedTableTail(section Section, heading, text string, options ChunkOptions, keepEmptyTail bool) ([]Chunk, bool) {
+	return splitTypedTableTailOverlap(section, heading, text, options, keepEmptyTail, 0)
+}
+
+func splitTypedTableTailOverlap(section Section, heading, text string, options ChunkOptions, keepEmptyTail bool, overlap int) ([]Chunk, bool) {
 	lines := nonEmptyLines(text)
 	if len(lines) == 0 {
 		return nil, false
@@ -477,7 +490,7 @@ func splitTypedTableTail(section Section, heading, text string, options ChunkOpt
 		if bodyBudget < 1 {
 			bodyBudget = 1
 		}
-		for _, piece := range splitTextByTokens(row, bodyBudget, 0, tableSeparators) {
+		for _, piece := range splitTextByTokens(row, bodyBudget, overlap, tableSeparators) {
 			content := piece
 			if header != "" {
 				content = header + "\n" + piece

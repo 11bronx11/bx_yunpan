@@ -33,19 +33,20 @@ func TestParentChildBoundedProperties(t *testing.T) {
 					t.Fatalf("n=%d nondeterministic", n)
 				}
 				ids := map[uuid.UUID]bool{}
-				joined := map[[2]int]string{}
+				windows := map[[2]int][]Parent{}
 				for _, parent := range got.Parents {
-					if ids[parent.ID] || parent.TokenCount > 2400 || !utf8.ValidString(parent.Content) {
+					if ids[parent.ID] || parent.TokenCount > 1600 || !utf8.ValidString(parent.Content) {
 						t.Fatal("invalid parent")
 					}
 					ids[parent.ID] = true
-					joined[[2]int{parent.BlockStart, parent.BlockEnd}] += parent.Content
+					span := [2]int{parent.BlockStart, parent.BlockEnd}
+					windows[span] = append(windows[span], parent)
 					covered := make([]bool, len([]rune(parent.Content)))
 					for _, child := range got.Children {
 						if child.ParentID != parent.ID {
 							continue
 						}
-						if ids[child.ID] || child.TokenCount > 600 || child.ParentStart < 0 || child.ParentEnd > len(covered) || child.ParentStart >= child.ParentEnd {
+						if ids[child.ID] || child.TokenCount > 400 || child.ParentStart < 0 || child.ParentEnd > len(covered) || child.ParentStart >= child.ParentEnd {
 							t.Fatal("invalid child")
 						}
 						ids[child.ID] = true
@@ -63,7 +64,7 @@ func TestParentChildBoundedProperties(t *testing.T) {
 					}
 				}
 				seenBlocks := map[int]bool{}
-				for span, text := range joined {
+				for span, parents := range windows {
 					var expected []string
 					for i := span[0]; i <= span[1]; i++ {
 						if i < 0 || i >= len(blocks) || seenBlocks[i] {
@@ -75,9 +76,7 @@ func TestParentChildBoundedProperties(t *testing.T) {
 							expected = append(expected, part)
 						}
 					}
-					if text != strings.Join(expected, "\n\n") {
-						t.Fatalf("n=%d dropped source runes", n)
-					}
+					assertParentWindowsCover(t, strings.Join(expected, "\n\n"), parents)
 				}
 				for i, b := range blocks {
 					if strings.TrimSpace(b.Text) != "" && !seenBlocks[i] {

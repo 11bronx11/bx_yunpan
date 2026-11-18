@@ -859,7 +859,7 @@ type AIScope struct {
 // AIScopeMode defines model for AIScope.Mode.
 type AIScopeMode string
 
-// AskRequest defines model for AskRequest.
+// AskRequest Use scope, or legacy folder_id/file_ids. Both legacy filters together select their authorized intersection; an empty intersection is an error.
 type AskRequest struct {
 	FileIds  *[]UUID       `json:"file_ids,omitempty"`
 	FolderId *NullableUUID `json:"folder_id,omitempty"`

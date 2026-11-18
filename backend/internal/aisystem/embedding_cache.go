@@ -11,10 +11,11 @@ import (
 )
 
 func embeddingText(chunker, heading, content string) string {
-	if chunker == rag.ParentChildVersion {
+	if chunker == "parent-child-v3" || chunker == "parent-child-v4" {
 		return rag.ContextualText(heading, content, 600)
 	}
-	// Accepted/frozen v1 and v2 tasks keep their original model input and hash.
+	// Accepted/frozen v1 and v2 tasks keep their original model input and hash;
+	// v3 retains the heading context it already used before the v4 upgrade.
 	return content
 }
 

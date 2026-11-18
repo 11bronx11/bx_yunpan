@@ -120,6 +120,11 @@ func (p *Projector) Project(ctx context.Context, kind string, in aiprotocol.Inpu
 		return nil, 0, err
 	}
 	d := projectionData{Backend: backend, TargetID: targetID, TargetVersion: target, Epoch: in.TargetEpoch, ContentID: in.ContentVersionID, SetID: in.EmbeddingSetID, Operation: "upsert"}
+	if backend == "qd" {
+		if err := validateProjectionSet(p.DB.WithContext(ctx), in); err != nil {
+			return nil, 0, err
+		}
+	}
 	var rows []indexedChild
 	q := p.DB.WithContext(ctx).Table("ai_published_children c").Select("c.id,c.parent_id,c.content,c.ordinal,c.heading_path").Where("c.content_version_id=?", in.ContentVersionID).Order("c.ordinal")
 	if backend == "qd" {
@@ -194,6 +199,11 @@ func publishProjection(tx *gorm.DB, in aiprotocol.Input, a Artifact) error {
 	if identityErr != nil || d.Backend != expectedBackend || d.TargetID != id || d.TargetVersion != name || d.ConfigDigest != digest || d.Epoch != in.TargetEpoch || d.Operation != "upsert" {
 		return errors.New("projection.invalid_target")
 	}
+	if d.Backend == "qd" {
+		if err := validateProjectionSet(tx, in); err != nil {
+			return err
+		}
+	}
 	var rows []indexedChild
 	queryRows := tx.Table("ai_child_chunks c").Select("c.id,c.parent_id,c.content,c.ordinal,c.heading_path").Where("c.content_version_id=?", in.ContentVersionID).Order("c.ordinal")
 	if d.Backend == "qd" {
@@ -227,13 +237,21 @@ func publishProjection(tx *gorm.DB, in aiprotocol.Input, a Artifact) error {
 	if err != nil {
 		return err
 	}
-	var pending int64
-	column := "active_content_version_id"
-	if d.Backend == "qd" {
-		column = "active_embedding_set_id"
+	// Retain accepted legacy completions without letting them replace the
+	// schema this binary can read, even when they arrive after its cutover.
+	if d.Backend == "es" && d.ConfigDigest != aiprotocol.HashJSON(textProjectionSchema) {
+		return nil
 	}
-	query := "SELECT count(*) FROM ai_objects o WHERE o.tombstoned_at IS NULL AND o." + column + " IS NOT NULL AND NOT EXISTS(SELECT 1 FROM ai_projection_states p WHERE p.target_id=? AND p.artifact_version_id=o." + column + " AND p.operation='upsert' AND p.state='complete')"
-	if err := tx.Raw(query, d.TargetID).Scan(&pending).Error; err != nil {
+	var pending int64
+	query := `SELECT count(*) FROM ai_objects o WHERE o.tombstoned_at IS NULL AND o.active_content_version_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM ai_projection_states p WHERE p.target_id=? AND p.artifact_version_id=o.active_content_version_id AND p.operation='upsert' AND p.state='complete')`
+	args := []any{d.TargetID}
+	if d.Backend == "qd" {
+		// Other model versions remain readable through PG during a rolling
+		// rebuild; their vectors cannot belong to this immutable collection.
+		query = `SELECT count(*) FROM ai_objects o JOIN ai_embedding_sets s ON s.id=o.active_embedding_set_id WHERE o.tombstoned_at IS NULL AND s.provider=? AND s.model=? AND s.revision=? AND s.dimension=? AND NOT EXISTS(SELECT 1 FROM ai_projection_states p WHERE p.target_id=? AND p.artifact_version_id=s.id AND p.operation='upsert' AND p.state='complete')`
+		args = []any{in.Profile.EmbeddingProvider, in.Profile.EmbeddingModel, in.Profile.EmbeddingRevision, in.Profile.Dimension, d.TargetID}
+	}
+	if err := tx.Raw(query, args...).Scan(&pending).Error; err != nil {
 		return err
 	}
 	var obsolete bool
@@ -245,6 +263,27 @@ func publishProjection(tx *gorm.DB, in aiprotocol.Input, a Artifact) error {
 			return err
 		}
 		return tx.Exec("UPDATE ai_projection_targets SET state='active',activated_at=COALESCE(activated_at,clock_timestamp()) WHERE id=?", d.TargetID).Error
+	}
+	return nil
+}
+
+type projectionVectorConfig struct {
+	Provider, Model, Revision string
+	Dimension                 int
+}
+
+func (c projectionVectorConfig) digest() string {
+	return aiprotocol.HashJSON([]any{c.Provider, c.Model, c.Revision, c.Dimension})
+}
+
+func validateProjectionSet(db *gorm.DB, in aiprotocol.Input) error {
+	var count int64
+	err := db.Table("ai_published_sets").Where("id=? AND object_id=? AND content_generation=? AND content_version_id=? AND provider=? AND model=? AND revision=? AND dimension=? AND distance_metric='cosine'", in.EmbeddingSetID, in.Intent.ObjectID, in.Intent.ContentGeneration, in.ContentVersionID, in.Profile.EmbeddingProvider, in.Profile.EmbeddingModel, in.Profile.EmbeddingRevision, in.Profile.Dimension).Count(&count).Error
+	if err != nil {
+		return err
+	}
+	if count != 1 || in.Profile.Dimension != 1024 {
+		return errors.New("projection.incompatible_embedding_set")
 	}
 	return nil
 }
@@ -291,6 +330,15 @@ func (p *Projector) external(ctx context.Context, backend string, versions []str
 	if backend == "es" && target.ConfigDigest != aiprotocol.HashJSON(textProjectionSchema) {
 		return nil, "", errors.New("projection.incompatible_schema")
 	}
+	if backend == "qd" {
+		var configs []projectionVectorConfig
+		if err := p.DB.WithContext(ctx).Table("ai_published_sets").Select("DISTINCT provider,model,revision,dimension").Where("id::text=ANY(?::text[])", pq.Array(versions)).Find(&configs).Error; err != nil {
+			return nil, "", err
+		}
+		if len(configs) != 1 || configs[0].digest() != target.ConfigDigest {
+			return nil, "", errors.New("projection.incompatible_collection")
+		}
+	}
 	var covered int64
 	if err := p.DB.WithContext(ctx).Table("ai_published_projections").Where("target_id=? AND artifact_version_id::text=ANY(?::text[]) AND operation='upsert'", target.ID, pq.Array(versions)).Count(&covered).Error; err != nil {
 		return nil, "", err
@@ -322,6 +370,9 @@ func (p *Projector) external(ctx context.Context, backend string, versions []str
 				"must": []any{map[string]any{"match": map[string]any{
 					"content_search": map[string]any{"query": textsearch.QueryText(query), "operator": "and", "analyzer": "whitespace"},
 				}}},
+				"should": []any{map[string]any{"match_phrase": map[string]any{
+					"content_normalized": map[string]any{"query": textsearch.Normalize(strings.TrimSpace(query)), "boost": 4},
+				}}},
 				"filter": []any{map[string]any{"terms": map[string]any{"content_id": versions}}},
 			}},
 		}
@@ -343,6 +394,7 @@ func (p *Projector) external(ctx context.Context, backend string, versions []str
 		}
 	} else {
 		var resp struct {
+			Status string `json:"status"`
 			Result *struct {
 				Points *[]struct {
 					Score   float64 `json:"score"`
@@ -356,7 +408,7 @@ func (p *Projector) external(ctx context.Context, backend string, versions []str
 		if err := p.request(ctx, "POST", strings.TrimRight(p.QD, "/")+"/collections/"+target.TargetVersion+"/points/query", body, backend, &resp); err != nil {
 			return nil, "", err
 		}
-		if resp.Result == nil || resp.Result.Points == nil {
+		if resp.Status != "ok" || resp.Result == nil || resp.Result.Points == nil {
 			return nil, "", errors.New("projection.invalid_response")
 		}
 		for _, h := range *resp.Result.Points {

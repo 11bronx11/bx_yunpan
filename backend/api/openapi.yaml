@@ -762,6 +762,10 @@ paths:
         prefers complete Elasticsearch projections and falls back to AI PG FTS.
         Semantic uses a compatible query embedding and Qdrant/pgvector; hybrid
         combines independent branches and reports degradation.
+        Chunk recall has a separate budget from the returned file limit. Fulltext
+        retains normalized phrase preference in both PostgreSQL and Elasticsearch.
+        Provider quota exhaustion returns 429 ai.quota_exhausted when required;
+        hybrid may continue with text and report vector.quota_exhausted.
       operationId: search
       requestBody:
         required: true
@@ -862,6 +866,10 @@ paths:
         files never widen to all on failure. Core revalidates evidence before model
         invocation. Vector or summary failures do not block text-based answers.
         Bounded retrieval does not promise exhaustive review of every paragraph.
+        Legacy folder_id and file_ids together restrict retrieval to their
+        intersection, including subfolders. An empty or inaccessible intersection
+        returns 409 ai.scope_invalid. These legacy fields cannot accompany scope.
+        Answer provider quota exhaustion returns 429 ai.quota_exhausted.
       operationId: askFiles
       requestBody:
         required: true
@@ -876,6 +884,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AskResponse'
+        '409':
+          description: ai.scope_invalid for unavailable scope or an empty legacy intersection; ai.scope_changed when authorization versions change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '422':
           $ref: '#/components/responses/ValidationError'
         '429':
@@ -1909,6 +1923,7 @@ components:
           nullable: true
     AskRequest:
       type: object
+      description: Use scope, or legacy folder_id/file_ids. Both legacy filters together select their authorized intersection; an empty intersection is an error.
       required: [question]
       properties:
         question:

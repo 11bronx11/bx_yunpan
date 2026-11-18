@@ -59,6 +59,9 @@ var (
 // the same input, such as invalid parameters or rejected credentials.
 func IsProviderPermanent(err error) bool { return errors.Is(err, errProviderPermanent) }
 
+// IsProviderQuota preserves quota failures across the v2 query/RPC boundary.
+func IsProviderQuota(err error) bool { return errors.Is(err, errProviderQuota) }
+
 const maxProviderResponseBytes = 8 << 20
 
 type providerAPIError struct {

@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const ParentChildVersion = "parent-child-v3"
+const ParentChildVersion = "parent-child-v4"
 
 var ErrParentChildResourceLimit = errors.New("parent-child resource limit")
 
@@ -32,9 +32,10 @@ type ParentChild struct {
 	Coverage string
 }
 
-// BuildParentChild consumes canonical blocks exactly once. Overlap belongs only
-// to children and all child offsets are exact rune positions in their parent.
-// Parser offsets remain block precision unless the parser proves otherwise.
+// BuildParentChild keeps contiguous source windows. Since v4, adjacent parents
+// overlap too, so a hard parent boundary cannot erase short searchable terms.
+// All child offsets are exact rune positions in their parent. Parser offsets
+// remain block precision unless the parser proves otherwise.
 func BuildParentChild(version uuid.UUID, blocks []Section) (ParentChild, error) {
 	return BuildParentChildVersion(version, blocks, ParentChildVersion)
 }
@@ -61,7 +62,11 @@ func BuildParentChildVersion(version uuid.UUID, blocks []Section, implementation
 			}
 			// Frozen v2 keeps its table output; v3 omits the header-only tail
 			// produced after a long final row has already been emitted in pieces.
-			pieces, incomplete := splitTypedTableTail(block, heading, text, ChunkOptions{TokenBudget: 600}, implementation == "parent-child-v2")
+			overlap := 0
+			if implementation == "parent-child-v4" {
+				overlap = 50
+			}
+			pieces, incomplete := splitTypedTableTailOverlap(block, heading, text, ChunkOptions{TokenBudget: 600}, implementation == "parent-child-v2", overlap)
 			if incomplete {
 				return ParentChild{}, ErrParentChildResourceLimit
 			}
@@ -103,12 +108,25 @@ func BuildParentChildVersion(version uuid.UUID, blocks []Section, implementation
 					break
 				}
 				next := ce
-				for next > cs+1 && EstimateTokens(string(pr[next-1:ce])) < 50 {
-					next--
+				if implementation == "parent-child-v4" {
+					next = contiguousOverlapStart(pr, cs, ce, 50)
+				} else {
+					// Retain accepted v1-v3 artifacts byte-for-byte, including
+					// their original overlap rounding.
+					for next > cs+1 && EstimateTokens(string(pr[next-1:ce])) < 50 {
+						next--
+					}
 				}
 				cs = max(cs+1, next)
 			}
-			start = end
+			if end == len(runes) {
+				break
+			}
+			if implementation == "parent-child-v4" {
+				start = max(start+1, contiguousOverlapStart(runes, start, end, 50))
+			} else {
+				start = end
+			}
 		}
 	}
 	if len(out.Children) == 0 {
@@ -118,7 +136,7 @@ func BuildParentChildVersion(version uuid.UUID, blocks []Section, implementation
 }
 
 func IsParentChildVersion(version string) bool {
-	return version == "parent-child-v1" || version == "parent-child-v2" || version == ParentChildVersion
+	return version == "parent-child-v1" || version == "parent-child-v2" || version == "parent-child-v3" || version == "parent-child-v4"
 }
 
 // ContextualText adds the section context separately from exact child/parent

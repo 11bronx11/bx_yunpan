@@ -327,7 +327,12 @@ func (q *Query) pgText(ctx context.Context, ids []string, query string, k int) (
 	if len(ids) == 0 {
 		return rows, nil
 	}
-	err := q.DB.WithContext(ctx).Raw(`SELECT id,ts_rank_cd(content_tsv,ai_fts_query(?)) AS score FROM ai_published_children WHERE content_version_id::text=ANY(?::text[]) AND content_tsv @@ ai_fts_query(?) ORDER BY score DESC,id LIMIT ?`, query, pq.Array(ids), query, k).Scan(&rows).Error
+	query = strings.TrimSpace(query)
+	err := q.DB.WithContext(ctx).Raw(`SELECT id,
+		ts_rank_cd(content_tsv,ai_fts_query(?),32)
+		+ CASE WHEN strpos(lower(normalize(content,NFKC)),lower(normalize(?,NFKC))) > 0 THEN 1.0 ELSE 0.0 END AS score
+		FROM ai_published_children WHERE content_version_id::text=ANY(?::text[])
+		AND content_tsv @@ ai_fts_query(?) ORDER BY score DESC,id LIMIT ?`, query, query, pq.Array(ids), query, k).Scan(&rows).Error
 	return rows, err
 }
 
@@ -454,6 +459,9 @@ func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, quer
 				}
 				if err != nil || len(vs) != 1 || len(vs[0]) != 1024 {
 					vectorErr = errors.New("embedding.unavailable")
+					if ai.IsProviderQuota(err) {
+						vectorErr = ai.ErrQuota
+					}
 				} else {
 					queryVector = vs[0]
 					branch := func(external bool) ([]ranked, error) {
@@ -497,6 +505,9 @@ func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, quer
 		}
 	}
 	if mode == "semantic" && vectorErr != nil {
+		if errors.Is(vectorErr, ai.ErrQuota) {
+			return nil, meta, ai.GRPCStatus(ai.ErrQuota).Err()
+		}
 		return nil, meta, status.Error(codes.Unavailable, "ai.semantic_unavailable")
 	}
 	if mode == "fulltext" && textErr != nil || mode == "hybrid" && textErr != nil && vectorErr != nil {
@@ -509,6 +520,9 @@ func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, quer
 	if vectorErr != nil {
 		meta.VectorBackend = "unavailable"
 		meta.Reasons = append(meta.Reasons, "vector.unavailable")
+		if errors.Is(vectorErr, ai.ErrQuota) {
+			meta.Reasons = append(meta.Reasons, "vector.quota_exhausted")
+		}
 	}
 	meta.Degraded = len(meta.Reasons) > 0
 	scores := map[uuid.UUID]float64{}
@@ -591,7 +605,9 @@ func (q *Query) Search(ctx context.Context, r *pbv2.SearchRequest) (response *pb
 		k = 20
 	}
 	k = min(k, 100)
-	rows, meta, err := q.retrieve(ctx, files, r.Query, r.Mode, k)
+	// The response limit counts files. Recall chunks independently so several
+	// passages from one document do not consume the entire file result budget.
+	rows, meta, err := q.retrieve(ctx, files, r.Query, r.Mode, max(k, 40))
 	if err != nil {
 		return nil, err
 	}
@@ -771,6 +787,9 @@ func (q *Query) Ask(ctx context.Context, r *pbv2.AskRequest) (response *pbv2.Ask
 	answer, err := q.Provider.Answer(answerCtx, r.Question, evidence)
 	finishAnswer(err)
 	if err != nil {
+		if ai.IsProviderQuota(err) {
+			return nil, ai.GRPCStatus(ai.ErrQuota).Err()
+		}
 		return nil, status.Error(codes.Unavailable, "ai.answer_unavailable")
 	}
 	if err := q.validate(ctx, r.Grant, used); err != nil {
