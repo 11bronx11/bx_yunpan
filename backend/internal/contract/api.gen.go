@@ -958,6 +958,23 @@ type Citation struct {
 	ParentId *UUID   `json:"parent_id,omitempty"`
 	Section  *string `json:"section,omitempty"`
 
+	// SourceLocation Parser provenance at source block or table row-group precision.
+	SourceLocation *struct {
+		ColumnEnd   *int    `json:"column_end,omitempty"`
+		ColumnStart *int    `json:"column_start,omitempty"`
+		Encoding    *string `json:"encoding,omitempty"`
+		HeadingPath *string `json:"heading_path,omitempty"`
+		Kind        *string `json:"kind,omitempty"`
+		PageEnd     *int    `json:"page_end,omitempty"`
+		PageStart   *int    `json:"page_start,omitempty"`
+		RowEnd      *int    `json:"row_end,omitempty"`
+		RowStart    *int    `json:"row_start,omitempty"`
+		SheetName   *string `json:"sheet_name,omitempty"`
+		SourceEnd   *int64  `json:"source_end,omitempty"`
+		SourceKind  *string `json:"source_kind,omitempty"`
+		SourceStart *int64  `json:"source_start,omitempty"`
+	} `json:"source_location,omitempty"`
+
 	// SourceVersionId Example: 0198a1f0-7b2a-7000-8000-000000000001
 	SourceVersionId *UUID `json:"source_version_id,omitempty"`
 }

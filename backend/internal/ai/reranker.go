@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Reranker scores already-retrieved documents against a query. Scores are in
@@ -49,7 +50,7 @@ func NewReranker(cfg config.AI) Reranker {
 			baseURL: baseURL,
 			model:   cfg.RerankModel,
 			path:    path,
-			client:  &http.Client{Timeout: cfg.RerankTimeout},
+			client:  &http.Client{Timeout: cfg.RerankTimeout, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 		}
 	}
 	return &fakeReranker{}
@@ -213,5 +214,7 @@ func orderByRerank(scores []float64) []int {
 	return result
 }
 
-var _ Reranker = (*fakeReranker)(nil)
-var _ Reranker = (*httpReranker)(nil)
+var (
+	_ Reranker = (*fakeReranker)(nil)
+	_ Reranker = (*httpReranker)(nil)
+)

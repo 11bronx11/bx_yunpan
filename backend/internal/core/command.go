@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
+	"time"
+
 	"github.com/11bronx11/bx_yunpan/backend/internal/aiprotocol"
 	"github.com/11bronx11/bx_yunpan/backend/internal/eventcontract"
 	"github.com/11bronx11/bx_yunpan/backend/internal/outbox"
@@ -13,8 +16,6 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"slices"
-	"time"
 )
 
 type Job struct {
@@ -135,6 +136,7 @@ func RequestReprocess(ctx context.Context, db *gorm.DB, owner, file uuid.UUID, k
 	})
 	return job, effective, err
 }
+
 func supportedMIME(m string) bool {
-	return aiprotocol.SupportedText(m)
+	return aiprotocol.SupportedSource(m)
 }

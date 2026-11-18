@@ -10,7 +10,8 @@ service AIQueryService {
 }
 message Scope { string mode=1; repeated string file_ids=2; string folder_id=3; bool include_subfolders=4; string snapshot_id=5; }
 message SearchRequest { string grant=1; string query=2; string mode=3; int32 limit=4; repeated string mime_types=5; }
-message Citation { string id=1; string file_id=2; string file_name=3; string content_version_id=4; string parent_id=5; string child_id=6; int64 content_generation=7; int32 page_number=8; string section=9; string excerpt=10; string source_version_id=11; }
+message Citation { string id=1; string file_id=2; string file_name=3; string content_version_id=4; string parent_id=5; string child_id=6; int64 content_generation=7; int32 page_number=8; string section=9; string excerpt=10; SourceLocation source_location=12; string source_version_id=11; }
+message SourceLocation { string source_kind=1; int32 page_start=2; int32 page_end=3; string sheet_name=4; int32 row_start=5; int32 row_end=6; int32 column_start=7; int32 column_end=8; string heading_path=9; string kind=10; int64 source_start=11; int64 source_end=12; string encoding=13; }
 message SearchHit { yunpan.core.v1.FileRef file=1; double score=2; string match_type=3; repeated Citation citations=4; }
 message Retrieval { string text_backend=1; string vector_backend=2; bool degraded=3; repeated string reasons=4; int32 evidence_tokens=5; bool token_count_is_estimate=6; string text_target=7; string vector_target=8; }
 message Coverage { string mode=1; bool exhaustive=2; repeated string missing_evidence_file_ids=3; }

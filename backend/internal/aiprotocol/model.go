@@ -15,9 +15,11 @@ import (
 	"github.com/google/uuid"
 )
 
-const IntentEvent = "ai.intent_requested.v2"
-const TombstoneEvent = "ai.object_tombstoned.v2"
-const JobFinishedEvent = "ai.job_finished.v2"
+const (
+	IntentEvent      = "ai.intent_requested.v2"
+	TombstoneEvent   = "ai.object_tombstoned.v2"
+	JobFinishedEvent = "ai.job_finished.v2"
+)
 
 var ErrInvalid = errors.New("ai.invalid_contract")
 
@@ -28,6 +30,8 @@ type Seqs struct {
 	Summary int64 `json:"summary"`
 }
 type Profile struct {
+	VisionProvider    string `json:"vision_provider,omitempty"`
+	VisionModel       string `json:"vision_model,omitempty"`
 	ID                string `json:"id"`
 	Revision          string `json:"revision"`
 	Parser            string `json:"parser"`
@@ -101,22 +105,23 @@ func (t Tombstone) Validate() error {
 }
 
 type Input struct {
-	MaintenanceAt     int64     `json:"maintenance_at,omitempty"`
-	Intent            Intent    `json:"intent"`
-	Profile           Profile   `json:"profile"`
-	ProcessingGrant   string    `json:"processing_grant,omitempty"`
-	SourceID          uuid.UUID `json:"source_id,omitempty"`
-	ContentVersionID  uuid.UUID `json:"content_version_id,omitempty"`
-	EmbeddingSetID    uuid.UUID `json:"embedding_set_id,omitempty"`
-	FailureCapability string    `json:"failure_capability,omitempty"`
-	FailureSeq        int64     `json:"failure_seq,omitempty"`
-	ErrorCode         string    `json:"error_code,omitempty"`
-	TargetID          uuid.UUID `json:"target_id,omitempty"`
-	TextTargetEpoch   int64     `json:"text_target_epoch,omitempty"`
-	VectorTargetEpoch int64     `json:"vector_target_epoch,omitempty"`
-	TargetNamespace   string    `json:"target_namespace,omitempty"`
-	TargetEpoch       int64     `json:"target_epoch,omitempty"`
-	Operation         string    `json:"operation,omitempty"`
+	ProjectionBackends []string  `json:"projection_backends,omitempty"`
+	MaintenanceAt      int64     `json:"maintenance_at,omitempty"`
+	Intent             Intent    `json:"intent"`
+	Profile            Profile   `json:"profile"`
+	ProcessingGrant    string    `json:"processing_grant,omitempty"`
+	SourceID           uuid.UUID `json:"source_id,omitempty"`
+	ContentVersionID   uuid.UUID `json:"content_version_id,omitempty"`
+	EmbeddingSetID     uuid.UUID `json:"embedding_set_id,omitempty"`
+	FailureCapability  string    `json:"failure_capability,omitempty"`
+	FailureSeq         int64     `json:"failure_seq,omitempty"`
+	ErrorCode          string    `json:"error_code,omitempty"`
+	TargetID           uuid.UUID `json:"target_id,omitempty"`
+	TextTargetEpoch    int64     `json:"text_target_epoch,omitempty"`
+	VectorTargetEpoch  int64     `json:"vector_target_epoch,omitempty"`
+	TargetNamespace    string    `json:"target_namespace,omitempty"`
+	TargetEpoch        int64     `json:"target_epoch,omitempty"`
+	Operation          string    `json:"operation,omitempty"`
 }
 type Output struct {
 	Version           int       `json:"version"`
@@ -152,10 +157,12 @@ func HashJSON(v any) string {
 	}
 	return Hash(b)
 }
+
 func Semantic(kind string, in Input) string {
 	i := in.Intent
 	return fmt.Sprintf("ai.v2.%s:%s:%d:%s", strings.TrimPrefix(kind, "ai."), i.ObjectID, i.ContentGeneration, HashJSON(in))
 }
+
 func Targets(requested []string, profile Profile) ([]string, error) {
 	if len(requested) == 0 {
 		requested = []string{"all"}

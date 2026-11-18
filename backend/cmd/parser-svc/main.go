@@ -2,14 +2,15 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/serviceauth"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai/pb"
@@ -26,7 +27,7 @@ func main() {
 		os.Exit(1)
 	}
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
-		if err := probeHealth(cfg.Parser.GRPCAddr, pb.DocumentParserService_ServiceDesc.ServiceName); err != nil {
+		if err := probeHealth(cfg.Parser.GRPCAddr, pb.DocumentParserService_ServiceDesc.ServiceName, cfg.AISplit.TLS); err != nil {
 			slog.Error("document parser health check failed", "error", err)
 			os.Exit(1)
 		}
@@ -57,17 +58,24 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	return bootstrap.RunParserSvc(ctx, cfg, logger)
 }
 
-func probeHealth(address, service string) error {
+func probeHealth(address, service string, tls serviceauth.TLS) error {
 	if len(address) > 0 && address[0] == ':' {
 		address = "127.0.0.1" + address
 	}
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	transport, err := serviceauth.ClientTransport(tls)
+	if err != nil {
+		return err
+	}
+	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(transport))
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, err = healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{Service: service})
+	response, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{Service: service})
+	if err == nil && response.Status != healthpb.HealthCheckResponse_SERVING {
+		return fmt.Errorf("parser is not serving")
+	}
 	return err
 }

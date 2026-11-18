@@ -77,7 +77,7 @@ func parserError(err error) error {
 	case codes.FailedPrecondition:
 		return &ai.ParseError{Code: message, Permanent: true, Err: errors.New(message)}
 	case codes.InvalidArgument:
-		return &ai.ParseError{Code: message, Err: errors.New(message)}
+		return &ai.ParseError{Code: message, Permanent: true, Err: errors.New(message)}
 	case codes.Canceled, codes.DeadlineExceeded:
 		return &ai.ParseError{Code: "ai.parse.timeout", Retryable: true, Err: err}
 	case codes.Unavailable, codes.Internal, codes.Unknown:

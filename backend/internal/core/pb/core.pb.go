@@ -33,6 +33,7 @@ type FileRef struct {
 	Size              int64                  `protobuf:"varint,8,opt,name=size,proto3" json:"size,omitempty"`
 	UpdatedAt         string                 `protobuf:"bytes,9,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	FolderId          string                 `protobuf:"bytes,10,opt,name=folder_id,json=folderId,proto3" json:"folder_id,omitempty"`
+	ThumbnailState    string                 `protobuf:"bytes,11,opt,name=thumbnail_state,json=thumbnailState,proto3" json:"thumbnail_state,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -133,6 +134,13 @@ func (x *FileRef) GetUpdatedAt() string {
 func (x *FileRef) GetFolderId() string {
 	if x != nil {
 		return x.FolderId
+	}
+	return ""
+}
+
+func (x *FileRef) GetThumbnailState() string {
+	if x != nil {
+		return x.ThumbnailState
 	}
 	return ""
 }
@@ -833,7 +841,7 @@ var File_core_v1_core_proto protoreflect.FileDescriptor
 
 const file_core_v1_core_proto_rawDesc = "" +
 	"\n" +
-	"\x12core/v1/core.proto\x12\x0eyunpan.core.v1\"\xa8\x02\n" +
+	"\x12core/v1/core.proto\x12\x0eyunpan.core.v1\"\xd1\x02\n" +
 	"\aFileRef\x12\x17\n" +
 	"\afile_id\x18\x01 \x01(\tR\x06fileId\x12\x1b\n" +
 	"\tobject_id\x18\x02 \x01(\tR\bobjectId\x12-\n" +
@@ -846,7 +854,8 @@ const file_core_v1_core_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\t \x01(\tR\tupdatedAt\x12\x1b\n" +
 	"\tfolder_id\x18\n" +
-	" \x01(\tR\bfolderId\"(\n" +
+	" \x01(\tR\bfolderId\x12'\n" +
+	"\x0fthumbnail_state\x18\v \x01(\tR\x0ethumbnailState\"(\n" +
 	"\x10OpenScopeRequest\x12\x14\n" +
 	"\x05grant\x18\x01 \x01(\tR\x05grant\"\x91\x01\n" +
 	"\rScopeResponse\x12\x1f\n" +

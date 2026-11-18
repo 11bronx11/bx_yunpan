@@ -50,7 +50,7 @@ func asyncStore(deps *dependencies.AsyncSet, cfg config.Config) *asynccontrol.St
 	s.BatchBytes = cfg.Async.BatchBytes
 	s.BatchWait = cfg.Async.BatchWait
 	aisystem.Register(s.Registry)
-	planner := &aisystem.Planner{TextEpoch: cfg.AITextEpoch(), VectorEpoch: cfg.AIVectorEpoch(), TargetNamespace: cfg.AISplit.ProjectionNamespace, TargetEpoch: cfg.AIProjectionEpoch(), Profile: cfg.AIProfile()}
+	planner := &aisystem.Planner{ProjectionBackends: cfg.Search.WriteBackends, TextEpoch: cfg.AITextEpoch(), VectorEpoch: cfg.AIVectorEpoch(), TargetNamespace: cfg.AISplit.ProjectionNamespace, TargetEpoch: cfg.AIProjectionEpoch(), Profile: cfg.AIProfile()}
 	s.PlanContinuations = planner.Continuations
 	s.PlanFailure = planner.Failure
 	s.Observe = planner.Observe
@@ -95,7 +95,7 @@ func RunAsync(ctx context.Context, cfg config.Config, logger *slog.Logger, role 
 		if err != nil && cfg.AI.Enabled {
 			return err
 		}
-		aiPlanner := &aisystem.Planner{TextEpoch: cfg.AITextEpoch(), VectorEpoch: cfg.AIVectorEpoch(), TargetNamespace: cfg.AISplit.ProjectionNamespace, TargetEpoch: cfg.AIProjectionEpoch(), Profile: cfg.AIProfile(), ProcessingKey: processingKey}
+		aiPlanner := &aisystem.Planner{ProjectionBackends: cfg.Search.WriteBackends, TextEpoch: cfg.AITextEpoch(), VectorEpoch: cfg.AIVectorEpoch(), TargetNamespace: cfg.AISplit.ProjectionNamespace, TargetEpoch: cfg.AIProjectionEpoch(), Profile: cfg.AIProfile(), ProcessingKey: processingKey}
 		relay := &asynccontrol.Relay{Control: s, Business: deps.Read, Source: "business-primary", Rows: cfg.Async.RelayRows, Bytes: cfg.Async.RelayBytes, Plan: (&asyncjobs.Planner{Read: deps.Read, AI: cfg.AI.Enabled, Search: cfg.Search.Enabled, GCDelay: cfg.Outbox.GCDelay, OutputSafety: cfg.Async.OutputSafety, AIIntent: aiPlanner.Intent}).Plan}
 		return runAsyncGroup(ctx,
 			func(c context.Context) error {

@@ -55,6 +55,9 @@ func (s *Store) freezeContinuations(tx *gorm.DB, t Task, r Result) error {
 		return ErrInvalid
 	}
 	for i, spec := range specs {
+		if len(spec.Trace) == 0 {
+			spec.Trace = json.RawMessage(t.Trace)
+		}
 		if _, err := s.Registry.Validate(spec); err != nil {
 			return err
 		}

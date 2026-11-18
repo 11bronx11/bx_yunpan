@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai"
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai/pbv2"
@@ -29,6 +30,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"gorm.io/gorm"
 )
 
@@ -51,6 +53,7 @@ func (h *HTTP) RegisterRoutes(v1 *gin.RouterGroup) {
 	v1.POST("/files/:fileId/ai/reprocess", h.Authenticate, h.limit(), h.reprocess)
 	v1.GET("/ai/jobs/:taskId", h.Authenticate, h.job)
 }
+
 func (h *HTTP) rate(c *gin.Context, action string) bool {
 	if h.Limiter == nil {
 		return true
@@ -63,9 +66,11 @@ func (h *HTTP) rate(c *gin.Context, action string) bool {
 	}
 	return true
 }
+
 func (h *HTTP) limit() gin.HandlerFunc {
 	return func(c *gin.Context) { c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10); c.Next() }
 }
+
 func (h *HTTP) grant(ctx context.Context, owner uuid.UUID, scope aiprotocol.Scope) (string, error) {
 	if err := scope.Normalize(); err != nil {
 		return "", err
@@ -77,6 +82,7 @@ func (h *HTTP) grant(ctx context.Context, owner uuid.UUID, scope aiprotocol.Scop
 	g := aiprotocol.ScopeGrant{Principal: owner, Scope: scope, ContentEpoch: epoch.ContentEpoch, ACLEpoch: epoch.ACLEpoch, RequestID: uuid.NewString(), Action: "retrieve", ExpiresAt: time.Now().Add(2 * time.Minute).Unix()}
 	return serviceauth.Sign(h.ScopeKey, "core-retrieval-v1", g.ExpiresAt, g)
 }
+
 func (h *HTTP) available(c *gin.Context) bool {
 	if !h.Enabled || h.Client == nil {
 		h.fail(c, status.Error(codes.Unavailable, "ai.unavailable"))
@@ -84,6 +90,7 @@ func (h *HTTP) available(c *gin.Context) bool {
 	}
 	return true
 }
+
 func (h *HTTP) fail(c *gin.Context, err error) {
 	code := "ai.unavailable"
 	httpCode := 503
@@ -154,12 +161,58 @@ func (h *HTTP) fail(c *gin.Context, err error) {
 	}
 	c.JSON(httpCode, envelope)
 }
+
 func asMap(m proto.Message) map[string]any {
 	b, _ := (protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true}).Marshal(m)
 	var out map[string]any
 	_ = json.Unmarshal(b, &out)
+	normalizeProtoNumbers(out, m.ProtoReflect().Descriptor())
 	return out
 }
+
+// Protobuf JSON encodes int64 as strings; the public HTTP contract uses JSON
+// numbers. Preserve that existing contract, including exact integer precision.
+func normalizeProtoNumbers(out map[string]any, descriptor protoreflect.MessageDescriptor) {
+	fields := descriptor.Fields()
+	var normalize func(any, protoreflect.FieldDescriptor) any
+	normalize = func(value any, field protoreflect.FieldDescriptor) any {
+		switch field.Kind() {
+		case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind, protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+			if number, ok := value.(string); ok {
+				return json.Number(number)
+			}
+		case protoreflect.MessageKind, protoreflect.GroupKind:
+			if nested, ok := value.(map[string]any); ok {
+				normalizeProtoNumbers(nested, field.Message())
+			}
+		}
+		return value
+	}
+	for i := 0; i < fields.Len(); i++ {
+		field := fields.Get(i)
+		name := string(field.Name())
+		value, exists := out[name]
+		if !exists {
+			continue
+		}
+		if field.IsMap() {
+			if values, ok := value.(map[string]any); ok {
+				for key, v := range values {
+					values[key] = normalize(v, field.MapValue())
+				}
+			}
+		} else if field.IsList() {
+			if values, ok := value.([]any); ok {
+				for index, v := range values {
+					values[index] = normalize(v, field)
+				}
+			}
+		} else {
+			out[name] = normalize(value, field)
+		}
+	}
+}
+
 func (h *HTTP) ask(c *gin.Context) {
 	if !h.rate(c, "ask") {
 		return
@@ -173,7 +226,7 @@ func (h *HTTP) ask(c *gin.Context) {
 		FileIDs  []uuid.UUID       `json:"file_ids"`
 		FolderID *uuid.UUID        `json:"folder_id"`
 	}
-	if c.ShouldBindJSON(&req) != nil || len(req.Question) > 8192 || strings.TrimSpace(req.Question) == "" {
+	if c.ShouldBindJSON(&req) != nil || utf8.RuneCountInString(req.Question) > 2000 || strings.TrimSpace(req.Question) == "" {
 		h.fail(c, aiprotocol.ErrInvalid)
 		return
 	}
@@ -206,22 +259,23 @@ func (h *HTTP) ask(c *gin.Context) {
 	out["grounded"] = len(resp.Citations) > 0
 	c.JSON(200, out)
 }
+
 func (h *HTTP) search(c *gin.Context) {
 	var r struct {
 		Query, Mode       string
 		FolderID          *uuid.UUID `json:"folder_id"`
-		IncludeSubfolders bool       `json:"include_subfolders"`
+		IncludeSubfolders *bool      `json:"include_subfolders"`
 		MimeTypes         []string   `json:"mime_types"`
 		Limit             int
 	}
-	if c.ShouldBindJSON(&r) != nil || strings.TrimSpace(r.Query) == "" || len(r.Query) > 4096 {
+	if c.ShouldBindJSON(&r) != nil || strings.TrimSpace(r.Query) == "" || utf8.RuneCountInString(r.Query) > 1000 || len(r.MimeTypes) > 20 || (r.Mode != "name" && r.Mode != "fulltext" && r.Mode != "semantic" && r.Mode != "hybrid") {
 		h.fail(c, aiprotocol.ErrInvalid)
 		return
 	}
 	owner, _ := httpapi.PrincipalID(c)
 	scope := aiprotocol.Scope{Mode: "all"}
 	if r.FolderID != nil {
-		scope = aiprotocol.Scope{Mode: "folder", FolderID: r.FolderID, IncludeSubfolders: r.IncludeSubfolders}
+		scope = aiprotocol.Scope{Mode: "folder", FolderID: r.FolderID, IncludeSubfolders: r.IncludeSubfolders == nil || *r.IncludeSubfolders}
 	}
 	if r.Mode == "name" {
 		svc := &core.Service{DB: h.DB}
@@ -266,9 +320,11 @@ func (h *HTTP) search(c *gin.Context) {
 	out["page"] = gin.H{"has_more": false}
 	c.JSON(200, out)
 }
+
 func fileMap(f *corepb.FileRef) gin.H {
 	return gin.H{"id": f.FileId, "name": f.Name, "path": f.Path, "folder_id": f.FolderId, "mime_type": f.MimeType, "size_bytes": f.Size, "size": f.Size, "version": f.EntryVersion, "updated_at": f.UpdatedAt}
 }
+
 func (h *HTTP) overview(c *gin.Context) {
 	if !h.available(c) {
 		return
@@ -385,6 +441,7 @@ func (h *HTTP) files(c *gin.Context) {
 	}
 	c.JSON(200, gin.H{"items": items, "page": gin.H{"next_cursor": token, "has_more": more}, "scan_incomplete": more && scanned >= 1000})
 }
+
 func (h *HTTP) reprocess(c *gin.Context) {
 	if !h.rate(c, "reprocess") {
 		return
@@ -419,6 +476,7 @@ func (h *HTTP) reprocess(c *gin.Context) {
 	}
 	c.JSON(202, gin.H{"id": job.ID, "job_id": job.ID, "status": job.Status, "task_type": job.TaskType, "requested_targets": effective, "poll_after_ms": 2000})
 }
+
 func (h *HTTP) job(c *gin.Context) {
 	owner, _ := httpapi.PrincipalID(c)
 	id, err := uuid.Parse(c.Param("taskId"))

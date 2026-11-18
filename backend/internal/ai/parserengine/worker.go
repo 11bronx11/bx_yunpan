@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 const (
@@ -47,7 +48,7 @@ func Start(ctx context.Context, address, workerDir string, _ ...string) (*Worker
 	}
 	worker := &Worker{
 		baseURL: "http://" + address,
-		client:  &http.Client{},
+		client:  &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)},
 		command: command,
 		done:    make(chan struct{}),
 	}

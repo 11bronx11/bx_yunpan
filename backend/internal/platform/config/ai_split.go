@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/11bronx11/bx_yunpan/backend/internal/ai/rag"
 	"github.com/11bronx11/bx_yunpan/backend/internal/aiprotocol"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/serviceauth"
 )
@@ -25,7 +26,8 @@ type AISplit struct {
 }
 
 func loadAISplit() AISplit {
-	return AISplit{Ask: envBool("AI_ASK_ENABLED", true),
+	return AISplit{
+		Ask:                 envBool("AI_ASK_ENABLED", true),
 		ProjectionNamespace: env("AI_PROJECTION_NAMESPACE", "bx-ai"), TextIndexEpoch: env("AI_TEXT_INDEX_EPOCH", env("SEARCH_INDEX_EPOCH", "v1")), VectorIndexEpoch: env("AI_VECTOR_INDEX_EPOCH", env("SEARCH_INDEX_EPOCH", "v1")),
 		TLS:      serviceauth.TLS{CA: env("INTERNAL_GRPC_TLS_CA", ""), Cert: env("INTERNAL_GRPC_TLS_CERT", ""), Key: env("INTERNAL_GRPC_TLS_KEY", ""), ServerName: env("INTERNAL_GRPC_TLS_SERVER_NAME", "")},
 		QueryDSN: env("AI_QUERY_DSN", ""), ComputeDSN: env("AI_COMPUTE_DSN", ""), CommitDSN: env("AI_COMMIT_DSN", ""), MigrationDSN: env("AI_MIGRATION_DSN", ""),
@@ -37,12 +39,15 @@ func loadAISplit() AISplit {
 		Vectors: envBool("AI_VECTORS_ENABLED", true), Summary: envBool("AI_SUMMARY_ENABLED", true), QueryTimeout: envDuration("AI_QUERY_TIMEOUT", 10*time.Second), AskTimeout: envDuration("AI_ASK_TIMEOUT", 60*time.Second), ReadTimeout: envDuration("CORE_INTERNAL_TIMEOUT", 5*time.Second), ScopeLimit: envInt("AI_SCOPE_MAX_FILES", 10000), SummaryCalls: envInt("AI_SUMMARY_MAX_CALLS", 128),
 	}
 }
+
 func (c Config) AIProfile() aiprotocol.Profile {
-	return aiprotocol.Profile{ID: c.AISplit.ProfileID, Revision: c.AISplit.ProfileRevision, Parser: c.Parser.ProfileVersion, Chunker: "parent-child-v1", EmbeddingProvider: c.AI.Provider, EmbeddingModel: c.AI.EmbeddingModel, EmbeddingRevision: c.AISplit.EmbeddingRevision, SummaryProvider: c.AI.Provider, SummaryModel: c.AI.ChatModel, SummaryRevision: c.AISplit.SummaryRevision, Prompt: c.AISplit.PromptVersion, Dimension: c.AI.Dimension, EnableVectors: c.AISplit.Vectors, EnableSummary: c.AISplit.Summary}
+	return aiprotocol.Profile{ID: c.AISplit.ProfileID, Revision: c.AISplit.ProfileRevision, Parser: c.Parser.ProfileVersion, Chunker: rag.ParentChildVersion, EmbeddingProvider: c.AI.Provider, EmbeddingModel: c.AI.EmbeddingModel, EmbeddingRevision: c.AISplit.EmbeddingRevision, SummaryProvider: c.AI.Provider, SummaryModel: c.AI.ChatModel, SummaryRevision: c.AISplit.SummaryRevision, VisionProvider: c.AI.Provider, VisionModel: c.AI.VisionModel, Prompt: c.AISplit.PromptVersion, Dimension: c.AI.Dimension, EnableVectors: c.AISplit.Vectors, EnableSummary: c.AISplit.Summary}
 }
+
 func isSplitRole(role string) bool {
 	return role == "core-internal" || role == "ai-query" || role == "ai-committer" || strings.HasPrefix(role, "ai-") && strings.HasSuffix(role, "-worker") || role == "ai-text-projector" || role == "ai-vector-projector"
 }
+
 func (c Config) validateAISplit() error {
 	a := c.AISplit
 	if err := a.TLS.Validate(); err != nil {
@@ -99,6 +104,7 @@ func (c Config) AITextEpoch() int64 {
 	epoch, _ := strconv.ParseInt(strings.TrimPrefix(c.AISplit.TextIndexEpoch, "v"), 10, 64)
 	return max(1, epoch)
 }
+
 func (c Config) AIVectorEpoch() int64 {
 	epoch, _ := strconv.ParseInt(strings.TrimPrefix(c.AISplit.VectorIndexEpoch, "v"), 10, 64)
 	return max(1, epoch)

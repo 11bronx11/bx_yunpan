@@ -25,6 +25,8 @@ type Computer struct {
 	Core               pb.CoreReadServiceClient
 	Parser             ai.ParserGateway
 	Embedding, Summary ai.Provider
+	Vision             ai.Provider
+	MaxObjectBytes     int64
 	Profile            aiprotocol.Profile
 	HTTP               *http.Client
 	SummaryCalls       int
@@ -47,16 +49,18 @@ func (e *modelBuildError) Error() string {
 func (e *modelBuildError) Unwrap() error { return e.cause }
 
 func IsPermanentComputeError(err error) bool {
-	return errors.Is(err, asynccontrol.ErrInvalid) || ai.IsProviderPermanent(err) || ai.IsParsePermanent(err)
+	return errors.Is(err, asynccontrol.ErrInvalid) || ai.IsProviderPermanent(err) || ai.IsParsePermanent(err) || ai.IsParseUnsupported(err) || ai.IsParseResourceLimit(err)
 }
 
 func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.RawMessage, computeErr error) {
+	ctx, finishTrace := stageTrace(ctx, t.Kind)
+	defer func() { finishTrace(computeErr) }()
 	in, err := decode[aiprotocol.Input](t.Input)
 	started := time.Now()
 	defer func() {
 		slog.InfoContext(ctx, "AI computation completed", "task_id", t.ID, "request_id", in.Intent.RequestID, "job_id", in.Intent.JobID, "object_id", in.Intent.ObjectID, "content_generation", in.Intent.ContentGeneration, "kind", t.Kind, "duration_ms", time.Since(started).Milliseconds(), "failed", computeErr != nil)
 	}()
-	if err != nil || (t.Kind != "ai.artifact.gc" && in.Operation != "retire" && in.Intent.Validate() != nil) || (in.Profile.Digest() != c.Profile.Digest() && t.Kind != "ai.artifact.gc" && t.Kind != "ai.object.tombstone" && t.Kind != "ai.capability.finish" && in.Operation != "delete" && in.Operation != "retire") {
+	if err != nil || (t.Kind != "ai.artifact.gc" && in.Operation != "retire" && in.Intent.Validate() != nil) || (!computeProfileCompatible(in.Profile, c.Profile, in.Intent.MediaType) && t.Kind != "ai.artifact.gc" && t.Kind != "ai.object.tombstone" && t.Kind != "ai.capability.finish" && in.Operation != "delete" && in.Operation != "retire") {
 		return nil, asynccontrol.ErrInvalid
 	}
 	// Targeted rebuilds wait for their immutable prerequisites. They must not
@@ -85,7 +89,7 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.
 		data = in.Intent
 		count = 1
 	case "ai.source.prepare":
-		if c.Core == nil || c.Parser == nil {
+		if c.Core == nil || (!aiprotocol.VisionImage(in.Intent.MediaType) && c.Parser == nil) {
 			return nil, errors.New("ai.source.unavailable")
 		}
 		obj, err := c.Core.GetObjectForProcessing(ctx, &pb.ProcessingRequest{Grant: in.ProcessingGrant, InputIdentity: aiprotocol.HashJSON(in.Intent), IntentId: in.Intent.RequestID.String(), ObjectId: in.Intent.ObjectID.String(), ContentGeneration: in.Intent.ContentGeneration})
@@ -105,24 +109,36 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.
 			return nil, errors.New("ai.source.unavailable")
 		}
 		// The original object size and hash are immutable inputs authorized by core.
-		if obj.Size > 64<<20 {
+		limit := c.MaxObjectBytes
+		if limit <= 0 {
+			limit = 64 << 20
+		}
+		if obj.Size < 0 || obj.Size > limit {
+			return nil, &ai.ParseError{Code: "ai.parse.resource_limit", ResourceLimit: true}
+		}
+		if obj.Size != in.Intent.Size {
 			return nil, asynccontrol.ErrInvalid
 		}
 		bytes, err := io.ReadAll(io.LimitReader(resp.Body, obj.Size+1))
 		if err != nil || int64(len(bytes)) != obj.Size || aiprotocol.Hash(bytes) != obj.Sha256 || obj.Sha256 != in.Intent.ContentHash {
 			return nil, errors.New("ai.source.hash_mismatch")
 		}
-		parsed, err := c.Parser.Parse(ctx, ai.ParseRequest{RunID: t.ID, ObjectID: in.Intent.ObjectID, DocumentVersionID: outputID, ContentHash: in.Intent.ContentHash, MediaType: in.Intent.MediaType, ObjectAddress: ai.ObjectReadAddress{Data: bytes, MediaType: in.Intent.MediaType}, ParserProfileVersion: in.Profile.Parser, SizeLimitBytes: 64 << 20, PageLimit: 10000, PixelLimit: 100000000, MaxChunks: 100000, ChunkerVersion: rag.ParentChildVersion})
+		var parsed ai.ParseResult
+		if aiprotocol.VisionImage(in.Intent.MediaType) {
+			parsed, err = ai.ParseVisionImage(ctx, c.Vision, in.Intent.MediaType, bytes, 40_000_000)
+		} else {
+			parsed, err = c.Parser.Parse(ctx, ai.ParseRequest{RunID: t.ID, ObjectID: in.Intent.ObjectID, DocumentVersionID: outputID, ContentHash: in.Intent.ContentHash, MediaType: in.Intent.MediaType, ObjectAddress: ai.ObjectReadAddress{Data: bytes, MediaType: in.Intent.MediaType}, ParserProfileVersion: in.Profile.Parser, SizeLimitBytes: limit, PageLimit: 1000, PixelLimit: 40_000_000, ChunkerVersion: in.Profile.Chunker})
+		}
 		if err != nil {
 			return nil, err
 		}
 		parsed.Chunks = nil // source publication never depends on parser-side chunks.
-		if len(parsed.Sections) == 0 {
-			return nil, errors.New("ai.source.empty")
+		if len(parsed.Sections) == 0 || !slices.ContainsFunc(parsed.Sections, func(s ai.Section) bool { return strings.TrimSpace(s.Text) != "" }) {
+			return nil, &ai.ParseError{Code: "ai.parse.quality_failed", Permanent: true}
 		}
 		count = int64(len(parsed.Sections))
 		coverage = "complete"
-		if parsed.ChunksTruncated {
+		if parsed.ChunksTruncated || parsed.Quality.EmptyPageRatio > 0 {
 			coverage = "partial"
 		}
 		data = sourceData{Parsed: parsed, Coverage: coverage}
@@ -131,7 +147,10 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.
 		if err != nil {
 			return nil, err
 		}
-		chunks, err := rag.BuildParentChild(outputID, blocks)
+		chunks, err := rag.BuildParentChildVersion(outputID, blocks, in.Profile.Chunker)
+		if errors.Is(err, rag.ErrParentChildResourceLimit) {
+			return nil, &ai.ParseError{Code: "ai.text.resource_limit", ResourceLimit: true}
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -180,10 +199,10 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.
 				return nil, asynccontrol.ErrInvalid
 			}
 			for n, v := range vs {
-				if len(v) != 1024 {
+				if !validVector(v, 1024) {
 					return nil, asynccontrol.ErrInvalid
 				}
-				vectors.Items = append(vectors.Items, vectorItem{children[offset+n].ID, v, aiprotocol.Hash([]byte(texts[n]))})
+				vectors.Items = append(vectors.Items, vectorItem{children[offset+n].ID, normalizedVector(v), aiprotocol.Hash([]byte(texts[n]))})
 			}
 		}
 		count = int64(len(vectors.Items))
@@ -200,33 +219,9 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.
 		if len(parts) == 0 {
 			return nil, errors.New("ai.summary.empty")
 		}
-		if len(parts)+1 > max(c.SummaryCalls, 2) {
-			return nil, errors.New("ai.summary.call_budget_exceeded")
-		}
-		summaries := []string{}
-		var insight ai.Insight
-		for _, part := range parts {
-			insight, err = c.Summary.Enrich(ctx, part)
-			if err != nil {
-				return nil, &modelBuildError{stage: "summary", cause: err}
-			}
-			if strings.TrimSpace(insight.Summary) == "" {
-				return nil, errors.New("ai.summary.empty")
-			}
-			summaries = append(summaries, insight.Summary)
-		}
-		if len(summaries) > 1 {
-			combined := strings.Join(summaries, "\n")
-			if rag.EstimateTokens(combined) > 6000 {
-				return nil, errors.New("ai.summary.reduce_budget_exceeded")
-			}
-			insight, err = c.Summary.Enrich(ctx, combined)
-			if err != nil {
-				return nil, &modelBuildError{stage: "summary", cause: err}
-			}
-			if strings.TrimSpace(insight.Summary) == "" {
-				return nil, errors.New("ai.summary.empty")
-			}
+		insight, summaries, err := c.summarize(ctx, parts)
+		if err != nil {
+			return nil, err
 		}
 		var sourceCoverage string
 		if err := c.DB.WithContext(ctx).Table("ai_published_sources").Select("coverage").Where("id=?", in.SourceID).Scan(&sourceCoverage).Error; err != nil {
@@ -284,6 +279,7 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.
 	out.RequestedSeq = seq(in, map[string]string{"ai.source.prepare": "source", "ai.text.build": "text", "ai.embedding.generate": "vector", "ai.summary.generate": "summary"}[t.Kind])
 	return json.Marshal(out)
 }
+
 func readBlocks(ctx context.Context, db *gorm.DB, id uuid.UUID) ([]rag.Section, error) {
 	var rows []struct {
 		Text, Kind, HeadingPath string
@@ -307,4 +303,16 @@ func readBlocks(ctx context.Context, db *gorm.DB, id uuid.UUID) ([]rag.Section, 
 		blocks = append(blocks, b)
 	}
 	return blocks, nil
+}
+
+func computeProfileCompatible(frozen, current aiprotocol.Profile, mediaType string) bool {
+	// Both implementations remain available: old work keeps its original IDs and ranges.
+	if frozen.Chunker == "parent-child-v1" {
+		current.Chunker = frozen.Chunker
+	}
+	if frozen.VisionProvider == "" && frozen.VisionModel == "" && !aiprotocol.VisionImage(mediaType) {
+		current.VisionProvider = ""
+		current.VisionModel = ""
+	}
+	return frozen.Digest() == current.Digest()
 }

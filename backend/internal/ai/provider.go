@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 type Insight struct {
@@ -88,7 +89,7 @@ func NewProvider(cfg config.AI) Provider {
 		return &dashScopeProvider{
 			apiKey: cfg.APIKey, baseURL: strings.TrimRight(cfg.BaseURL, "/"), chatModel: cfg.ChatModel,
 			embeddingModel: cfg.EmbeddingModel, visionModel: cfg.VisionModel, dimension: cfg.Dimension,
-			client: &http.Client{Timeout: cfg.RequestTimeout},
+			client: &http.Client{Timeout: cfg.RequestTimeout, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 		}
 	}
 	return &fakeProvider{dimension: cfg.Dimension}
@@ -217,7 +218,10 @@ func (p *dashScopeProvider) Embeddings(ctx context.Context, texts []string) ([][
 	}
 	sort.Slice(response.Data, func(i, j int) bool { return response.Data[i].Index < response.Data[j].Index })
 	result := make([][]float32, 0, len(response.Data))
-	for _, item := range response.Data {
+	for index, item := range response.Data {
+		if item.Index != index {
+			return nil, errors.New("embedding response index mismatch")
+		}
 		if len(item.Embedding) != p.dimension {
 			return nil, fmt.Errorf("embedding dimension is %d", len(item.Embedding))
 		}
@@ -324,7 +328,7 @@ func parseAnswerResult(content string, evidence []Evidence) (AnswerResult, error
 }
 
 func (p *dashScopeProvider) chat(ctx context.Context, model string, messages []map[string]any, jsonMode bool) (string, error) {
-	payload := map[string]any{"model": model, "messages": messages, "temperature": 0.2}
+	payload := map[string]any{"model": model, "messages": messages, "temperature": 0.2, "max_tokens": 4096, "enable_thinking": false}
 	if jsonMode {
 		payload["response_format"] = map[string]string{"type": "json_object"}
 	}

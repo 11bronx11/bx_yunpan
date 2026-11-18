@@ -186,6 +186,7 @@ type Citation struct {
 	PageNumber        int32                  `protobuf:"varint,8,opt,name=page_number,json=pageNumber,proto3" json:"page_number,omitempty"`
 	Section           string                 `protobuf:"bytes,9,opt,name=section,proto3" json:"section,omitempty"`
 	Excerpt           string                 `protobuf:"bytes,10,opt,name=excerpt,proto3" json:"excerpt,omitempty"`
+	SourceLocation    *SourceLocation        `protobuf:"bytes,12,opt,name=source_location,json=sourceLocation,proto3" json:"source_location,omitempty"`
 	SourceVersionId   string                 `protobuf:"bytes,11,opt,name=source_version_id,json=sourceVersionId,proto3" json:"source_version_id,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
@@ -291,9 +292,156 @@ func (x *Citation) GetExcerpt() string {
 	return ""
 }
 
+func (x *Citation) GetSourceLocation() *SourceLocation {
+	if x != nil {
+		return x.SourceLocation
+	}
+	return nil
+}
+
 func (x *Citation) GetSourceVersionId() string {
 	if x != nil {
 		return x.SourceVersionId
+	}
+	return ""
+}
+
+type SourceLocation struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SourceKind    string                 `protobuf:"bytes,1,opt,name=source_kind,json=sourceKind,proto3" json:"source_kind,omitempty"`
+	PageStart     int32                  `protobuf:"varint,2,opt,name=page_start,json=pageStart,proto3" json:"page_start,omitempty"`
+	PageEnd       int32                  `protobuf:"varint,3,opt,name=page_end,json=pageEnd,proto3" json:"page_end,omitempty"`
+	SheetName     string                 `protobuf:"bytes,4,opt,name=sheet_name,json=sheetName,proto3" json:"sheet_name,omitempty"`
+	RowStart      int32                  `protobuf:"varint,5,opt,name=row_start,json=rowStart,proto3" json:"row_start,omitempty"`
+	RowEnd        int32                  `protobuf:"varint,6,opt,name=row_end,json=rowEnd,proto3" json:"row_end,omitempty"`
+	ColumnStart   int32                  `protobuf:"varint,7,opt,name=column_start,json=columnStart,proto3" json:"column_start,omitempty"`
+	ColumnEnd     int32                  `protobuf:"varint,8,opt,name=column_end,json=columnEnd,proto3" json:"column_end,omitempty"`
+	HeadingPath   string                 `protobuf:"bytes,9,opt,name=heading_path,json=headingPath,proto3" json:"heading_path,omitempty"`
+	Kind          string                 `protobuf:"bytes,10,opt,name=kind,proto3" json:"kind,omitempty"`
+	SourceStart   int64                  `protobuf:"varint,11,opt,name=source_start,json=sourceStart,proto3" json:"source_start,omitempty"`
+	SourceEnd     int64                  `protobuf:"varint,12,opt,name=source_end,json=sourceEnd,proto3" json:"source_end,omitempty"`
+	Encoding      string                 `protobuf:"bytes,13,opt,name=encoding,proto3" json:"encoding,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SourceLocation) Reset() {
+	*x = SourceLocation{}
+	mi := &file_ai_v2_query_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SourceLocation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SourceLocation) ProtoMessage() {}
+
+func (x *SourceLocation) ProtoReflect() protoreflect.Message {
+	mi := &file_ai_v2_query_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SourceLocation.ProtoReflect.Descriptor instead.
+func (*SourceLocation) Descriptor() ([]byte, []int) {
+	return file_ai_v2_query_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *SourceLocation) GetSourceKind() string {
+	if x != nil {
+		return x.SourceKind
+	}
+	return ""
+}
+
+func (x *SourceLocation) GetPageStart() int32 {
+	if x != nil {
+		return x.PageStart
+	}
+	return 0
+}
+
+func (x *SourceLocation) GetPageEnd() int32 {
+	if x != nil {
+		return x.PageEnd
+	}
+	return 0
+}
+
+func (x *SourceLocation) GetSheetName() string {
+	if x != nil {
+		return x.SheetName
+	}
+	return ""
+}
+
+func (x *SourceLocation) GetRowStart() int32 {
+	if x != nil {
+		return x.RowStart
+	}
+	return 0
+}
+
+func (x *SourceLocation) GetRowEnd() int32 {
+	if x != nil {
+		return x.RowEnd
+	}
+	return 0
+}
+
+func (x *SourceLocation) GetColumnStart() int32 {
+	if x != nil {
+		return x.ColumnStart
+	}
+	return 0
+}
+
+func (x *SourceLocation) GetColumnEnd() int32 {
+	if x != nil {
+		return x.ColumnEnd
+	}
+	return 0
+}
+
+func (x *SourceLocation) GetHeadingPath() string {
+	if x != nil {
+		return x.HeadingPath
+	}
+	return ""
+}
+
+func (x *SourceLocation) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *SourceLocation) GetSourceStart() int64 {
+	if x != nil {
+		return x.SourceStart
+	}
+	return 0
+}
+
+func (x *SourceLocation) GetSourceEnd() int64 {
+	if x != nil {
+		return x.SourceEnd
+	}
+	return 0
+}
+
+func (x *SourceLocation) GetEncoding() string {
+	if x != nil {
+		return x.Encoding
 	}
 	return ""
 }
@@ -310,7 +458,7 @@ type SearchHit struct {
 
 func (x *SearchHit) Reset() {
 	*x = SearchHit{}
-	mi := &file_ai_v2_query_proto_msgTypes[3]
+	mi := &file_ai_v2_query_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -322,7 +470,7 @@ func (x *SearchHit) String() string {
 func (*SearchHit) ProtoMessage() {}
 
 func (x *SearchHit) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v2_query_proto_msgTypes[3]
+	mi := &file_ai_v2_query_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -335,7 +483,7 @@ func (x *SearchHit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchHit.ProtoReflect.Descriptor instead.
 func (*SearchHit) Descriptor() ([]byte, []int) {
-	return file_ai_v2_query_proto_rawDescGZIP(), []int{3}
+	return file_ai_v2_query_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SearchHit) GetFile() *pb.FileRef {
@@ -382,7 +530,7 @@ type Retrieval struct {
 
 func (x *Retrieval) Reset() {
 	*x = Retrieval{}
-	mi := &file_ai_v2_query_proto_msgTypes[4]
+	mi := &file_ai_v2_query_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -394,7 +542,7 @@ func (x *Retrieval) String() string {
 func (*Retrieval) ProtoMessage() {}
 
 func (x *Retrieval) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v2_query_proto_msgTypes[4]
+	mi := &file_ai_v2_query_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -407,7 +555,7 @@ func (x *Retrieval) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Retrieval.ProtoReflect.Descriptor instead.
 func (*Retrieval) Descriptor() ([]byte, []int) {
-	return file_ai_v2_query_proto_rawDescGZIP(), []int{4}
+	return file_ai_v2_query_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Retrieval) GetTextBackend() string {
@@ -477,7 +625,7 @@ type Coverage struct {
 
 func (x *Coverage) Reset() {
 	*x = Coverage{}
-	mi := &file_ai_v2_query_proto_msgTypes[5]
+	mi := &file_ai_v2_query_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -489,7 +637,7 @@ func (x *Coverage) String() string {
 func (*Coverage) ProtoMessage() {}
 
 func (x *Coverage) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v2_query_proto_msgTypes[5]
+	mi := &file_ai_v2_query_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -502,7 +650,7 @@ func (x *Coverage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Coverage.ProtoReflect.Descriptor instead.
 func (*Coverage) Descriptor() ([]byte, []int) {
-	return file_ai_v2_query_proto_rawDescGZIP(), []int{5}
+	return file_ai_v2_query_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Coverage) GetMode() string {
@@ -537,7 +685,7 @@ type SearchResponse struct {
 
 func (x *SearchResponse) Reset() {
 	*x = SearchResponse{}
-	mi := &file_ai_v2_query_proto_msgTypes[6]
+	mi := &file_ai_v2_query_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -549,7 +697,7 @@ func (x *SearchResponse) String() string {
 func (*SearchResponse) ProtoMessage() {}
 
 func (x *SearchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v2_query_proto_msgTypes[6]
+	mi := &file_ai_v2_query_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -562,7 +710,7 @@ func (x *SearchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchResponse.ProtoReflect.Descriptor instead.
 func (*SearchResponse) Descriptor() ([]byte, []int) {
-	return file_ai_v2_query_proto_rawDescGZIP(), []int{6}
+	return file_ai_v2_query_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *SearchResponse) GetHits() []*SearchHit {
@@ -597,7 +745,7 @@ type AskRequest struct {
 
 func (x *AskRequest) Reset() {
 	*x = AskRequest{}
-	mi := &file_ai_v2_query_proto_msgTypes[7]
+	mi := &file_ai_v2_query_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -609,7 +757,7 @@ func (x *AskRequest) String() string {
 func (*AskRequest) ProtoMessage() {}
 
 func (x *AskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v2_query_proto_msgTypes[7]
+	mi := &file_ai_v2_query_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -622,7 +770,7 @@ func (x *AskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AskRequest.ProtoReflect.Descriptor instead.
 func (*AskRequest) Descriptor() ([]byte, []int) {
-	return file_ai_v2_query_proto_rawDescGZIP(), []int{7}
+	return file_ai_v2_query_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AskRequest) GetGrant() string {
@@ -659,7 +807,7 @@ type AskResponse struct {
 
 func (x *AskResponse) Reset() {
 	*x = AskResponse{}
-	mi := &file_ai_v2_query_proto_msgTypes[8]
+	mi := &file_ai_v2_query_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -671,7 +819,7 @@ func (x *AskResponse) String() string {
 func (*AskResponse) ProtoMessage() {}
 
 func (x *AskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v2_query_proto_msgTypes[8]
+	mi := &file_ai_v2_query_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -684,7 +832,7 @@ func (x *AskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AskResponse.ProtoReflect.Descriptor instead.
 func (*AskResponse) Descriptor() ([]byte, []int) {
-	return file_ai_v2_query_proto_rawDescGZIP(), []int{8}
+	return file_ai_v2_query_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *AskResponse) GetAnswer() string {
@@ -733,7 +881,7 @@ type LatestBuild struct {
 
 func (x *LatestBuild) Reset() {
 	*x = LatestBuild{}
-	mi := &file_ai_v2_query_proto_msgTypes[9]
+	mi := &file_ai_v2_query_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -745,7 +893,7 @@ func (x *LatestBuild) String() string {
 func (*LatestBuild) ProtoMessage() {}
 
 func (x *LatestBuild) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v2_query_proto_msgTypes[9]
+	mi := &file_ai_v2_query_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -758,7 +906,7 @@ func (x *LatestBuild) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LatestBuild.ProtoReflect.Descriptor instead.
 func (*LatestBuild) Descriptor() ([]byte, []int) {
-	return file_ai_v2_query_proto_rawDescGZIP(), []int{9}
+	return file_ai_v2_query_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *LatestBuild) GetState() string {
@@ -796,7 +944,7 @@ type Capability struct {
 
 func (x *Capability) Reset() {
 	*x = Capability{}
-	mi := &file_ai_v2_query_proto_msgTypes[10]
+	mi := &file_ai_v2_query_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -808,7 +956,7 @@ func (x *Capability) String() string {
 func (*Capability) ProtoMessage() {}
 
 func (x *Capability) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v2_query_proto_msgTypes[10]
+	mi := &file_ai_v2_query_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -821,7 +969,7 @@ func (x *Capability) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Capability.ProtoReflect.Descriptor instead.
 func (*Capability) Descriptor() ([]byte, []int) {
-	return file_ai_v2_query_proto_rawDescGZIP(), []int{10}
+	return file_ai_v2_query_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Capability) GetSupported() bool {
@@ -879,7 +1027,7 @@ type Capabilities struct {
 
 func (x *Capabilities) Reset() {
 	*x = Capabilities{}
-	mi := &file_ai_v2_query_proto_msgTypes[11]
+	mi := &file_ai_v2_query_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -891,7 +1039,7 @@ func (x *Capabilities) String() string {
 func (*Capabilities) ProtoMessage() {}
 
 func (x *Capabilities) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v2_query_proto_msgTypes[11]
+	mi := &file_ai_v2_query_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -904,7 +1052,7 @@ func (x *Capabilities) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Capabilities.ProtoReflect.Descriptor instead.
 func (*Capabilities) Descriptor() ([]byte, []int) {
-	return file_ai_v2_query_proto_rawDescGZIP(), []int{11}
+	return file_ai_v2_query_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Capabilities) GetAskable() bool {
@@ -953,7 +1101,7 @@ type ObjectRef struct {
 
 func (x *ObjectRef) Reset() {
 	*x = ObjectRef{}
-	mi := &file_ai_v2_query_proto_msgTypes[12]
+	mi := &file_ai_v2_query_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -965,7 +1113,7 @@ func (x *ObjectRef) String() string {
 func (*ObjectRef) ProtoMessage() {}
 
 func (x *ObjectRef) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v2_query_proto_msgTypes[12]
+	mi := &file_ai_v2_query_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -978,7 +1126,7 @@ func (x *ObjectRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObjectRef.ProtoReflect.Descriptor instead.
 func (*ObjectRef) Descriptor() ([]byte, []int) {
-	return file_ai_v2_query_proto_rawDescGZIP(), []int{12}
+	return file_ai_v2_query_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ObjectRef) GetObjectId() string {
@@ -1011,7 +1159,7 @@ type BatchCapabilitiesRequest struct {
 
 func (x *BatchCapabilitiesRequest) Reset() {
 	*x = BatchCapabilitiesRequest{}
-	mi := &file_ai_v2_query_proto_msgTypes[13]
+	mi := &file_ai_v2_query_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1023,7 +1171,7 @@ func (x *BatchCapabilitiesRequest) String() string {
 func (*BatchCapabilitiesRequest) ProtoMessage() {}
 
 func (x *BatchCapabilitiesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v2_query_proto_msgTypes[13]
+	mi := &file_ai_v2_query_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1036,7 +1184,7 @@ func (x *BatchCapabilitiesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchCapabilitiesRequest.ProtoReflect.Descriptor instead.
 func (*BatchCapabilitiesRequest) Descriptor() ([]byte, []int) {
-	return file_ai_v2_query_proto_rawDescGZIP(), []int{13}
+	return file_ai_v2_query_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *BatchCapabilitiesRequest) GetObjects() []*ObjectRef {
@@ -1056,7 +1204,7 @@ type ObjectCapabilities struct {
 
 func (x *ObjectCapabilities) Reset() {
 	*x = ObjectCapabilities{}
-	mi := &file_ai_v2_query_proto_msgTypes[14]
+	mi := &file_ai_v2_query_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1068,7 +1216,7 @@ func (x *ObjectCapabilities) String() string {
 func (*ObjectCapabilities) ProtoMessage() {}
 
 func (x *ObjectCapabilities) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v2_query_proto_msgTypes[14]
+	mi := &file_ai_v2_query_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1081,7 +1229,7 @@ func (x *ObjectCapabilities) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObjectCapabilities.ProtoReflect.Descriptor instead.
 func (*ObjectCapabilities) Descriptor() ([]byte, []int) {
-	return file_ai_v2_query_proto_rawDescGZIP(), []int{14}
+	return file_ai_v2_query_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ObjectCapabilities) GetObject() *ObjectRef {
@@ -1107,7 +1255,7 @@ type BatchCapabilitiesResponse struct {
 
 func (x *BatchCapabilitiesResponse) Reset() {
 	*x = BatchCapabilitiesResponse{}
-	mi := &file_ai_v2_query_proto_msgTypes[15]
+	mi := &file_ai_v2_query_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1119,7 +1267,7 @@ func (x *BatchCapabilitiesResponse) String() string {
 func (*BatchCapabilitiesResponse) ProtoMessage() {}
 
 func (x *BatchCapabilitiesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v2_query_proto_msgTypes[15]
+	mi := &file_ai_v2_query_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1132,7 +1280,7 @@ func (x *BatchCapabilitiesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchCapabilitiesResponse.ProtoReflect.Descriptor instead.
 func (*BatchCapabilitiesResponse) Descriptor() ([]byte, []int) {
-	return file_ai_v2_query_proto_rawDescGZIP(), []int{15}
+	return file_ai_v2_query_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *BatchCapabilitiesResponse) GetItems() []*ObjectCapabilities {
@@ -1152,7 +1300,7 @@ type GetOverviewRequest struct {
 
 func (x *GetOverviewRequest) Reset() {
 	*x = GetOverviewRequest{}
-	mi := &file_ai_v2_query_proto_msgTypes[16]
+	mi := &file_ai_v2_query_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1164,7 +1312,7 @@ func (x *GetOverviewRequest) String() string {
 func (*GetOverviewRequest) ProtoMessage() {}
 
 func (x *GetOverviewRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v2_query_proto_msgTypes[16]
+	mi := &file_ai_v2_query_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1177,7 +1325,7 @@ func (x *GetOverviewRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOverviewRequest.ProtoReflect.Descriptor instead.
 func (*GetOverviewRequest) Descriptor() ([]byte, []int) {
-	return file_ai_v2_query_proto_rawDescGZIP(), []int{16}
+	return file_ai_v2_query_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *GetOverviewRequest) GetGrant() string {
@@ -1212,7 +1360,7 @@ type OverviewResponse struct {
 
 func (x *OverviewResponse) Reset() {
 	*x = OverviewResponse{}
-	mi := &file_ai_v2_query_proto_msgTypes[17]
+	mi := &file_ai_v2_query_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1224,7 +1372,7 @@ func (x *OverviewResponse) String() string {
 func (*OverviewResponse) ProtoMessage() {}
 
 func (x *OverviewResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ai_v2_query_proto_msgTypes[17]
+	mi := &file_ai_v2_query_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1237,7 +1385,7 @@ func (x *OverviewResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OverviewResponse.ProtoReflect.Descriptor instead.
 func (*OverviewResponse) Descriptor() ([]byte, []int) {
-	return file_ai_v2_query_proto_rawDescGZIP(), []int{17}
+	return file_ai_v2_query_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *OverviewResponse) GetFileId() string {
@@ -1328,7 +1476,7 @@ const file_ai_v2_query_proto_rawDesc = "" +
 	"\x04mode\x18\x03 \x01(\tR\x04mode\x12\x14\n" +
 	"\x05limit\x18\x04 \x01(\x05R\x05limit\x12\x1d\n" +
 	"\n" +
-	"mime_types\x18\x05 \x03(\tR\tmimeTypes\"\xe6\x02\n" +
+	"mime_types\x18\x05 \x03(\tR\tmimeTypes\"\xad\x03\n" +
 	"\bCitation\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\afile_id\x18\x02 \x01(\tR\x06fileId\x12\x1b\n" +
@@ -1341,8 +1489,29 @@ const file_ai_v2_query_proto_rawDesc = "" +
 	"pageNumber\x12\x18\n" +
 	"\asection\x18\t \x01(\tR\asection\x12\x18\n" +
 	"\aexcerpt\x18\n" +
-	" \x01(\tR\aexcerpt\x12*\n" +
-	"\x11source_version_id\x18\v \x01(\tR\x0fsourceVersionId\"\xa3\x01\n" +
+	" \x01(\tR\aexcerpt\x12E\n" +
+	"\x0fsource_location\x18\f \x01(\v2\x1c.yunpan.ai.v2.SourceLocationR\x0esourceLocation\x12*\n" +
+	"\x11source_version_id\x18\v \x01(\tR\x0fsourceVersionId\"\x97\x03\n" +
+	"\x0eSourceLocation\x12\x1f\n" +
+	"\vsource_kind\x18\x01 \x01(\tR\n" +
+	"sourceKind\x12\x1d\n" +
+	"\n" +
+	"page_start\x18\x02 \x01(\x05R\tpageStart\x12\x19\n" +
+	"\bpage_end\x18\x03 \x01(\x05R\apageEnd\x12\x1d\n" +
+	"\n" +
+	"sheet_name\x18\x04 \x01(\tR\tsheetName\x12\x1b\n" +
+	"\trow_start\x18\x05 \x01(\x05R\browStart\x12\x17\n" +
+	"\arow_end\x18\x06 \x01(\x05R\x06rowEnd\x12!\n" +
+	"\fcolumn_start\x18\a \x01(\x05R\vcolumnStart\x12\x1d\n" +
+	"\n" +
+	"column_end\x18\b \x01(\x05R\tcolumnEnd\x12!\n" +
+	"\fheading_path\x18\t \x01(\tR\vheadingPath\x12\x12\n" +
+	"\x04kind\x18\n" +
+	" \x01(\tR\x04kind\x12!\n" +
+	"\fsource_start\x18\v \x01(\x03R\vsourceStart\x12\x1d\n" +
+	"\n" +
+	"source_end\x18\f \x01(\x03R\tsourceEnd\x12\x1a\n" +
+	"\bencoding\x18\r \x01(\tR\bencoding\"\xa3\x01\n" +
 	"\tSearchHit\x12+\n" +
 	"\x04file\x18\x01 \x01(\v2\x17.yunpan.core.v1.FileRefR\x04file\x12\x14\n" +
 	"\x05score\x18\x02 \x01(\x01R\x05score\x12\x1d\n" +
@@ -1446,62 +1615,64 @@ func file_ai_v2_query_proto_rawDescGZIP() []byte {
 	return file_ai_v2_query_proto_rawDescData
 }
 
-var file_ai_v2_query_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_ai_v2_query_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_ai_v2_query_proto_goTypes = []any{
 	(*Scope)(nil),                     // 0: yunpan.ai.v2.Scope
 	(*SearchRequest)(nil),             // 1: yunpan.ai.v2.SearchRequest
 	(*Citation)(nil),                  // 2: yunpan.ai.v2.Citation
-	(*SearchHit)(nil),                 // 3: yunpan.ai.v2.SearchHit
-	(*Retrieval)(nil),                 // 4: yunpan.ai.v2.Retrieval
-	(*Coverage)(nil),                  // 5: yunpan.ai.v2.Coverage
-	(*SearchResponse)(nil),            // 6: yunpan.ai.v2.SearchResponse
-	(*AskRequest)(nil),                // 7: yunpan.ai.v2.AskRequest
-	(*AskResponse)(nil),               // 8: yunpan.ai.v2.AskResponse
-	(*LatestBuild)(nil),               // 9: yunpan.ai.v2.LatestBuild
-	(*Capability)(nil),                // 10: yunpan.ai.v2.Capability
-	(*Capabilities)(nil),              // 11: yunpan.ai.v2.Capabilities
-	(*ObjectRef)(nil),                 // 12: yunpan.ai.v2.ObjectRef
-	(*BatchCapabilitiesRequest)(nil),  // 13: yunpan.ai.v2.BatchCapabilitiesRequest
-	(*ObjectCapabilities)(nil),        // 14: yunpan.ai.v2.ObjectCapabilities
-	(*BatchCapabilitiesResponse)(nil), // 15: yunpan.ai.v2.BatchCapabilitiesResponse
-	(*GetOverviewRequest)(nil),        // 16: yunpan.ai.v2.GetOverviewRequest
-	(*OverviewResponse)(nil),          // 17: yunpan.ai.v2.OverviewResponse
-	(*pb.FileRef)(nil),                // 18: yunpan.core.v1.FileRef
+	(*SourceLocation)(nil),            // 3: yunpan.ai.v2.SourceLocation
+	(*SearchHit)(nil),                 // 4: yunpan.ai.v2.SearchHit
+	(*Retrieval)(nil),                 // 5: yunpan.ai.v2.Retrieval
+	(*Coverage)(nil),                  // 6: yunpan.ai.v2.Coverage
+	(*SearchResponse)(nil),            // 7: yunpan.ai.v2.SearchResponse
+	(*AskRequest)(nil),                // 8: yunpan.ai.v2.AskRequest
+	(*AskResponse)(nil),               // 9: yunpan.ai.v2.AskResponse
+	(*LatestBuild)(nil),               // 10: yunpan.ai.v2.LatestBuild
+	(*Capability)(nil),                // 11: yunpan.ai.v2.Capability
+	(*Capabilities)(nil),              // 12: yunpan.ai.v2.Capabilities
+	(*ObjectRef)(nil),                 // 13: yunpan.ai.v2.ObjectRef
+	(*BatchCapabilitiesRequest)(nil),  // 14: yunpan.ai.v2.BatchCapabilitiesRequest
+	(*ObjectCapabilities)(nil),        // 15: yunpan.ai.v2.ObjectCapabilities
+	(*BatchCapabilitiesResponse)(nil), // 16: yunpan.ai.v2.BatchCapabilitiesResponse
+	(*GetOverviewRequest)(nil),        // 17: yunpan.ai.v2.GetOverviewRequest
+	(*OverviewResponse)(nil),          // 18: yunpan.ai.v2.OverviewResponse
+	(*pb.FileRef)(nil),                // 19: yunpan.core.v1.FileRef
 }
 var file_ai_v2_query_proto_depIdxs = []int32{
-	18, // 0: yunpan.ai.v2.SearchHit.file:type_name -> yunpan.core.v1.FileRef
-	2,  // 1: yunpan.ai.v2.SearchHit.citations:type_name -> yunpan.ai.v2.Citation
-	3,  // 2: yunpan.ai.v2.SearchResponse.hits:type_name -> yunpan.ai.v2.SearchHit
-	4,  // 3: yunpan.ai.v2.SearchResponse.retrieval:type_name -> yunpan.ai.v2.Retrieval
-	5,  // 4: yunpan.ai.v2.SearchResponse.coverage:type_name -> yunpan.ai.v2.Coverage
-	2,  // 5: yunpan.ai.v2.AskResponse.citations:type_name -> yunpan.ai.v2.Citation
-	0,  // 6: yunpan.ai.v2.AskResponse.scope:type_name -> yunpan.ai.v2.Scope
-	4,  // 7: yunpan.ai.v2.AskResponse.retrieval:type_name -> yunpan.ai.v2.Retrieval
-	5,  // 8: yunpan.ai.v2.AskResponse.coverage:type_name -> yunpan.ai.v2.Coverage
-	9,  // 9: yunpan.ai.v2.Capability.latest_build:type_name -> yunpan.ai.v2.LatestBuild
-	10, // 10: yunpan.ai.v2.Capabilities.source:type_name -> yunpan.ai.v2.Capability
-	10, // 11: yunpan.ai.v2.Capabilities.text:type_name -> yunpan.ai.v2.Capability
-	10, // 12: yunpan.ai.v2.Capabilities.vector:type_name -> yunpan.ai.v2.Capability
-	10, // 13: yunpan.ai.v2.Capabilities.summary:type_name -> yunpan.ai.v2.Capability
-	12, // 14: yunpan.ai.v2.BatchCapabilitiesRequest.objects:type_name -> yunpan.ai.v2.ObjectRef
-	12, // 15: yunpan.ai.v2.ObjectCapabilities.object:type_name -> yunpan.ai.v2.ObjectRef
-	11, // 16: yunpan.ai.v2.ObjectCapabilities.capabilities:type_name -> yunpan.ai.v2.Capabilities
-	14, // 17: yunpan.ai.v2.BatchCapabilitiesResponse.items:type_name -> yunpan.ai.v2.ObjectCapabilities
-	11, // 18: yunpan.ai.v2.OverviewResponse.capabilities:type_name -> yunpan.ai.v2.Capabilities
-	5,  // 19: yunpan.ai.v2.OverviewResponse.coverage:type_name -> yunpan.ai.v2.Coverage
-	1,  // 20: yunpan.ai.v2.AIQueryService.Search:input_type -> yunpan.ai.v2.SearchRequest
-	7,  // 21: yunpan.ai.v2.AIQueryService.Ask:input_type -> yunpan.ai.v2.AskRequest
-	13, // 22: yunpan.ai.v2.AIQueryService.BatchCapabilities:input_type -> yunpan.ai.v2.BatchCapabilitiesRequest
-	16, // 23: yunpan.ai.v2.AIQueryService.GetOverview:input_type -> yunpan.ai.v2.GetOverviewRequest
-	6,  // 24: yunpan.ai.v2.AIQueryService.Search:output_type -> yunpan.ai.v2.SearchResponse
-	8,  // 25: yunpan.ai.v2.AIQueryService.Ask:output_type -> yunpan.ai.v2.AskResponse
-	15, // 26: yunpan.ai.v2.AIQueryService.BatchCapabilities:output_type -> yunpan.ai.v2.BatchCapabilitiesResponse
-	17, // 27: yunpan.ai.v2.AIQueryService.GetOverview:output_type -> yunpan.ai.v2.OverviewResponse
-	24, // [24:28] is the sub-list for method output_type
-	20, // [20:24] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	3,  // 0: yunpan.ai.v2.Citation.source_location:type_name -> yunpan.ai.v2.SourceLocation
+	19, // 1: yunpan.ai.v2.SearchHit.file:type_name -> yunpan.core.v1.FileRef
+	2,  // 2: yunpan.ai.v2.SearchHit.citations:type_name -> yunpan.ai.v2.Citation
+	4,  // 3: yunpan.ai.v2.SearchResponse.hits:type_name -> yunpan.ai.v2.SearchHit
+	5,  // 4: yunpan.ai.v2.SearchResponse.retrieval:type_name -> yunpan.ai.v2.Retrieval
+	6,  // 5: yunpan.ai.v2.SearchResponse.coverage:type_name -> yunpan.ai.v2.Coverage
+	2,  // 6: yunpan.ai.v2.AskResponse.citations:type_name -> yunpan.ai.v2.Citation
+	0,  // 7: yunpan.ai.v2.AskResponse.scope:type_name -> yunpan.ai.v2.Scope
+	5,  // 8: yunpan.ai.v2.AskResponse.retrieval:type_name -> yunpan.ai.v2.Retrieval
+	6,  // 9: yunpan.ai.v2.AskResponse.coverage:type_name -> yunpan.ai.v2.Coverage
+	10, // 10: yunpan.ai.v2.Capability.latest_build:type_name -> yunpan.ai.v2.LatestBuild
+	11, // 11: yunpan.ai.v2.Capabilities.source:type_name -> yunpan.ai.v2.Capability
+	11, // 12: yunpan.ai.v2.Capabilities.text:type_name -> yunpan.ai.v2.Capability
+	11, // 13: yunpan.ai.v2.Capabilities.vector:type_name -> yunpan.ai.v2.Capability
+	11, // 14: yunpan.ai.v2.Capabilities.summary:type_name -> yunpan.ai.v2.Capability
+	13, // 15: yunpan.ai.v2.BatchCapabilitiesRequest.objects:type_name -> yunpan.ai.v2.ObjectRef
+	13, // 16: yunpan.ai.v2.ObjectCapabilities.object:type_name -> yunpan.ai.v2.ObjectRef
+	12, // 17: yunpan.ai.v2.ObjectCapabilities.capabilities:type_name -> yunpan.ai.v2.Capabilities
+	15, // 18: yunpan.ai.v2.BatchCapabilitiesResponse.items:type_name -> yunpan.ai.v2.ObjectCapabilities
+	12, // 19: yunpan.ai.v2.OverviewResponse.capabilities:type_name -> yunpan.ai.v2.Capabilities
+	6,  // 20: yunpan.ai.v2.OverviewResponse.coverage:type_name -> yunpan.ai.v2.Coverage
+	1,  // 21: yunpan.ai.v2.AIQueryService.Search:input_type -> yunpan.ai.v2.SearchRequest
+	8,  // 22: yunpan.ai.v2.AIQueryService.Ask:input_type -> yunpan.ai.v2.AskRequest
+	14, // 23: yunpan.ai.v2.AIQueryService.BatchCapabilities:input_type -> yunpan.ai.v2.BatchCapabilitiesRequest
+	17, // 24: yunpan.ai.v2.AIQueryService.GetOverview:input_type -> yunpan.ai.v2.GetOverviewRequest
+	7,  // 25: yunpan.ai.v2.AIQueryService.Search:output_type -> yunpan.ai.v2.SearchResponse
+	9,  // 26: yunpan.ai.v2.AIQueryService.Ask:output_type -> yunpan.ai.v2.AskResponse
+	16, // 27: yunpan.ai.v2.AIQueryService.BatchCapabilities:output_type -> yunpan.ai.v2.BatchCapabilitiesResponse
+	18, // 28: yunpan.ai.v2.AIQueryService.GetOverview:output_type -> yunpan.ai.v2.OverviewResponse
+	25, // [25:29] is the sub-list for method output_type
+	21, // [21:25] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_ai_v2_query_proto_init() }
@@ -1515,7 +1686,7 @@ func file_ai_v2_query_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ai_v2_query_proto_rawDesc), len(file_ai_v2_query_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   18,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

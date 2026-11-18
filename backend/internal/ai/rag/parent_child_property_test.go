@@ -33,13 +33,13 @@ func TestParentChildBoundedProperties(t *testing.T) {
 					t.Fatalf("n=%d nondeterministic", n)
 				}
 				ids := map[uuid.UUID]bool{}
-				joined := map[int]string{}
+				joined := map[[2]int]string{}
 				for _, parent := range got.Parents {
 					if ids[parent.ID] || parent.TokenCount > 2400 || !utf8.ValidString(parent.Content) {
 						t.Fatal("invalid parent")
 					}
 					ids[parent.ID] = true
-					joined[parent.BlockStart] += parent.Content
+					joined[[2]int{parent.BlockStart, parent.BlockEnd}] += parent.Content
 					covered := make([]bool, len([]rune(parent.Content)))
 					for _, child := range got.Children {
 						if child.ParentID != parent.ID {
@@ -62,9 +62,26 @@ func TestParentChildBoundedProperties(t *testing.T) {
 						}
 					}
 				}
-				for i, block := range blocks {
-					if joined[i] != strings.TrimSpace(strings.ReplaceAll(block.Text, "\r\n", "\n")) {
+				seenBlocks := map[int]bool{}
+				for span, text := range joined {
+					var expected []string
+					for i := span[0]; i <= span[1]; i++ {
+						if i < 0 || i >= len(blocks) || seenBlocks[i] {
+							t.Fatal("invalid/duplicate source block range")
+						}
+						seenBlocks[i] = true
+						part := strings.TrimSpace(strings.ReplaceAll(blocks[i].Text, "\r\n", "\n"))
+						if part != "" {
+							expected = append(expected, part)
+						}
+					}
+					if text != strings.Join(expected, "\n\n") {
 						t.Fatalf("n=%d dropped source runes", n)
+					}
+				}
+				for i, b := range blocks {
+					if strings.TrimSpace(b.Text) != "" && !seenBlocks[i] {
+						t.Fatal("uncovered source block")
 					}
 				}
 			}

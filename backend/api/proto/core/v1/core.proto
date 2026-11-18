@@ -8,7 +8,7 @@ service CoreReadService {
  rpc GetObjectForProcessing(ProcessingRequest) returns (ProcessingResponse);
  rpc BatchGetFileRefs(FileRefsRequest) returns (FileRefsResponse);
 }
-message FileRef { string file_id=1; string object_id=2; int64 content_generation=3; int64 entry_version=4; string name=5; string path=6; string mime_type=7; int64 size=8; string updated_at=9; string folder_id=10; }
+message FileRef { string file_id=1; string object_id=2; int64 content_generation=3; int64 entry_version=4; string name=5; string path=6; string mime_type=7; int64 size=8; string updated_at=9; string folder_id=10; string thumbnail_state=11; }
 message OpenScopeRequest { string grant=1; }
 message ScopeResponse { string snapshot_id=1; int64 content_epoch=2; int64 acl_epoch=3; int64 expires_at=4; }
 message ScopeMembersRequest { string grant=1; string cursor=2; int32 limit=3; string query=4; repeated string mime_types=5; string sort=6; }

@@ -26,6 +26,7 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dbmetrics"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dependencies"
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/httpapi"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/registry"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/serviceauth"
@@ -76,7 +77,7 @@ func RunAPI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			return err
 		}
 		aiHTTP.ScopeKey = key
-		conn, closeRegistry, err := internalClient(cfg, "ai-query-v2", cfg.AISplit.QueryTarget, cfg.AISplit.QueryToken)
+		conn, closeRegistry, err := internalClient(cfg, "ai-query-v2", cfg.AISplit.QueryTarget, cfg.AISplit.QueryToken, grpcx.NewMetrics(metrics.Registry, "client"))
 		if err != nil {
 			return err
 		}

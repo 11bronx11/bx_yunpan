@@ -32,6 +32,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"gorm.io/gorm"
 )
 
@@ -149,7 +153,7 @@ func TestAISplitRealDependencies(t *testing.T) {
 		u.User = url.UserPassword(role, password)
 		roleDSNs[kind] = u.String()
 	}
-	for key, value := range map[string]string{"POSTGRES_PRIMARY_DSN": bizDSN, "POSTGRES_READONLY_DSN": readerDSN.String(), "ASYNC_CONTROL_DSN": ctrlDSN, "RABBITMQ_URL": os.Getenv("TEST_RABBITMQ_URL"), "S3_ENDPOINT": os.Getenv("TEST_MINIO_ENDPOINT"), "S3_PUBLIC_ENDPOINT": os.Getenv("TEST_MINIO_ENDPOINT"), "S3_ACCESS_KEY": os.Getenv("TEST_MINIO_ACCESS_KEY"), "S3_SECRET_KEY": os.Getenv("TEST_MINIO_SECRET_KEY"), "S3_BUCKET": "ai-split-" + suffix, "S3_PUBLIC_PATH_PREFIX": "", "AI_QUERY_DSN": roleDSNs["query"], "AI_COMPUTE_DSN": roleDSNs["compute"], "AI_COMMIT_DSN": roleDSNs["commit"], "AI_ENABLED": "true", "AI_PROVIDER": "fake", "AI_PROFILE_ID": "smoke-" + suffix, "AI_PROJECTION_NAMESPACE": "bx-ai-test-" + suffix, "AI_PROFILE_REVISION": "v1", "ETCD_ENABLED": "true", "ETCD_ENDPOINTS": os.Getenv("TEST_ETCD_ENDPOINT"), "PARSER_WORKER_DIR": "../../parser_worker", "PARSER_REMOTE_ENABLED": "true", "PARSER_SERVICE_TOKEN": uuid.NewString(), "CORE_INTERNAL_SERVICE_TOKEN": uuid.NewString(), "AI_QUERY_SERVICE_TOKEN": uuid.NewString(), "CACHE_ENABLED": "false", "AI_RATE_LIMIT_ENABLED": "false", "POSTGRES_MAX_OPEN_CONNS": "2", "POSTGRES_MAX_IDLE_CONNS": "1", "ASYNC_CONTROL_MAX_OPEN_CONNS": "2", "ASYNC_CONTROL_CRITICAL_CONNS": "1", "ASYNC_WORKER_CONCURRENCY": "1", "ASYNC_BROKER_PREFIX": "bx.ai.test." + suffix, "ASYNC_RETRY_BASE": "100ms", "ASYNC_RETRY_CAP": "1s", "SEARCH_ES_ENDPOINT": esEndpoint, "SEARCH_QDRANT_ENDPOINT": qdEndpoint, "AI_EMBEDDING_REVISION": "config-v1", "AI_SUMMARY_REVISION": "config-v1", "AI_SUMMARY_PROMPT_VERSION": "overview-v1"} {
+	for key, value := range map[string]string{"POSTGRES_PRIMARY_DSN": bizDSN, "POSTGRES_READONLY_DSN": readerDSN.String(), "ASYNC_CONTROL_DSN": ctrlDSN, "RABBITMQ_URL": os.Getenv("TEST_RABBITMQ_URL"), "S3_ENDPOINT": os.Getenv("TEST_MINIO_ENDPOINT"), "S3_PUBLIC_ENDPOINT": os.Getenv("TEST_MINIO_ENDPOINT"), "S3_ACCESS_KEY": os.Getenv("TEST_MINIO_ACCESS_KEY"), "S3_SECRET_KEY": os.Getenv("TEST_MINIO_SECRET_KEY"), "S3_BUCKET": "ai-split-" + suffix, "S3_PUBLIC_PATH_PREFIX": "", "AI_QUERY_DSN": roleDSNs["query"], "AI_COMPUTE_DSN": roleDSNs["compute"], "AI_COMMIT_DSN": roleDSNs["commit"], "AI_ENABLED": "true", "AI_PROVIDER": "fake", "AI_PROFILE_ID": "smoke-" + suffix, "AI_PROJECTION_NAMESPACE": "bx-ai-test-" + suffix, "AI_PROFILE_REVISION": "v1", "ETCD_ENABLED": "true", "ETCD_ENDPOINTS": os.Getenv("TEST_ETCD_ENDPOINT"), "PARSER_WORKER_DIR": "../../parser_worker", "PARSER_REMOTE_ENABLED": "true", "PARSER_SERVICE_TOKEN": uuid.NewString(), "CORE_INTERNAL_SERVICE_TOKEN": uuid.NewString(), "AI_QUERY_SERVICE_TOKEN": uuid.NewString(), "CACHE_ENABLED": "false", "AI_RATE_LIMIT_ENABLED": "false", "POSTGRES_MAX_OPEN_CONNS": "2", "POSTGRES_MAX_IDLE_CONNS": "1", "ASYNC_CONTROL_MAX_OPEN_CONNS": "2", "ASYNC_CONTROL_CRITICAL_CONNS": "1", "ASYNC_WORKER_CONCURRENCY": "1", "ASYNC_BROKER_PREFIX": "bx.ai.test." + suffix, "ASYNC_RETRY_BASE": "100ms", "ASYNC_RETRY_CAP": "1s", "SEARCH_READ_BACKEND": "es_qdrant", "SEARCH_WRITE_BACKENDS": "postgres,es_qdrant", "SEARCH_ES_ENDPOINT": esEndpoint, "SEARCH_QDRANT_ENDPOINT": qdEndpoint, "AI_EMBEDDING_REVISION": "config-v1", "AI_SUMMARY_REVISION": "config-v1", "AI_SUMMARY_PROMPT_VERSION": "overview-v1"} {
 		t.Setenv(key, value)
 	}
 	for _, prefix := range []string{"AI_SCOPE", "AI_PROCESSING"} {
@@ -204,7 +208,19 @@ func TestAISplitRealDependencies(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Worker.MetricsAddr = ""
+	oldProvider, oldPropagator := otel.GetTracerProvider(), otel.GetTextMapPropagator()
+	exporter := tracetest.NewInMemoryExporter()
+	traceProvider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	otel.SetTracerProvider(traceProvider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	defer func() {
+		_ = traceProvider.Shutdown(context.Background())
+		otel.SetTracerProvider(oldProvider)
+		otel.SetTextMapPropagator(oldPropagator)
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	ctx, rootSpan := otel.Tracer("parity").Start(ctx, "fullchain.http")
+	defer rootSpan.End()
 	defer cancel()
 	storage, err := minio.New(cfg.Storage.Endpoint, &minio.Options{Creds: credentials.NewStaticV4(cfg.Storage.AccessKey, cfg.Storage.SecretKey, ""), Region: cfg.Storage.Region})
 	if err != nil {
@@ -283,6 +299,7 @@ func TestAISplitRealDependencies(t *testing.T) {
 			reader = bytes.NewReader(b)
 		}
 		req, _ := http.NewRequestWithContext(ctx, method, base+path, reader)
+		otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Idempotency-Key", uuid.NewString())
@@ -356,8 +373,8 @@ func TestAISplitRealDependencies(t *testing.T) {
 		})
 		return done["completed_entry_id"].(string)
 	}
-	a := upload("alpha.txt", "alpha rollback 保留回滚旧版本，恢复只读配置，检查数据完整性。\n"+strings.Repeat("上线前校验 source text vector summary。\n", 80))
-	b := upload("beta.txt", "beta rollback 回滚使用快照，不删除历史数据。")
+	a := upload("alpha.txt", "alpha rollback 项目预算已经批准。保留回滚旧版本，恢复只读配置，检查数据完整性。\n"+strings.Repeat("上线前校验 source text vector summary。\n", 80))
+	b := upload("beta.txt", "beta rollback 项目已启动，预算尚未批准。回滚使用快照，不删除历史数据。")
 	await("all capabilities and projections", func() bool {
 		var count int64
 		_ = aidb.Table("ai_objects").Where("active_content_version_id IS NOT NULL AND active_embedding_set_id IS NOT NULL AND active_summary_id IS NOT NULL").Count(&count)
@@ -372,6 +389,31 @@ func TestAISplitRealDependencies(t *testing.T) {
 	full := request("POST", "/api/v1/search", map[string]any{"query": "rollback", "mode": "fulltext"}, 200)
 	if full["retrieval"].(map[string]any)["text_backend"] != "elasticsearch" {
 		t.Fatal("ES projection unused", full)
+	}
+	for _, forcePG := range []bool{false, true} {
+		esFail.Store(forcePG)
+		for _, query := range []string{"项目预算", "目", "项目 天气"} {
+			result := request("POST", "/api/v1/search", map[string]any{"query": query, "mode": "fulltext"}, 200)
+			hits := result["hits"].([]any)
+			want := 1
+			if query == "目" {
+				want = 2
+			}
+			if query == "项目 天气" {
+				want = 0
+			}
+			if len(hits) != want {
+				t.Fatalf("Chinese query %q fallback=%t got %d want %d", query, forcePG, len(hits), want)
+			}
+			if query == "项目预算" && hits[0].(map[string]any)["file"].(map[string]any)["id"] != a {
+				t.Fatal("nonadjacent Chinese false positive")
+			}
+		}
+	}
+	esFail.Store(false)
+	fuzzy := request("POST", "/api/v1/search", map[string]any{"query": "alhpa.txt", "mode": "name"}, 200)
+	if len(fuzzy["hits"].([]any)) == 0 || fuzzy["hits"].([]any)[0].(map[string]any)["file"].(map[string]any)["id"] != a {
+		t.Fatal("name typo ranking lost", fuzzy)
 	}
 	semantic := request("POST", "/api/v1/search", map[string]any{"query": "rollback", "mode": "semantic"}, 200)
 	if semantic["retrieval"].(map[string]any)["vector_backend"] != "qdrant" {
@@ -434,10 +476,21 @@ func TestAISplitRealDependencies(t *testing.T) {
 	await("source MIME summary rebuild", func() bool {
 		return request("GET", "/api/v1/ai/jobs/"+codeJob["job_id"].(string), nil, 200)["status"] == "succeeded"
 	})
+	tracedStages := map[string]bool{}
+	for _, span := range exporter.GetSpans() {
+		if span.SpanContext.TraceID() == rootSpan.SpanContext().TraceID() {
+			tracedStages[span.Name] = true
+		}
+	}
+	for _, name := range []string{"ai.source.prepare", "ai.text.build", "ai.embedding.generate", "ai.summary.generate", "ai.publish", "ai.search", "ai.ask"} {
+		if !tracedStages[name] {
+			t.Fatalf("distributed trace lost stage %s", name)
+		}
+	}
 	t.Log("real upload -> source -> parent/child text -> vectors/summary -> independent ES/QD -> Search/Ask -> citations and summary-only user job: PASS")
 	if ready := os.Getenv("TEST_AI_BROWSER_READY_FILE"); ready != "" {
 		raw, _ := json.Marshal(map[string]any{"base_url": browserBase, "api": base, "storage": "http://" + cfg.Storage.Endpoint, "username": username, "password": password, "file_ids": []string{a, b}, "root": root})
-		if err := os.WriteFile(ready, raw, 0600); err != nil {
+		if err := os.WriteFile(ready, raw, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		defer os.Remove(ready)

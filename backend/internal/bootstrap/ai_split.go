@@ -21,13 +21,18 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/asynccontrol"
 	"github.com/11bronx11/bx_yunpan/backend/internal/core"
 	corepb "github.com/11bronx11/bx_yunpan/backend/internal/core/pb"
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/breaker"
+	platformcache "github.com/11bronx11/bx_yunpan/backend/internal/platform/cache"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/dependencies"
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/logging"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/registry"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/serviceauth"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/storageurl"
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/tracing"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/common/expfmt"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
@@ -35,8 +40,9 @@ import (
 	"gorm.io/gorm"
 )
 
-func internalClient(cfg config.Config, name, target, token string) (*grpc.ClientConn, func(), error) {
+func internalClient(cfg config.Config, name, target, token string, metrics ...*grpcx.Metrics) (*grpc.ClientConn, func(), error) {
 	cleanup := func() {}
+	options := splitClientOptions(cfg, name, metrics...)
 	if cfg.Registry.Enabled {
 		etcd, err := registry.Open(cfg.Registry)
 		if err != nil {
@@ -51,19 +57,22 @@ func internalClient(cfg config.Config, name, target, token string) (*grpc.Client
 		cleanup()
 		return nil, func() {}, err
 	}
-	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(transport), grpc.WithDefaultServiceConfig(`{"loadBalancingConfig":[{"round_robin":{}}]}`), grpc.WithUnaryInterceptor(serviceauth.UnaryClient(token)), grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(8<<20)))
+	options = append(options, grpc.WithTransportCredentials(transport), grpc.WithDefaultServiceConfig(`{"loadBalancingConfig":[{"round_robin":{}}]}`), grpc.WithChainUnaryInterceptor(serviceauth.UnaryClient(token)), grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(8<<20)))
+	conn, err := grpc.NewClient(target, options...)
 	if err != nil {
 		cleanup()
 	}
 	return conn, cleanup, err
 }
+
 func serveInternal(ctx context.Context, cfg config.Config, logger *slog.Logger, name, addr, advertise, token, prefix string, register func(*grpc.Server)) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
-	options := []grpc.ServerOption{grpc.UnaryInterceptor(serviceauth.UnaryServer(token, prefix))}
+	options := grpcx.ServerInterceptors(grpcx.ServerOptions{Logger: logger, Metrics: grpcx.NewMetrics(splitRegistry(ctx), "server")})
+	options = append(options, grpc.ChainUnaryInterceptor(serviceauth.UnaryServer(token, prefix)))
 	transport, err := serviceauth.ServerTransport(cfg.AISplit.TLS)
 	if err != nil {
 		return err
@@ -76,6 +85,8 @@ func serveInternal(ctx context.Context, cfg config.Config, logger *slog.Logger, 
 	h := health.NewServer()
 	healthpb.RegisterHealthServer(srv, h)
 	h.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+	serviceName := strings.TrimSuffix(strings.TrimPrefix(prefix, "/"), "/")
+	h.SetServingStatus(serviceName, healthpb.HealthCheckResponse_SERVING)
 	if cfg.Registry.Enabled {
 		etcd, err := registry.Open(cfg.Registry)
 		if err != nil {
@@ -109,7 +120,9 @@ func serveInternal(ctx context.Context, cfg config.Config, logger *slog.Logger, 
 		return nil
 	}
 }
+
 func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, role string) error {
+	ctx = context.WithValue(ctx, splitRegistryKey{}, prometheus.NewRegistry())
 	if role == "core-internal" {
 		db, sqlDB, err := dependencies.OpenRoleDB(ctx, cfg, cfg.Async.BusinessReadDSN, true)
 		if err != nil {
@@ -141,7 +154,8 @@ func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, rol
 		return err
 	}
 	defer sqlDB.Close()
-	coreConn, closeCore, err := internalClient(cfg, "core-internal-v1", cfg.AISplit.CoreTarget, cfg.AISplit.CoreToken)
+	clientMetrics := grpcx.NewMetrics(splitRegistry(ctx), "client")
+	coreConn, closeCore, err := internalClient(cfg, "core-internal-v1", cfg.AISplit.CoreTarget, cfg.AISplit.CoreToken, clientMetrics)
 	if err != nil {
 		return err
 	}
@@ -159,7 +173,25 @@ func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, rol
 			return err
 		}
 		defer stopMonitor()
-		svc := &aisystem.Query{DisableAsk: !cfg.AISplit.Ask, DB: db, Core: coreClient, Provider: ai.NewProvider(cfg.AI), Reranker: ai.NewReranker(cfg.AI), Profile: cfg.AIProfile(), Projector: projector, ScopeLimit: cfg.AISplit.ScopeLimit}
+		var embeddingCache ai.QueryEmbeddingCache
+		if cfg.Cache.Enabled {
+			client := platformcache.NewRedisClient(cfg.Redis.CacheAddr, cfg.Redis.CachePassword, cfg.Redis.CacheDB)
+			defer client.Close()
+			embeddingCache = platformcache.NewEmbeddingStore(client, cfg.Cache.TTL, cfg.Cache.L1MaxItems)
+		}
+		queryProjector := *projector
+		if cfg.Search.ReadBackend != "es_qdrant" {
+			queryProjector.ES = ""
+			queryProjector.QD = ""
+		}
+		queryProjector.HTTP = &http.Client{Timeout: cfg.Search.ExternalTimeout}
+		svc := &aisystem.Query{DisableAsk: !cfg.AISplit.Ask, DB: db, Core: coreClient, Provider: ai.NewProvider(cfg.AI), Reranker: ai.NewReranker(cfg.AI), Profile: cfg.AIProfile(), Projector: &queryProjector, ScopeLimit: cfg.AISplit.ScopeLimit, EmbeddingCache: embeddingCache}
+		if cfg.Search.ReadBackend == "shadow" {
+			svc.ShadowProjector = projector
+			svc.ShadowProjector.HTTP = &http.Client{Timeout: cfg.Search.ExternalTimeout}
+			svc.ShadowSampleRate = cfg.Search.ShadowSampleRate
+			svc.ShadowRecorder = shadowLogRecorder{logger}
+		}
 		return serveInternal(ctx, cfg, logger, "ai-query-v2", cfg.AISplit.QueryAddr, cfg.AISplit.QueryAdvertise, cfg.AISplit.QueryToken, "/yunpan.ai.v2.AIQueryService/", func(s *grpc.Server) { pbv2.RegisterAIQueryServiceServer(s, svc) })
 	}
 	ctrl, ctrlSQL, err := dependencies.OpenRoleDB(ctx, cfg, cfg.Async.ControlDSN, false)
@@ -174,7 +206,7 @@ func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, rol
 	defer criticalSQL.Close()
 	store := asyncStore(&dependencies.AsyncSet{Control: ctrl, Critical: critical}, cfg)
 	aisystem.Register(store.Registry)
-	planner := &aisystem.Planner{TextEpoch: cfg.AITextEpoch(), VectorEpoch: cfg.AIVectorEpoch(), TargetNamespace: cfg.AISplit.ProjectionNamespace, TargetEpoch: cfg.AIProjectionEpoch(), Profile: cfg.AIProfile()}
+	planner := &aisystem.Planner{ProjectionBackends: cfg.Search.WriteBackends, TextEpoch: cfg.AITextEpoch(), VectorEpoch: cfg.AIVectorEpoch(), TargetNamespace: cfg.AISplit.ProjectionNamespace, TargetEpoch: cfg.AIProjectionEpoch(), Profile: cfg.AIProfile()}
 	store.PlanContinuations = planner.Continuations
 	store.PlanFailure = planner.Failure
 	store.Observe = planner.Observe
@@ -209,12 +241,14 @@ func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, rol
 	if err != nil {
 		return err
 	}
-	parser, err := parserrpc.NewClient(parserTarget, cfg.Parser.CallTimeout, grpc.WithTransportCredentials(transport), grpc.WithUnaryInterceptor(serviceauth.UnaryClient(cfg.AISplit.ParserToken)))
+	parserOptions := splitClientOptions(cfg, "parser", clientMetrics)
+	parserOptions = append(parserOptions, grpc.WithTransportCredentials(transport), grpc.WithChainUnaryInterceptor(serviceauth.UnaryClient(cfg.AISplit.ParserToken)))
+	parser, err := parserrpc.NewClient(parserTarget, cfg.Parser.CallTimeout, parserOptions...)
 	if err != nil {
 		return err
 	}
 	defer parser.Close()
-	computer := &aisystem.Computer{DB: db, Core: coreClient, Parser: parser, Embedding: ai.NewProvider(cfg.AI), Summary: ai.NewProvider(cfg.AI), Profile: cfg.AIProfile(), HTTP: &http.Client{Timeout: cfg.Parser.CallTimeout}, SummaryCalls: cfg.AISplit.SummaryCalls, Project: projector.Project}
+	computer := &aisystem.Computer{DB: db, Core: coreClient, Parser: parser, Vision: ai.NewProvider(cfg.AI), MaxObjectBytes: cfg.AI.MaxObjectBytes, Embedding: ai.NewProvider(cfg.AI), Summary: ai.NewProvider(cfg.AI), Profile: cfg.AIProfile(), HTTP: &http.Client{Timeout: cfg.Parser.CallTimeout}, SummaryCalls: cfg.AISplit.SummaryCalls, Project: projector.Project}
 	queue := map[string]string{"ai-content-worker": "ai-content", "ai-embedding-worker": "ai-embedding", "ai-summary-worker": "ai-summary", "ai-text-projector": "ai-project-text", "ai-vector-projector": "ai-project-vector"}[role]
 	if queue == "" {
 		return fmt.Errorf("unknown AI role %s", role)
@@ -255,11 +289,18 @@ func RunAIRole(role string) {
 	slog.SetDefault(logger)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	shutdown, err := tracing.Setup(ctx, cfg.Tracing, "bx-"+role)
+	if err != nil {
+		logger.Error("tracing setup", "error", err)
+		os.Exit(1)
+	}
+	defer shutdown(context.Background())
 	if err = RunAISplit(ctx, cfg, logger, role); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("role stopped", "error", err)
 		os.Exit(1)
 	}
 }
+
 func splitMonitor(ctx context.Context, cfg config.Config, db *gorm.DB, broker *asynccontrol.Broker, logger *slog.Logger) (func(), error) {
 	if cfg.Worker.MetricsAddr == "" {
 		return func() {}, nil
@@ -286,6 +327,10 @@ func splitMonitor(ctx context.Context, cfg config.Config, db *gorm.DB, broker *a
 	})
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		families, _ := splitRegistry(ctx).Gather()
+		for _, family := range families {
+			_, _ = expfmt.MetricFamilyToText(w, family)
+		}
 		fmt.Fprintf(w, "bx_ai_role_up{role=%q} 1\n", cfg.Role)
 		if cfg.Role != "core-internal" {
 			var rows []struct {
@@ -307,4 +352,39 @@ func splitMonitor(ctx context.Context, cfg config.Config, db *gorm.DB, broker *a
 	}()
 	stop := context.AfterFunc(ctx, func() { _ = server.Close() })
 	return func() { stop(); _ = server.Close() }, nil
+}
+
+type splitRegistryKey struct{}
+
+func splitRegistry(ctx context.Context) *prometheus.Registry {
+	if r, ok := ctx.Value(splitRegistryKey{}).(*prometheus.Registry); ok {
+		return r
+	}
+	return prometheus.NewRegistry()
+}
+
+func splitClientOptions(cfg config.Config, name string, metrics ...*grpcx.Metrics) []grpc.DialOption {
+	timeout := cfg.AISplit.ReadTimeout
+	if name == "ai-query-v2" {
+		timeout = cfg.AISplit.QueryTimeout
+	}
+	if name == "parser" {
+		timeout = cfg.Parser.CallTimeout
+	}
+	attempts := cfg.AIService.SearchMaxAttempts
+	if name == "parser" {
+		attempts = 1
+	} // Parsing can be expensive; task budgets own retries.
+	var metric *grpcx.Metrics
+	if len(metrics) > 0 {
+		metric = metrics[0]
+	}
+	return grpcx.ClientInterceptors(grpcx.ClientOptions{Metrics: metric, StatsHandled: name == "parser", Timeout: timeout, AskTimeout: cfg.AISplit.AskTimeout, ReadAttempts: attempts, RetryBase: cfg.AIService.RetryBaseBackoff, RetryCap: cfg.AIService.RetryMaxBackoff, Breaker: breaker.Config{Window: cfg.AIService.BreakerWindow, MinRequests: cfg.AIService.BreakerMinRequests, FailureRate: cfg.AIService.BreakerFailureRate, OpenTimeout: cfg.AIService.BreakerOpenTimeout, HalfOpenProbes: cfg.AIService.BreakerHalfOpenProbes}})
+}
+
+// Only aggregate digests are emitted; source text and queries never enter logs.
+type shadowLogRecorder struct{ logger *slog.Logger }
+
+func (r shadowLogRecorder) Record(o ai.ShadowObservation) {
+	r.logger.Info("AI search shadow comparison", "mode", o.Mode, "pg_count", o.PostgresCount, "external_count", o.ExternalCount, "overlap", o.OverlapCount, "pg_digest", o.PostgresDigest, "external_digest", o.ExternalDigest, "error", o.ExternalError, "duration_ms", o.ExternalDuration.Milliseconds())
 }

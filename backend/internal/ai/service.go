@@ -66,9 +66,11 @@ type QueryEmbeddingCache interface {
 func NewService(db *gorm.DB, driveService *drive.Service, objects *objectstore.Service, storage *minio.Client, cfg config.AI) *Service {
 	provider := NewProvider(cfg)
 	parser := NewChunkingParser(NewBuiltinParser(provider), rag.ChunkOptions{})
-	return &Service{db: db, drive: driveService, objects: objects, storage: storage, provider: provider, parser: parser,
+	return &Service{
+		db: db, drive: driveService, objects: objects, storage: storage, provider: provider, parser: parser,
 		parserProfileVersion: "light-parser-v1", pipelineVersion: pipelineVersion,
-		reranker: NewReranker(cfg), config: cfg}
+		reranker: NewReranker(cfg), config: cfg,
+	}
 }
 
 func NewServiceWithCache(db *gorm.DB, driveService *drive.Service, objects *objectstore.Service, storage *minio.Client, cfg config.AI, embeddingCache QueryEmbeddingCache) *Service {
@@ -261,13 +263,15 @@ func (s *Service) runIndex(ctx context.Context, objectID uuid.UUID, force bool, 
 		now := time.Now().UTC()
 		versionResult := tx.Model(&DocumentVersion{}).
 			Where("id = ? AND status = 'building' AND lease_token = ?", version.ID, version.LeaseToken).
-			Updates(map[string]any{"status": "indexed", "summary": insight.Summary, "tags": pq.StringArray(insight.Tags),
+			Updates(map[string]any{
+				"status": "indexed", "summary": insight.Summary, "tags": pq.StringArray(insight.Tags),
 				"language": nullableString(insight.Language), "error_code": nil, "last_error": nil,
 				"parser_id": parseResult.ParserID, "parser_version": parseResult.ParserVersion,
 				"vision_model_version": parseResult.VisionModelVersion,
 				"chunker_version":      parseResult.ChunkerVersion, "tokenizer_id": parseResult.TokenizerID,
 				"parser_warnings": pq.StringArray(append([]string{}, parseResult.Warnings...)),
-				"updated_at":      now, "indexed_at": now, "lease_token": nil, "lease_until": nil})
+				"updated_at":      now, "indexed_at": now, "lease_token": nil, "lease_until": nil,
+			})
 		if versionResult.Error != nil {
 			return versionResult.Error
 		}
@@ -329,7 +333,17 @@ func (s *Service) parseForIndex(ctx context.Context, parser ParserGateway, reque
 }
 
 func (s *Service) parseVisionImage(ctx context.Context, mediaType string, data []byte, pixelLimit int64) (ParseResult, error) {
-	sections, err := extractVisionSummary(ctx, s.provider, mediaType, data, pixelLimit)
+	return ParseVisionImage(ctx, s.provider, mediaType, data, pixelLimit)
+}
+
+// ParseVisionImage is shared by the legacy adapter and the independent content
+// worker. Vision text becomes a canonical source, then follows normal text,
+// embedding and summary publication; it is never sent to the document parser.
+func ParseVisionImage(ctx context.Context, provider Provider, mediaType string, data []byte, pixelLimit int64) (ParseResult, error) {
+	if provider == nil {
+		return ParseResult{}, &ParseError{Code: "ai.vision.unavailable", Retryable: true}
+	}
+	sections, err := extractVisionSummary(ctx, provider, mediaType, data, pixelLimit)
 	if err != nil {
 		switch {
 		case errors.Is(err, errResourceLimit):
@@ -351,7 +365,7 @@ func (s *Service) parseVisionImage(ctx context.Context, mediaType string, data [
 		return ParseResult{}, &ParseError{Code: "ai.parse.chunk_limit", Permanent: true, Err: errors.New("vision summary exceeded chunk limit")}
 	}
 	visionModelVersion := "unspecified"
-	if provider, ok := s.provider.(interface{ VisionModelVersion() string }); ok {
+	if provider, ok := provider.(interface{ VisionModelVersion() string }); ok {
 		if version := strings.TrimSpace(provider.VisionModelVersion()); version != "" {
 			visionModelVersion = version
 		}
@@ -540,10 +554,12 @@ func (s *Service) startDocumentVersion(objectID uuid.UUID, force bool) (Document
 			return err
 		}
 		leaseToken := uuid.Must(uuid.NewV7())
-		version = DocumentVersion{ID: uuid.Must(uuid.NewV7()), DocumentID: document.ID, ObjectID: objectID,
+		version = DocumentVersion{
+			ID: uuid.Must(uuid.NewV7()), DocumentID: document.ID, ObjectID: objectID,
 			PipelineVersion: s.pipelineVersion, ModelVersion: s.provider.ModelVersion(), Generation: generation + 1,
 			Status: "building", Tags: pq.StringArray{}, ParserWarnings: pq.StringArray{}, LeaseToken: &leaseToken,
-			LeaseUntil: timePtr(now.Add(s.processingLease())), CreatedAt: now, UpdatedAt: now}
+			LeaseUntil: timePtr(now.Add(s.processingLease())), CreatedAt: now, UpdatedAt: now,
+		}
 		if err := tx.Create(&version).Error; err != nil {
 			return err
 		}

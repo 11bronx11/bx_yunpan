@@ -396,7 +396,7 @@ func LoadForRole(role string) (Config, error) {
 			BaseURL:                     env("AI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
 			ChatModel:                   env("AI_CHAT_MODEL", "qwen-plus"),
 			EmbeddingModel:              env("AI_EMBEDDING_MODEL", "text-embedding-v4"),
-			VisionModel:                 env("AI_VISION_MODEL", "qwen-vl-plus"),
+			VisionModel:                 env("AI_VISION_MODEL", "qwen3-vl-plus"),
 			RerankEnabled:               envBool("AI_RERANK_ENABLED", false),
 			RerankBaseURL:               env("AI_RERANK_BASE_URL", ""),
 			RerankModel:                 env("AI_RERANK_MODEL", "qwen3-rerank"),

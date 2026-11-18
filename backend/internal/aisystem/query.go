@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai"
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai/pbv2"
@@ -27,20 +28,25 @@ import (
 type Query struct {
 	DisableAsk bool
 	pbv2.UnimplementedAIQueryServiceServer
-	DB         *gorm.DB
-	Core       corepb.CoreReadServiceClient
-	Provider   ai.Provider
-	Reranker   ai.Reranker
-	Profile    aiprotocol.Profile
-	Projector  *Projector
-	ScopeLimit int
+	DB               *gorm.DB
+	Core             corepb.CoreReadServiceClient
+	Provider         ai.Provider
+	Reranker         ai.Reranker
+	Profile          aiprotocol.Profile
+	Projector        *Projector
+	ScopeLimit       int
+	EmbeddingCache   ai.QueryEmbeddingCache
+	ShadowProjector  *Projector
+	ShadowSampleRate float64
+	ShadowRecorder   ai.ShadowRecorder
 }
 type candidate struct {
 	ID, ParentID, ContentVersionID, SourceID uuid.UUID
 	Content, ParentContent, HeadingPath      string
 	Location                                 json.RawMessage
 	Score                                    float64
-	File                                     *corepb.FileRef `gorm:"-"`
+	File                                     *corepb.FileRef   `gorm:"-"`
+	Aliases                                  []*corepb.FileRef `gorm:"-"`
 }
 type activeFile struct {
 	Object
@@ -93,6 +99,7 @@ func (q *Query) scope(ctx context.Context, grant string) (*corepb.ScopeResponse,
 	}
 	return opened, out, nil
 }
+
 func (q *Query) capabilities(ctx context.Context, obj *pbv2.ObjectRef) (*pbv2.Capabilities, error) {
 	out := &pbv2.Capabilities{Source: &pbv2.Capability{}, Text: &pbv2.Capability{}, Vector: &pbv2.Capability{}, Summary: &pbv2.Capability{}}
 	var o Object
@@ -110,6 +117,8 @@ func (q *Query) capabilities(ctx context.Context, obj *pbv2.ObjectRef) (*pbv2.Ca
 		cap.Coverage = "none"
 		cap.LatestBuild = &pbv2.LatestBuild{State: "pending"}
 	}
+	out.Vector.Supported = supported && q.Profile.EnableVectors
+	out.Summary.Supported = supported && q.Profile.EnableSummary
 	if res.RowsAffected == 0 {
 		return out, nil
 	}
@@ -149,9 +158,11 @@ func (q *Query) capabilities(ctx context.Context, obj *pbv2.ObjectRef) (*pbv2.Ca
 	out.Askable = out.Text.Available
 	return out, nil
 }
+
 func supportedText(mime string) bool {
-	return aiprotocol.SupportedText(mime)
+	return aiprotocol.SupportedSource(mime)
 }
+
 func (q *Query) BatchCapabilities(ctx context.Context, r *pbv2.BatchCapabilitiesRequest) (*pbv2.BatchCapabilitiesResponse, error) {
 	if len(r.Objects) > 200 {
 		return nil, status.Error(codes.InvalidArgument, "too many objects")
@@ -169,6 +180,7 @@ func (q *Query) BatchCapabilities(ctx context.Context, r *pbv2.BatchCapabilities
 	}
 	return out, nil
 }
+
 func (q *Query) GetOverview(ctx context.Context, r *pbv2.GetOverviewRequest) (*pbv2.OverviewResponse, error) {
 	refs, err := q.Core.BatchGetFileRefs(ctx, &corepb.FileRefsRequest{Grant: r.Grant, FileIds: []string{r.FileId}})
 	if err != nil {
@@ -206,10 +218,16 @@ func (q *Query) GetOverview(ctx context.Context, r *pbv2.GetOverviewRequest) (*p
 	}
 	if strings.HasPrefix(f.MimeType, "image/") {
 		out.PreviewKind = "image_thumbnail"
-		out.PreviewState = "available"
-	} else if caps.Summary.Supported {
-		out.PreviewKind = "document_summary"
-		out.PreviewState = caps.Summary.LatestBuild.State
+		out.PreviewState = f.ThumbnailState
+		if out.PreviewState == "" {
+			out.PreviewState = "pending"
+		}
+	}
+	if caps.Summary.Supported {
+		if out.PreviewKind == "none" {
+			out.PreviewKind = "document_summary"
+			out.PreviewState = caps.Summary.LatestBuild.State
+		}
 		if caps.Summary.Available {
 			var summary struct {
 				Summary, Language, Coverage, ChatModel, StrategyVersion, PromptVersion string
@@ -221,7 +239,9 @@ func (q *Query) GetOverview(ctx context.Context, r *pbv2.GetOverviewRequest) (*p
 			out.Summary = summary.Summary
 			out.Language = summary.Language
 			_ = json.Unmarshal(summary.Tags, &out.Tags)
-			out.PreviewState = "available"
+			if out.PreviewKind == "document_summary" {
+				out.PreviewState = "available"
+			}
 			out.Coverage.Exhaustive = summary.Coverage == "complete"
 			if summary.ChatModel != "" {
 				models = append(models, summary.ChatModel)
@@ -251,21 +271,34 @@ func (q *Query) GetOverview(ctx context.Context, r *pbv2.GetOverviewRequest) (*p
 	}
 	return out, nil
 }
+
 func evidenceRef(f *corepb.FileRef) *corepb.EvidenceRef {
 	return &corepb.EvidenceRef{FileId: f.FileId, ObjectId: f.ObjectId, ContentGeneration: f.ContentGeneration, EntryVersion: f.EntryVersion}
 }
+
 func (q *Query) validate(ctx context.Context, grant string, candidates []candidate) error {
 	refs := []*corepb.EvidenceRef{}
 	seen := map[string]bool{}
 	for _, c := range candidates {
-		if !seen[c.File.FileId] {
-			seen[c.File.FileId] = true
-			refs = append(refs, evidenceRef(c.File))
+		for _, f := range candidateFiles(c) {
+			if !seen[f.FileId] {
+				seen[f.FileId] = true
+				refs = append(refs, evidenceRef(f))
+			}
 		}
 	}
-	_, err := q.Core.ValidateEvidence(ctx, &corepb.ValidateEvidenceRequest{Grant: grant, Refs: refs})
-	return err
+	if len(refs) == 0 {
+		_, err := q.Core.ValidateEvidence(ctx, &corepb.ValidateEvidenceRequest{Grant: grant})
+		return err
+	}
+	for start := 0; start < len(refs); start += 200 {
+		if _, err := q.Core.ValidateEvidence(ctx, &corepb.ValidateEvidenceRequest{Grant: grant, Refs: refs[start:min(start+200, len(refs))]}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
+
 func uniqueVersions(files []activeFile, vectors bool) ([]string, map[string]*corepb.FileRef) {
 	ids := []string{}
 	refs := map[string]*corepb.FileRef{}
@@ -286,6 +319,7 @@ func uniqueVersions(files []activeFile, vectors bool) ([]string, map[string]*cor
 	slices.Sort(ids)
 	return slices.Compact(ids), refs
 }
+
 func (q *Query) pgText(ctx context.Context, ids []string, query string, k int) ([]ranked, error) {
 	var rows []ranked
 	if len(ids) == 0 {
@@ -294,6 +328,7 @@ func (q *Query) pgText(ctx context.Context, ids []string, query string, k int) (
 	err := q.DB.WithContext(ctx).Raw(`SELECT id,ts_rank_cd(content_tsv,ai_fts_query(?)) AS score FROM ai_published_children WHERE content_version_id::text=ANY(?::text[]) AND content_tsv @@ ai_fts_query(?) ORDER BY score DESC,id LIMIT ?`, query, pq.Array(ids), query, k).Scan(&rows).Error
 	return rows, err
 }
+
 func (q *Query) pgVector(ctx context.Context, ids []string, vector []float32, k int) ([]ranked, error) {
 	var rows []ranked
 	if len(ids) == 0 {
@@ -308,6 +343,7 @@ func (q *Query) pgVector(ctx context.Context, ids []string, vector []float32, k 
 func (q *Query) retrieve(ctx context.Context, files []activeFile, query, mode string, k int) ([]candidate, *pbv2.Retrieval, error) {
 	return q.retrieveScoped(ctx, files, query, mode, k, false)
 }
+
 func mergeRanks(items []ranked, limit int) []ranked {
 	scores := map[uuid.UUID]float64{}
 	for _, r := range items {
@@ -330,10 +366,14 @@ func mergeRanks(items []ranked, limit int) []ranked {
 	}
 	return out
 }
+
 func (q *Query) retrieveScoped(ctx context.Context, files []activeFile, query, mode string, k int, perFile bool) ([]candidate, *pbv2.Retrieval, error) {
 	return q.retrieveWithVector(ctx, files, query, mode, k, perFile, nil)
 }
-func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, query, mode string, k int, perFile bool, queryVector []float32) ([]candidate, *pbv2.Retrieval, error) {
+
+func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, query, mode string, k int, perFile bool, queryVector []float32) (candidates []candidate, retrieval *pbv2.Retrieval, retrieveErr error) {
+	ctx, finishTrace := stageTrace(ctx, "ai.retrieve")
+	defer func() { finishTrace(retrieveErr) }()
 	meta := &pbv2.Retrieval{TextBackend: "unavailable", VectorBackend: "unavailable", TokenCountIsEstimate: true}
 	texts, refs := uniqueVersions(files, false)
 	sets, _ := uniqueVersions(files, true)
@@ -379,22 +419,31 @@ func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, quer
 			meta.TextTarget = ""
 			text, textErr = textBranch(false)
 		}
+		if textErr == nil && q.sampleShadow(query, "fulltext") {
+			started := time.Now()
+			external, err := q.shadowBranch(ctx, "es", texts, query, nil, branchK, batchSize, mergeK)
+			q.recordShadow("fulltext", text, external, err, time.Since(started))
+		}
 	}
 	if mode != "fulltext" {
-		if q.Provider == nil || len(sets) == 0 {
+		if !q.Profile.EnableVectors || q.Provider == nil || len(sets) == 0 {
 			vectorErr = errors.New("vector.not_ready")
 		} else {
 			var compatible []string
 			err := q.DB.WithContext(ctx).Table("ai_published_sets").Where("id::text=ANY(?::text[]) AND provider=? AND model=? AND revision=? AND dimension=1024", pq.Array(sets), q.Profile.EmbeddingProvider, q.Profile.EmbeddingModel, q.Profile.EmbeddingRevision).Pluck("id::text", &compatible).Error
 			if err != nil {
 				vectorErr = err
-			} else if len(compatible) != len(sets) {
+			} else if len(compatible) == 0 {
 				vectorErr = errors.New("vector.model_incompatible")
 			} else {
+				if len(compatible) != len(sets) {
+					meta.Reasons = append(meta.Reasons, "vector.model_incompatible")
+				}
+				sets = compatible
 				vs := [][]float32{queryVector}
 				var err error
 				if len(queryVector) == 0 {
-					vs, err = q.Provider.Embeddings(ctx, []string{query})
+					vs, err = q.embedQuery(ctx, query)
 				}
 				if err != nil || len(vs) != 1 || len(vs[0]) != 1024 {
 					vectorErr = errors.New("embedding.unavailable")
@@ -430,6 +479,11 @@ func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, quer
 					if meta.VectorBackend == "postgres" {
 						meta.VectorTarget = ""
 						vector, vectorErr = branch(false)
+					}
+					if vectorErr == nil && q.sampleShadow(query, "semantic") {
+						started := time.Now()
+						external, err := q.shadowBranch(ctx, "qd", sets, query, vs[0], branchK, batchSize, mergeK)
+						q.recordShadow("semantic", vector, external, err, time.Since(started))
 					}
 				}
 			}
@@ -481,9 +535,16 @@ func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, quer
 		}
 		return nil, meta, status.Error(codes.Aborted, "ai.scope_changed")
 	}
+	aliases := map[string][]*corepb.FileRef{}
+	for _, f := range files {
+		if f.ActiveContentVersionID != nil {
+			aliases[f.ActiveContentVersionID.String()] = append(aliases[f.ActiveContentVersionID.String()], f.File)
+		}
+	}
 	for i := range rows {
 		rows[i].Score = scores[rows[i].ID]
 		rows[i].File = refs[rows[i].ContentVersionID.String()]
+		rows[i].Aliases = aliases[rows[i].ContentVersionID.String()]
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].Score == rows[j].Score {
@@ -523,10 +584,13 @@ func citation(c candidate, id string) *pbv2.Citation {
 		page = int32(*loc.PageNumber)
 	}
 	excerpt := []rune(c.Content)
-	return &pbv2.Citation{Id: id, FileId: c.File.FileId, FileName: c.File.Name, ContentVersionId: c.ContentVersionID.String(), SourceVersionId: c.SourceID.String(), ParentId: c.ParentID.String(), ChildId: c.ID.String(), ContentGeneration: c.File.ContentGeneration, PageNumber: page, Section: c.HeadingPath, Excerpt: string(excerpt[:min(400, len(excerpt))])}
+	return &pbv2.Citation{Id: id, FileId: c.File.FileId, FileName: c.File.Name, ContentVersionId: c.ContentVersionID.String(), SourceVersionId: c.SourceID.String(), ParentId: c.ParentID.String(), ChildId: c.ID.String(), ContentGeneration: c.File.ContentGeneration, SourceLocation: &pbv2.SourceLocation{SourceKind: loc.SourceKind, PageStart: page, PageEnd: max(page, int32(loc.PageEnd)), SheetName: loc.SheetName, RowStart: int32(loc.RowStart), RowEnd: int32(loc.RowEnd), ColumnStart: int32(loc.ColumnStart), ColumnEnd: int32(loc.ColumnEnd), HeadingPath: c.HeadingPath, Kind: loc.Kind, SourceStart: loc.SourceStart, SourceEnd: loc.SourceEnd, Encoding: loc.Encoding}, PageNumber: page, Section: c.HeadingPath, Excerpt: string(excerpt[:min(400, len(excerpt))])}
 }
-func (q *Query) Search(ctx context.Context, r *pbv2.SearchRequest) (*pbv2.SearchResponse, error) {
-	if strings.TrimSpace(r.Query) == "" || len(r.Query) > 4096 || !slices.Contains([]string{"fulltext", "semantic", "hybrid"}, r.Mode) {
+
+func (q *Query) Search(ctx context.Context, r *pbv2.SearchRequest) (response *pbv2.SearchResponse, searchErr error) {
+	ctx, finishTrace := stageTrace(ctx, "ai.search")
+	defer func() { finishTrace(searchErr) }()
+	if strings.TrimSpace(r.Query) == "" || utf8.RuneCountInString(r.Query) > 1000 || len(r.MimeTypes) > 20 || !slices.Contains([]string{"fulltext", "semantic", "hybrid"}, r.Mode) {
 		return nil, status.Error(codes.InvalidArgument, "invalid search")
 	}
 	_, files, err := q.scope(ctx, r.Grant)
@@ -551,22 +615,28 @@ func (q *Query) Search(ctx context.Context, r *pbv2.SearchRequest) (*pbv2.Search
 	out := &pbv2.SearchResponse{Retrieval: meta, Coverage: &pbv2.Coverage{Mode: "retrieved"}}
 	byFile := map[string]*pbv2.SearchHit{}
 	for n, c := range rows {
-		hit := byFile[c.File.FileId]
-		if hit == nil {
-			if len(out.Hits) >= k {
-				continue
+		for _, file := range candidateFiles(c) {
+			c.File = file
+			hit := byFile[c.File.FileId]
+			if hit == nil {
+				if len(out.Hits) >= k {
+					continue
+				}
+				hit = &pbv2.SearchHit{File: c.File, Score: c.Score, MatchType: r.Mode}
+				byFile[c.File.FileId] = hit
+				out.Hits = append(out.Hits, hit)
 			}
-			hit = &pbv2.SearchHit{File: c.File, Score: c.Score, MatchType: r.Mode}
-			byFile[c.File.FileId] = hit
-			out.Hits = append(out.Hits, hit)
-		}
-		if len(hit.Citations) < 5 {
-			hit.Citations = append(hit.Citations, citation(c, fmt.Sprintf("c%d", n+1)))
+			if len(hit.Citations) < 5 {
+				hit.Citations = append(hit.Citations, citation(c, fmt.Sprintf("c%d", n+1)))
+			}
 		}
 	}
 	return out, nil
 }
+
 func (q *Query) Ask(ctx context.Context, r *pbv2.AskRequest) (response *pbv2.AskResponse, askErr error) {
+	ctx, finishTrace := stageTrace(ctx, "ai.ask")
+	defer func() { finishTrace(askErr) }()
 	started := time.Now()
 	defer func() {
 		fields := []any{"request_id", r.RequestId, "duration_ms", time.Since(started).Milliseconds(), "status", status.Code(askErr).String()}
@@ -578,7 +648,7 @@ func (q *Query) Ask(ctx context.Context, r *pbv2.AskRequest) (response *pbv2.Ask
 	if q.DisableAsk {
 		return nil, status.Error(codes.Unavailable, "ai.answer_unavailable")
 	}
-	if strings.TrimSpace(r.Question) == "" || len(r.Question) > 8192 {
+	if strings.TrimSpace(r.Question) == "" || utf8.RuneCountInString(r.Question) > 2000 {
 		return nil, status.Error(codes.InvalidArgument, "invalid question")
 	}
 	opened, files, err := q.scope(ctx, r.Grant)
@@ -618,7 +688,9 @@ func (q *Query) Ask(ctx context.Context, r *pbv2.AskRequest) (response *pbv2.Ask
 		for n, c := range rows[:count] {
 			docs[n] = c.Content
 		}
-		scores, e := q.Reranker.Rerank(ctx, r.Question, docs)
+		rerankCtx, finishRerank := stageTrace(ctx, "ai.rerank")
+		scores, e := q.Reranker.Rerank(rerankCtx, r.Question, docs)
+		finishRerank(e)
 		if e == nil && len(scores) == count {
 			for n := 0; n < count; n++ {
 				rows[n].Score = scores[n]
@@ -649,10 +721,15 @@ func (q *Query) Ask(ctx context.Context, r *pbv2.AskRequest) (response *pbv2.Ask
 			return
 		}
 		parents[c.ParentID] = true
-		represented[c.File.FileId] = true
 		id := fmt.Sprintf("c%d", len(cites)+1)
+		for _, f := range candidateFiles(c) {
+			represented[f.FileId] = true
+			alias := c
+			alias.File = f
+			// One evidence text may support several authorized logical files.
+			cites = append(cites, citation(alias, id))
+		}
 		evidence = append(evidence, ai.Evidence{ID: id, FileName: c.File.Name, Content: c.ParentContent})
-		cites = append(cites, citation(c, id))
 		used = append(used, c)
 		meta.EvidenceTokens += int32(tokens)
 	}
@@ -690,7 +767,9 @@ func (q *Query) Ask(ctx context.Context, r *pbv2.AskRequest) (response *pbv2.Ask
 	if err := q.validate(ctx, r.Grant, used); err != nil {
 		return nil, err
 	}
-	answer, err := q.Provider.Answer(ctx, r.Question, evidence)
+	answerCtx, finishAnswer := stageTrace(ctx, "ai.answer")
+	answer, err := q.Provider.Answer(answerCtx, r.Question, evidence)
+	finishAnswer(err)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, "ai.answer_unavailable")
 	}
@@ -699,7 +778,7 @@ func (q *Query) Ask(ctx context.Context, r *pbv2.AskRequest) (response *pbv2.Ask
 	}
 	out.Answer = answer.Answer
 	for _, c := range cites {
-		if slices.Contains(answer.CitationIDs, c.Id) {
+		if answer.Grounded && slices.Contains(answer.CitationIDs, c.Id) {
 			out.Citations = append(out.Citations, c)
 		}
 	}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/aiprotocol"
+	"github.com/11bronx11/bx_yunpan/backend/internal/textsearch"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"gorm.io/gorm"
@@ -44,11 +45,15 @@ type indexedChild struct {
 }
 
 func (p *Projector) request(ctx context.Context, method, url string, body any, backend string, out any) error {
-	raw, err := json.Marshal(body)
-	if err != nil {
-		return err
+	var payload io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		payload = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(raw))
+	req, err := http.NewRequestWithContext(ctx, method, url, payload)
 	if err != nil {
 		return errors.New("projection.invalid_endpoint")
 	}
@@ -75,7 +80,10 @@ func (p *Projector) request(ctx context.Context, method, url string, body any, b
 	}
 	return nil
 }
-func (p *Projector) Project(ctx context.Context, kind string, in aiprotocol.Input) (any, int64, error) {
+
+func (p *Projector) Project(ctx context.Context, kind string, in aiprotocol.Input) (result any, rowCount int64, projectErr error) {
+	ctx, finishTrace := stageTrace(ctx, kind)
+	defer func() { finishTrace(projectErr) }()
 	backend := "es"
 	if kind == "ai.project.vector" {
 		backend = "qd"
@@ -109,9 +117,11 @@ func (p *Projector) Project(ctx context.Context, kind string, in aiprotocol.Inpu
 	if backend == "es" {
 		// Index creation is idempotent: an existing mapping is independently checked
 		// by every write's immutable version fields and completion manifest.
-		_ = p.request(ctx, "PUT", strings.TrimRight(endpoint, "/")+"/"+target, map[string]any{"mappings": map[string]any{"properties": map[string]any{"content": map[string]any{"type": "text"}, "content_id": map[string]any{"type": "keyword"}, "child_id": map[string]any{"type": "keyword"}}}}, backend, nil)
+		if err := p.ensureTextIndex(ctx, target); err != nil {
+			return nil, 0, err
+		}
 		for _, r := range rows {
-			doc := map[string]any{"content": r.Content, "content_id": in.ContentVersionID.String(), "child_id": r.ID.String(), "parent_id": r.ParentID.String()}
+			doc := map[string]any{"content": r.Content, "content_normalized": textsearch.Normalize(r.Content), "content_search": textsearch.IndexText(r.Content), "lexical_version": textsearch.Version, "content_id": in.ContentVersionID.String(), "child_id": r.ID.String(), "parent_id": r.ParentID.String()}
 			id := in.ContentVersionID.String() + ":" + r.ID.String()
 			if err := p.request(ctx, "PUT", strings.TrimRight(endpoint, "/")+"/"+target+"/_doc/"+id+"?refresh=wait_for", doc, backend, nil); err != nil {
 				return nil, 0, err
@@ -138,6 +148,7 @@ func (p *Projector) Project(ctx context.Context, kind string, in aiprotocol.Inpu
 	d.Hash = aiprotocol.HashJSON(rows)
 	return d, int64(len(rows)), nil
 }
+
 func publishProjection(tx *gorm.DB, in aiprotocol.Input, a Artifact) error {
 	if in.Operation == "delete" || in.Operation == "retire" {
 		return publishDelete(tx, in, a)
@@ -151,6 +162,11 @@ func publishProjection(tx *gorm.DB, in aiprotocol.Input, a Artifact) error {
 		expectedBackend = "qd"
 	}
 	id, name, digest, identityErr := projectionIdentity(expectedBackend, in)
+	// Already accepted v1 results retain their publication path. They may be
+	// recorded, but online readers require the current lexical schema proof.
+	if expectedBackend == "es" && d.ConfigDigest == aiprotocol.HashJSON("text-schema-v1") {
+		id, name, digest, identityErr = projectionIdentityForSchema(expectedBackend, in, "text-schema-v1")
+	}
 	if identityErr != nil || d.Backend != expectedBackend || d.TargetID != id || d.TargetVersion != name || d.ConfigDigest != digest || d.Epoch != in.TargetEpoch || d.Operation != "upsert" {
 		return errors.New("projection.invalid_target")
 	}
@@ -210,10 +226,14 @@ func publishProjection(tx *gorm.DB, in aiprotocol.Input, a Artifact) error {
 }
 
 func projectionIdentity(backend string, in aiprotocol.Input) (uuid.UUID, string, string, error) {
+	return projectionIdentityForSchema(backend, in, "text-schema-v2:"+textsearch.Version)
+}
+
+func projectionIdentityForSchema(backend string, in aiprotocol.Input, schema string) (uuid.UUID, string, string, error) {
 	if in.TargetEpoch < 1 || (backend != "es" && backend != "qd") {
 		return uuid.Nil, "", "", errors.New("projection.invalid_target")
 	}
-	digest := aiprotocol.HashJSON("text-schema-v1")
+	digest := aiprotocol.HashJSON(schema)
 	if backend == "qd" {
 		digest = aiprotocol.HashJSON([]any{in.Profile.EmbeddingProvider, in.Profile.EmbeddingModel, in.Profile.EmbeddingRevision, in.Profile.Dimension})
 	}
@@ -233,13 +253,19 @@ type ranked struct {
 	Score float64
 }
 
-func (p *Projector) external(ctx context.Context, backend string, versions []string, query string, vector []float32, limit int) ([]ranked, string, error) {
+func (p *Projector) external(ctx context.Context, backend string, versions []string, query string, vector []float32, limit int) (rankedHits []ranked, targetName string, readErr error) {
+	ctx, finishTrace := stageTrace(ctx, "ai.retrieve."+backend)
+	defer func() { finishTrace(readErr) }()
 	var target struct {
 		ID            uuid.UUID
 		TargetVersion string
+		ConfigDigest  string
 	}
 	if err := p.DB.WithContext(ctx).Table("ai_published_targets").Where("backend=?", backend).Take(&target).Error; err != nil {
 		return nil, "", errors.New("projection.incomplete")
+	}
+	if backend == "es" && target.ConfigDigest != aiprotocol.HashJSON("text-schema-v2:"+textsearch.Version) {
+		return nil, "", errors.New("projection.incompatible_schema")
 	}
 	var covered int64
 	if err := p.DB.WithContext(ctx).Table("ai_published_projections").Where("target_id=? AND artifact_version_id::text=ANY(?::text[]) AND operation='upsert'", target.ID, pq.Array(versions)).Count(&covered).Error; err != nil {
@@ -251,8 +277,12 @@ func (p *Projector) external(ctx context.Context, backend string, versions []str
 	out := []ranked{}
 	if backend == "es" {
 		var resp struct {
-			Hits struct {
-				Hits []struct {
+			TimedOut bool `json:"timed_out"`
+			Shards   struct {
+				Failed int `json:"failed"`
+			} `json:"_shards"`
+			Hits *struct {
+				Hits *[]struct {
 					Score  float64 `json:"_score"`
 					Source struct {
 						ChildID string `json:"child_id"`
@@ -260,11 +290,27 @@ func (p *Projector) external(ctx context.Context, backend string, versions []str
 				} `json:"hits"`
 			} `json:"hits"`
 		}
-		body := map[string]any{"size": limit, "query": map[string]any{"bool": map[string]any{"must": []any{map[string]any{"match": map[string]any{"content": query}}}, "filter": []any{map[string]any{"terms": map[string]any{"content_id": versions}}}}}}
+		// AND the same canonical terms as PG; the immutable schema version in
+		// the target name prevents partially upgraded legacy indexes being read.
+		body := map[string]any{
+			"size": limit,
+			"query": map[string]any{"bool": map[string]any{
+				"must": []any{map[string]any{"match": map[string]any{
+					"content_search": map[string]any{"query": textsearch.QueryText(query), "operator": "and", "analyzer": "whitespace"},
+				}}},
+				"filter": []any{map[string]any{"terms": map[string]any{"content_id": versions}}},
+			}},
+		}
 		if err := p.request(ctx, "POST", strings.TrimRight(p.ES, "/")+"/"+target.TargetVersion+"/_search", body, backend, &resp); err != nil {
 			return nil, "", err
 		}
-		for _, h := range resp.Hits.Hits {
+		if resp.TimedOut || resp.Shards.Failed > 0 {
+			return nil, "", errors.New("projection.incomplete_response")
+		}
+		if resp.Hits == nil || resp.Hits.Hits == nil {
+			return nil, "", errors.New("projection.invalid_response")
+		}
+		for _, h := range *resp.Hits.Hits {
 			id, e := uuid.Parse(h.Source.ChildID)
 			if e != nil {
 				return nil, "", e
@@ -273,8 +319,8 @@ func (p *Projector) external(ctx context.Context, backend string, versions []str
 		}
 	} else {
 		var resp struct {
-			Result struct {
-				Points []struct {
+			Result *struct {
+				Points *[]struct {
 					Score   float64 `json:"score"`
 					Payload struct {
 						ChildID string `json:"child_id"`
@@ -286,7 +332,10 @@ func (p *Projector) external(ctx context.Context, backend string, versions []str
 		if err := p.request(ctx, "POST", strings.TrimRight(p.QD, "/")+"/collections/"+target.TargetVersion+"/points/query", body, backend, &resp); err != nil {
 			return nil, "", err
 		}
-		for _, h := range resp.Result.Points {
+		if resp.Result == nil || resp.Result.Points == nil {
+			return nil, "", errors.New("projection.invalid_response")
+		}
+		for _, h := range *resp.Result.Points {
 			id, e := uuid.Parse(h.Payload.ChildID)
 			if e != nil {
 				return nil, "", e
@@ -297,5 +346,7 @@ func (p *Projector) external(ctx context.Context, backend string, versions []str
 	return out, target.TargetVersion, nil
 }
 
-var _ = strconv.Itoa
-var _ = time.Second
+var (
+	_ = strconv.Itoa
+	_ = time.Second
+)

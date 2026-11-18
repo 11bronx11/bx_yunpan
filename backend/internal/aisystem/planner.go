@@ -16,6 +16,7 @@ import (
 )
 
 type Planner struct {
+	ProjectionBackends     []string
 	TextEpoch, VectorEpoch int64
 	TargetNamespace        string
 	Profile                aiprotocol.Profile
@@ -29,6 +30,7 @@ func Register(r asynccontrol.Registry) {
 	}
 	r["ai.job.finish"] = asynccontrol.Definition{Kind: "ai.job.finish", Queue: "commit", Timeout: time.Minute, Lifetime: 24 * time.Hour, EffectTarget: asynccontrol.EffectCore, Priority: 1}
 }
+
 func (p *Planner) Intent(in aiprotocol.Intent) (asynccontrol.Spec, error) {
 	if len(in.Targets) == 0 && in.ProfileID == "" {
 		in.ProfileID = p.Profile.ID
@@ -37,7 +39,7 @@ func (p *Planner) Intent(in aiprotocol.Intent) (asynccontrol.Spec, error) {
 	if in.Validate() != nil || in.ProfileID != p.Profile.ID || in.ProfileRevision != p.Profile.Revision {
 		return asynccontrol.Spec{}, aiprotocol.ErrInvalid
 	}
-	input := aiprotocol.Input{Intent: in, Profile: p.Profile, TargetEpoch: max(1, p.TargetEpoch), TextTargetEpoch: max(1, p.TextEpoch), VectorTargetEpoch: max(1, p.VectorEpoch), TargetNamespace: p.TargetNamespace}
+	input := aiprotocol.Input{Intent: in, Profile: p.Profile, TargetEpoch: max(1, p.TargetEpoch), TextTargetEpoch: max(1, p.TextEpoch), VectorTargetEpoch: max(1, p.VectorEpoch), TargetNamespace: p.TargetNamespace, ProjectionBackends: p.ProjectionBackends}
 	deadline := time.Unix(in.RequestedAt, 0).Add(24 * time.Hour)
 	if in.Legacy != nil && in.Legacy.Deadline.Before(deadline) {
 		deadline = in.Legacy.Deadline
@@ -54,6 +56,7 @@ func (p *Planner) Intent(in aiprotocol.Intent) (asynccontrol.Spec, error) {
 	}
 	return s, nil
 }
+
 func spec(kind string, in aiprotocol.Input) asynccontrol.Spec {
 	b, _ := json.Marshal(in)
 	resource := fmt.Sprintf("object:%s:%d", in.Intent.ObjectID, in.Intent.ContentGeneration)
@@ -78,6 +81,7 @@ func spec(kind string, in aiprotocol.Input) asynccontrol.Spec {
 	}
 	return sp
 }
+
 func (p *Planner) Continuations(t asynccontrol.Task, r asynccontrol.Result) ([]asynccontrol.Spec, error) {
 	if !strings.HasPrefix(t.Kind, "ai.") || t.Kind == "ai.job.finish" {
 		return nil, nil
@@ -146,6 +150,9 @@ func (p *Planner) Continuations(t asynccontrol.Task, r asynccontrol.Result) ([]a
 	}
 	specs := []asynccontrol.Spec{}
 	for _, kind := range kinds {
+		if strings.HasPrefix(kind, "ai.project.") && in.Operation != "delete" && in.Operation != "retire" && len(in.ProjectionBackends) > 0 && !slices.Contains(in.ProjectionBackends, "es_qdrant") {
+			continue
+		}
 		projectionInput := in
 		if kind == "ai.project.text" {
 			projectionInput.TargetEpoch = max(1, in.TextTargetEpoch)
@@ -176,6 +183,7 @@ func (p *Planner) Continuations(t asynccontrol.Task, r asynccontrol.Result) ([]a
 	}
 	return specs, nil
 }
+
 func (p *Planner) Failure(t asynccontrol.Task) ([]asynccontrol.Spec, error) {
 	cap := map[string]string{"ai.source.prepare": "source", "ai.text.build": "text", "ai.embedding.generate": "vector", "ai.summary.generate": "summary"}[t.Kind]
 	if cap == "" {
@@ -185,13 +193,33 @@ func (p *Planner) Failure(t asynccontrol.Task) ([]asynccontrol.Spec, error) {
 	if json.Unmarshal(t.Input, &in) != nil {
 		return nil, asynccontrol.ErrInvalid
 	}
-	in.FailureCapability = cap
-	in.ErrorCode = "ai." + cap + ".build_failed"
-	in.FailureSeq = seq(in, cap)
-	child := spec("ai.capability.finish", in)
-	child.SemanticKey = "ai.v2.capability.finish:" + t.ID.String()
-	return []asynccontrol.Spec{child}, nil
+	// Descendants which will never be scheduled need a terminal observation too.
+	// Each observation carries that capability's own seq; the publisher fences
+	// late failures against newer builds and preserves previous active results.
+	caps := []string{cap}
+	if cap == "source" {
+		caps = append(caps, "text", "vector", "summary")
+	}
+	if cap == "text" {
+		caps = append(caps, "vector")
+	}
+	children := []asynccontrol.Spec{}
+	for _, failed := range caps {
+		if failed == "vector" && !in.Profile.EnableVectors || failed == "summary" && !in.Profile.EnableSummary || seq(in, failed) < 1 {
+			continue
+		}
+		failure := in
+		failure.FailureCapability = failed
+		failure.ErrorCode = "ai." + cap + ".build_failed"
+		failure.FailureSeq = seq(in, failed)
+		child := spec("ai.capability.finish", failure)
+		child.SemanticKey = "ai.v2.capability.finish:" + t.ID.String() + ":" + failed
+		child.Trace = json.RawMessage(t.Trace)
+		children = append(children, child)
+	}
+	return children, nil
 }
+
 func seq(in aiprotocol.Input, cap string) int64 {
 	switch cap {
 	case "source":

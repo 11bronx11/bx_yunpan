@@ -1812,6 +1812,23 @@ components:
         content_generation: {type: integer, format: int64}
         source_version_id: {$ref: '#/components/schemas/UUID'}
         content_version_id: {$ref: '#/components/schemas/UUID'}
+        source_location:
+          type: object
+          description: Parser provenance at source block or table row-group precision.
+          properties:
+            source_kind: {type: string}
+            page_start: {type: integer}
+            page_end: {type: integer}
+            sheet_name: {type: string}
+            row_start: {type: integer}
+            row_end: {type: integer}
+            column_start: {type: integer}
+            column_end: {type: integer}
+            heading_path: {type: string}
+            kind: {type: string}
+            source_start: {type: integer, format: int64}
+            source_end: {type: integer, format: int64}
+            encoding: {type: string}
         parent_id: {$ref: '#/components/schemas/UUID'}
         child_id: {$ref: '#/components/schemas/UUID'}
         page_number:

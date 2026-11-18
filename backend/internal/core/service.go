@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/aiprotocol"
 	"github.com/11bronx11/bx_yunpan/backend/internal/core/pb"
@@ -34,13 +35,14 @@ type Service struct {
 type fileRow struct {
 	FileID, ObjectID, FolderID            uuid.UUID
 	ContentGeneration, EntryVersion, Size int64
-	Name, Path, MimeType                  string
+	Name, Path, MimeType, ThumbnailState  string
 	UpdatedAt                             time.Time
 }
 
 func fileProto(f fileRow) *pb.FileRef {
-	return &pb.FileRef{FileId: f.FileID.String(), ObjectId: f.ObjectID.String(), FolderId: f.FolderID.String(), ContentGeneration: f.ContentGeneration, EntryVersion: f.EntryVersion, Name: f.Name, Path: f.Path, MimeType: f.MimeType, Size: f.Size, UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339Nano)}
+	return &pb.FileRef{FileId: f.FileID.String(), ObjectId: f.ObjectID.String(), FolderId: f.FolderID.String(), ContentGeneration: f.ContentGeneration, EntryVersion: f.EntryVersion, Name: f.Name, Path: f.Path, MimeType: f.MimeType, Size: f.Size, UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339Nano), ThumbnailState: f.ThumbnailState}
 }
+
 func invalidScope(ids ...uuid.UUID) error {
 	st := status.New(codes.FailedPrecondition, "ai.scope_invalid")
 	if len(ids) == 0 {
@@ -56,6 +58,7 @@ func invalidScope(ids ...uuid.UUID) error {
 	}
 	return with.Err()
 }
+
 func (s *Service) grant(ctx context.Context, token string) (aiprotocol.ScopeGrant, error) {
 	var g aiprotocol.ScopeGrant
 	if serviceauth.Verify(s.ScopeKey, token, "core-retrieval-v1", &g) != nil || g.Principal == uuid.Nil || g.ExpiresAt <= time.Now().Unix() || g.Action != "retrieve" || g.Scope.Normalize() != nil {
@@ -70,9 +73,11 @@ func (s *Service) grant(ctx context.Context, token string) (aiprotocol.ScopeGran
 	}
 	return g, nil
 }
+
 func snapshot(g aiprotocol.ScopeGrant) string {
 	return aiprotocol.HashJSON([]any{g.Principal, g.Scope, g.ContentEpoch, g.ACLEpoch})
 }
+
 func (s *Service) OpenRetrievalScope(ctx context.Context, r *pb.OpenScopeRequest) (*pb.ScopeResponse, error) {
 	g, err := s.grant(ctx, r.GetGrant())
 	if err != nil {
@@ -108,7 +113,7 @@ func (s *Service) OpenRetrievalScope(ctx context.Context, r *pb.OpenScopeRequest
 // Folder scope is resolved in business SQL. No authorization replica is sent to
 // an external index and all name/path metadata comes from this current scope.
 func (s *Service) query(ctx context.Context, g aiprotocol.ScopeGrant) *gorm.DB {
-	q := s.DB.WithContext(ctx).Table("file_entries e").Select("e.id AS file_id,e.object_id,e.folder_id,e.version AS entry_version,e.name,(WITH RECURSIVE ancestors AS (SELECT f.id,f.parent_id,f.name,0 AS depth FROM folders f WHERE f.id=e.folder_id AND f.owner_id=e.owner_id AND f.deleted_at IS NULL UNION ALL SELECT f.id,f.parent_id,f.name,a.depth+1 FROM folders f JOIN ancestors a ON f.id=a.parent_id WHERE f.owner_id=e.owner_id AND f.deleted_at IS NULL AND a.depth<128) SELECT '/'||COALESCE(string_agg(name,'/' ORDER BY depth DESC) FILTER(WHERE parent_id IS NOT NULL)||'/','')||e.name FROM ancestors) AS path,e.updated_at,o.content_generation,o.size_bytes AS size,o.mime_type").Joins("JOIN file_objects o ON o.id=e.object_id").Where("e.owner_id=? AND e.deleted_at IS NULL AND o.status='ready'", g.Principal)
+	q := s.DB.WithContext(ctx).Table("file_entries e").Select("e.id AS file_id,e.object_id,e.folder_id,e.version AS entry_version,e.name,(WITH RECURSIVE ancestors AS (SELECT f.id,f.parent_id,f.name,0 AS depth FROM folders f WHERE f.id=e.folder_id AND f.owner_id=e.owner_id AND f.deleted_at IS NULL UNION ALL SELECT f.id,f.parent_id,f.name,a.depth+1 FROM folders f JOIN ancestors a ON f.id=a.parent_id WHERE f.owner_id=e.owner_id AND f.deleted_at IS NULL AND a.depth<128) SELECT '/'||COALESCE(string_agg(name,'/' ORDER BY depth DESC) FILTER(WHERE parent_id IS NOT NULL)||'/','')||e.name FROM ancestors) AS path,e.updated_at,o.content_generation,o.size_bytes AS size,o.mime_type,CASE WHEN EXISTS(SELECT 1 FROM object_variants v WHERE v.object_id=o.id AND v.variant_type='thumbnail' AND v.status='ready') THEN 'available' ELSE 'pending' END AS thumbnail_state").Joins("JOIN file_objects o ON o.id=e.object_id").Where("e.owner_id=? AND e.deleted_at IS NULL AND o.status='ready'", g.Principal)
 	if g.Scope.Mode == "selected" {
 		q = q.Where("e.id IN ?", g.Scope.FileIDs)
 	}
@@ -121,6 +126,7 @@ func (s *Service) query(ctx context.Context, g aiprotocol.ScopeGrant) *gorm.DB {
 	}
 	return q
 }
+
 func (s *Service) files(ctx context.Context, g aiprotocol.ScopeGrant, ids []uuid.UUID) ([]fileRow, error) {
 	var rows []fileRow
 	err := s.query(ctx, g).Where("e.id IN ?", ids).Find(&rows).Error
@@ -198,6 +204,7 @@ func (s *Service) StreamScopeMembers(ctx context.Context, r *pb.ScopeMembersRequ
 	}
 	return out, nil
 }
+
 func (s *Service) BatchGetFileRefs(ctx context.Context, r *pb.FileRefsRequest) (*pb.FileRefsResponse, error) {
 	g, err := s.grant(ctx, r.Grant)
 	if err != nil {
@@ -224,6 +231,7 @@ func (s *Service) BatchGetFileRefs(ctx context.Context, r *pb.FileRefsRequest) (
 	}
 	return out, nil
 }
+
 func (s *Service) ValidateEvidence(ctx context.Context, r *pb.ValidateEvidenceRequest) (*pb.ValidateEvidenceResponse, error) {
 	g, err := s.grant(ctx, r.Grant)
 	if err != nil {
@@ -259,6 +267,7 @@ func (s *Service) ValidateEvidence(ctx context.Context, r *pb.ValidateEvidenceRe
 	}
 	return out, nil
 }
+
 func (s *Service) GetObjectForProcessing(ctx context.Context, r *pb.ProcessingRequest) (*pb.ProcessingResponse, error) {
 	var g aiprotocol.ProcessingGrant
 	if serviceauth.Verify(s.ProcessingKey, r.Grant, "core-processing-v1", &g) != nil || g.Action != "object.read" || g.Deadline <= time.Now().Unix() || g.InputIdentity != r.InputIdentity || g.IntentID.String() != r.IntentId || g.ObjectID.String() != r.ObjectId || g.ContentGeneration != r.ContentGeneration {
@@ -291,7 +300,9 @@ func NameSearch(ctx context.Context, s *Service, owner uuid.UUID, scope aiprotoc
 		return nil, err
 	}
 	q := s.query(ctx, aiprotocol.ScopeGrant{Principal: owner, Scope: scope})
-	q = q.Where("e.name ILIKE ? ESCAPE '\\'", "%"+strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(query)+"%")
+	escaped := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(query)
+	q = q.Where("(e.name_normalized ILIKE ? ESCAPE '\\' OR similarity(e.name_normalized,lower(?))>0.1)", "%"+escaped+"%", query)
+	q = q.Order(clause.OrderBy{Expression: clause.Expr{SQL: "CASE WHEN e.name_normalized=lower(?) THEN 1.0 WHEN e.name_normalized ILIKE lower(?) || '%' ESCAPE '\\' THEN 0.75+similarity(e.name_normalized,lower(?))*0.25 ELSE similarity(e.name_normalized,lower(?)) END DESC", Vars: []any{query, escaped, query, query}}})
 	if len(mimes) > 0 {
 		q = q.Where("o.mime_type = ANY(?::text[])", pq.Array(mimes))
 	}

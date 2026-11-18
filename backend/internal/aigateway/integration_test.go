@@ -39,6 +39,7 @@ func (c *eligibilityClient) BatchCapabilities(_ context.Context, r *pbv2.BatchCa
 	}
 	return out, nil
 }
+
 func TestSparseEligibilityCursorAndCoreGrantBoundaries(t *testing.T) {
 	db := testdb.Business(t)
 	ctx := context.Background()
@@ -125,7 +126,7 @@ func TestSparseEligibilityCursorAndCoreGrantBoundaries(t *testing.T) {
 	h.Enabled = false
 	h.Client = nil
 	name := request("POST", "/api/v1/search", fmt.Sprintf(`{"query":"0001","mode":"name"}`), 200)
-	if len(name["hits"].([]any)) != 1 {
+	if len(name["hits"].([]any)) == 0 || name["hits"].([]any)[0].(map[string]any)["file"].(map[string]any)["name"] != "0001.txt" {
 		t.Fatal("AI outage disabled core name search", name)
 	}
 }

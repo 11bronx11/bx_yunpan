@@ -1,13 +1,16 @@
 package rag
 
 import (
+	"errors"
 	"fmt"
-	"github.com/google/uuid"
 	"strings"
-	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
-const ParentChildVersion = "parent-child-v1"
+const ParentChildVersion = "parent-child-v2"
+
+var ErrParentChildResourceLimit = errors.New("parent-child resource limit")
 
 type Parent struct {
 	ID                               uuid.UUID
@@ -33,10 +36,45 @@ type ParentChild struct {
 // to children and all child offsets are exact rune positions in their parent.
 // Parser offsets remain block precision unless the parser proves otherwise.
 func BuildParentChild(version uuid.UUID, blocks []Section) (ParentChild, error) {
+	return BuildParentChildVersion(version, blocks, ParentChildVersion)
+}
+
+func BuildParentChildVersion(version uuid.UUID, blocks []Section, implementation string) (ParentChild, error) {
+	if implementation != "parent-child-v1" && implementation != ParentChildVersion {
+		return ParentChild{}, fmt.Errorf("unsupported parent-child version")
+	}
+	groups := groupParentBlocks(blocks, implementation == ParentChildVersion)
 	out := ParentChild{Coverage: "complete"}
-	for ordinal, block := range blocks {
+	for ordinal, group := range groups {
+		if implementation == "parent-child-v1" {
+			ordinal = group.start
+		}
+		block := group.Section
 		text := strings.TrimSpace(strings.ReplaceAll(block.Text, "\r\n", "\n"))
 		if text == "" {
+			continue
+		}
+		if implementation == ParentChildVersion && typedSectionKind(block) == KindTable {
+			heading := block.HeadingPath
+			if heading == "" {
+				heading = block.Section
+			}
+			pieces, incomplete := splitTypedTable(block, heading, text, ChunkOptions{TokenBudget: 600})
+			if incomplete {
+				return ParentChild{}, ErrParentChildResourceLimit
+			}
+			for n, piece := range pieces {
+				if EstimateTokens(piece.Content) > 600 {
+					return ParentChild{}, ErrParentChildResourceLimit
+				}
+				key := fmt.Sprintf("%s:%d:table:%d:%s", version, ordinal, n, implementation)
+				location := block
+				location.RowStart = piece.RowStart
+				location.RowEnd = piece.RowEnd
+				parent := Parent{ID: uuid.NewSHA1(version, []byte(key)), Ordinal: len(out.Parents), Key: key, Content: piece.Content, Heading: heading, Kind: KindTable, BlockStart: group.start, BlockEnd: group.end, TokenCount: EstimateTokens(piece.Content), Location: location}
+				out.Parents = append(out.Parents, parent)
+				out.Children = append(out.Children, Child{ID: uuid.NewSHA1(parent.ID, []byte(key+":child")), ParentID: parent.ID, Ordinal: len(out.Children), Key: key + ":child", Content: piece.Content, Heading: heading, BlockStart: group.start, BlockEnd: group.end, ParentStart: 0, ParentEnd: len([]rune(piece.Content)), TokenCount: parent.TokenCount, Location: location})
+			}
 			continue
 		}
 		runes := []rune(text)
@@ -51,14 +89,14 @@ func BuildParentChild(version uuid.UUID, blocks []Section) (ParentChild, error) 
 			if kind == "" {
 				kind = "text"
 			}
-			key := fmt.Sprintf("%s:%d:%d:%d:%s", version, ordinal, start, end, ParentChildVersion)
-			p := Parent{ID: uuid.NewSHA1(version, []byte(key)), Ordinal: len(out.Parents), Key: key, Content: content, Heading: heading, Kind: kind, BlockStart: ordinal, BlockEnd: ordinal, TokenCount: EstimateTokens(content), Location: block}
+			key := fmt.Sprintf("%s:%d:%d:%d:%s", version, ordinal, start, end, implementation)
+			p := Parent{ID: uuid.NewSHA1(version, []byte(key)), Ordinal: len(out.Parents), Key: key, Content: content, Heading: heading, Kind: kind, BlockStart: group.start, BlockEnd: group.end, TokenCount: EstimateTokens(content), Location: block}
 			out.Parents = append(out.Parents, p)
 			pr := []rune(content)
 			for cs := 0; cs < len(pr); {
 				ce := boundedEnd(pr, cs, 400, 600)
 				ck := fmt.Sprintf("%s:%d:%d", key, cs, ce)
-				out.Children = append(out.Children, Child{ID: uuid.NewSHA1(p.ID, []byte(ck)), ParentID: p.ID, Ordinal: len(out.Children), Key: ck, Content: string(pr[cs:ce]), Heading: heading, BlockStart: ordinal, BlockEnd: ordinal, ParentStart: cs, ParentEnd: ce, TokenCount: EstimateTokens(string(pr[cs:ce])), Location: block})
+				out.Children = append(out.Children, Child{ID: uuid.NewSHA1(p.ID, []byte(ck)), ParentID: p.ID, Ordinal: len(out.Children), Key: ck, Content: string(pr[cs:ce]), Heading: heading, BlockStart: group.start, BlockEnd: group.end, ParentStart: cs, ParentEnd: ce, TokenCount: EstimateTokens(string(pr[cs:ce])), Location: block})
 				if ce == len(pr) {
 					break
 				}
@@ -76,11 +114,9 @@ func BuildParentChild(version uuid.UUID, blocks []Section) (ParentChild, error) 
 	}
 	return out, nil
 }
+
 func boundedEnd(r []rune, start, target, hard int) int {
-	end := start
-	for end < len(r) && EstimateTokens(string(r[start:end+1])) <= target {
-		end++
-	}
+	end := fittingTokenEnd(r, start, min(target, hard))
 	if end == len(r) {
 		return end
 	}
@@ -93,7 +129,6 @@ func boundedEnd(r []rune, start, target, hard int) int {
 			return i
 		}
 	}
-	_ = hard
 	return end
 }
 
@@ -125,4 +160,33 @@ func SummaryParts(blocks []Section, budget int) []string {
 	return parts
 }
 
-var _ = utf8.RuneCountInString
+type parentBlock struct {
+	Section
+	start, end int
+}
+
+func groupParentBlocks(blocks []Section, merge bool) []parentBlock {
+	var groups []parentBlock
+	for i, b := range blocks {
+		if strings.TrimSpace(b.Text) == "" {
+			continue
+		}
+		if merge && len(groups) > 0 {
+			p := &groups[len(groups)-1]
+			separator := "\n\n"
+			if typedSectionKind(b) == KindList {
+				separator = "\n"
+			}
+			combined := strings.TrimSpace(p.Text) + separator + strings.TrimSpace(b.Text)
+			if canCoalesceTypedSections(p.Section, b) && EstimateTokens(combined) <= 1600 {
+				p.Text = combined
+				p.end = i
+				// The combined location remains a block range, never invented character offsets.
+				p.SourceEnd = max(p.SourceEnd, b.SourceEnd)
+				continue
+			}
+		}
+		groups = append(groups, parentBlock{Section: b, start: i, end: i})
+	}
+	return groups
+}

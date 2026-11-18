@@ -15,3 +15,12 @@ func SupportedText(mime string) bool {
 	mime = strings.ToLower(strings.TrimSpace(strings.Split(mime, ";")[0]))
 	return strings.HasPrefix(mime, "text/") || strings.Contains(mime, "pdf") || strings.Contains(mime, "wordprocessingml") || strings.Contains(mime, "spreadsheetml") || strings.Contains(mime, "json") || strings.Contains(mime, "yaml") || strings.Contains(mime, "csv") || strings.Contains(mime, "javascript") || strings.Contains(mime, "typescript") || mime == "application/sql" || mime == "application/x-sh" || strings.Contains(mime, "xml")
 }
+
+// VisionImage is deliberately limited to the formats accepted and bounded by
+// the existing vision adapter. A thumbnail alone does not make a source text.
+func VisionImage(mime string) bool {
+	mime = strings.ToLower(strings.TrimSpace(strings.Split(mime, ";")[0]))
+	return mime == "image/png" || mime == "image/jpeg"
+}
+
+func SupportedSource(mime string) bool { return SupportedText(mime) || VisionImage(mime) }
