@@ -13,23 +13,27 @@ import (
 )
 
 type Store struct {
-	Observe       func(*gorm.DB, Task) error
-	AfterTerminal func(*gorm.DB, *Store, Task, string) error
+	ProtocolVersion int
+	PlanCompleted   func(Task, Completion) ([]Spec, error)
+	PlanAbandoned   func(Task) ([]Spec, error)
+	Observe         func(*gorm.DB, Task) error
+	AfterTerminal   func(*gorm.DB, *Store, Task, string) error
 	// These hooks are trusted immutable planners, never worker supplied specs.
-	PlanContinuations                                         func(Task, Result) ([]Spec, error)
-	PlanFailure                                               func(Task) ([]Spec, error)
-	CommitCalls, CommitNanos, ReceiptHits                     atomic.Uint64
-	MaxAttempts, MaxDispatches, MaxRecoveries, MaxResultSends int
-	Critical                                                  *gorm.DB
-	DB                                                        *gorm.DB
-	Registry                                                  Registry
-	Lease                                                     time.Duration
-	RetryBase, RetryCap                                       time.Duration
-	CommitWindow                                              time.Duration
+	PlanContinuations                                                                      func(Task, Result) ([]Spec, error)
+	PlanFailure                                                                            func(Task) ([]Spec, error)
+	CommitCalls, CommitNanos, ReceiptHits                                                  atomic.Uint64
+	DirectExecutions, DirectRecomputes, CompletionReports, CompletionErrors, ReceiptChecks atomic.Uint64
+	MaxAttempts, MaxDispatches, MaxRecoveries, MaxResultSends                              int
+	Critical                                                                               *gorm.DB
+	DB                                                                                     *gorm.DB
+	Registry                                                                               Registry
+	Lease                                                                                  time.Duration
+	RetryBase, RetryCap                                                                    time.Duration
+	CommitWindow                                                                           time.Duration
 }
 
 func New(db *gorm.DB) *Store {
-	return &Store{MaxAttempts: 12, MaxDispatches: 20, MaxRecoveries: 12, MaxResultSends: 20, DB: db, Registry: CoreRegistry(), Lease: 30 * time.Second, RetryBase: 5 * time.Second, RetryCap: 5 * time.Minute, CommitWindow: 24 * time.Hour}
+	return &Store{ProtocolVersion: 2, MaxAttempts: 12, MaxDispatches: 20, MaxRecoveries: 12, MaxResultSends: 20, DB: db, Registry: CoreRegistry(), Lease: 30 * time.Second, RetryBase: 5 * time.Second, RetryCap: 5 * time.Minute, CommitWindow: 24 * time.Hour}
 }
 
 func (s *Store) Ensure(ctx context.Context, spec Spec, source string) (Task, error) {
@@ -68,9 +72,14 @@ func (s *Store) ensure(tx *gorm.DB, spec Spec, source string) (Task, error) {
 	if len(trace) == 0 {
 		trace = json.RawMessage(`{}`)
 	}
-	t := Task{ProtocolVersion: 2, Phase: "compute", MaxCommitAttempts: s.MaxAttempts, EffectTarget: d.Target(), ID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("bx/async/v1/"+spec.SemanticKey)), SemanticKey: spec.SemanticKey, Kind: spec.Kind, ContractVersion: 1, InputDigest: digest, Input: input, Queue: d.Queue, OwnerKey: spec.OwnerKey, ResourceKey: spec.ResourceKey, ShardKey: spec.ShardKey, LayoutVersion: 0, Shard: 0, Priority: d.Priority, State: Pending, Version: 1, NotBefore: due, Deadline: maxTime(due, now).Add(d.Lifetime), Attempts: spec.Attempts, Dispatches: spec.Dispatches, Recoveries: spec.Recoveries, MaxAttempts: s.MaxAttempts, MaxDispatches: s.MaxDispatches, MaxRecoveries: s.MaxRecoveries, MaxResultSends: s.MaxResultSends, TimeoutMS: d.Timeout.Milliseconds(), ParentID: spec.ParentID, Trace: []byte(trace), CreatedAt: now, UpdatedAt: now}
+	t := Task{ProtocolVersion: s.ProtocolVersion, Phase: "compute", MaxCommitAttempts: s.MaxAttempts, EffectTarget: d.Target(), ID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("bx/async/v1/"+spec.SemanticKey)), SemanticKey: spec.SemanticKey, Kind: spec.Kind, ContractVersion: 1, InputDigest: digest, Input: input, Queue: d.Queue, OwnerKey: spec.OwnerKey, ResourceKey: spec.ResourceKey, ShardKey: spec.ShardKey, LayoutVersion: 0, Shard: 0, Priority: d.Priority, State: Pending, Version: 1, NotBefore: due, Deadline: maxTime(due, now).Add(d.Lifetime), Attempts: spec.Attempts, Dispatches: spec.Dispatches, Recoveries: spec.Recoveries, MaxAttempts: s.MaxAttempts, MaxDispatches: s.MaxDispatches, MaxRecoveries: s.MaxRecoveries, MaxResultSends: s.MaxResultSends, TimeoutMS: d.Timeout.Milliseconds(), ParentID: spec.ParentID, Trace: []byte(trace), CreatedAt: now, UpdatedAt: now}
 	if Command(t.Kind) {
 		t.Phase = "command"
+	}
+	if t.ProtocolVersion == 3 {
+		t.Phase = "execute"
+		t.DispatchState = "pending"
+		t.DispatchNotBefore = due
 	}
 	if !spec.Deadline.IsZero() && spec.Deadline.Before(t.Deadline) {
 		t.Deadline = spec.Deadline
@@ -92,7 +101,11 @@ func (s *Store) ensure(tx *gorm.DB, spec Spec, source string) (Task, error) {
 			t.CommitDeadline = &reconcileDeadline
 		}
 	}
-	res := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "semantic_key"}}, DoNothing: true}).Create(&t)
+	create := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "semantic_key"}}, DoNothing: true})
+	if t.ProtocolVersion == 3 {
+		create = create.Omit("LayoutVersion", "Shard", "Priority", "CommitAttempts", "MaxCommitAttempts", "CommitDeadline", "ResultID", "Recoveries", "MaxRecoveries", "ResultSends", "MaxResultSends")
+	}
+	res := create.Create(&t)
 	if res.Error != nil {
 		return t, res.Error
 	}

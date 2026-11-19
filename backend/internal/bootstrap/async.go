@@ -32,6 +32,10 @@ import (
 
 func asyncStore(deps *dependencies.AsyncSet, cfg config.Config) *asynccontrol.Store {
 	s := asynccontrol.New(deps.Control)
+	if cfg.Async.ProtocolVersion == 3 {
+		s.ProtocolVersion = 3
+	}
+	s.PlanAbandoned = asyncjobs.AbandonedOutputs(cfg.Async.OutputSafety)
 	s.Critical = deps.Critical
 	s.MaxAttempts = cfg.Async.MaxAttempts
 	s.MaxDispatches = cfg.Async.MaxDispatches
@@ -46,6 +50,7 @@ func asyncStore(deps *dependencies.AsyncSet, cfg config.Config) *asynccontrol.St
 	aisystem.Register(s.Registry)
 	planner := &aisystem.Planner{ProjectionBackends: cfg.Search.WriteBackends, TextEpoch: cfg.AITextEpoch(), VectorEpoch: cfg.AIVectorEpoch(), TargetNamespace: cfg.AISplit.ProjectionNamespace, TargetEpoch: cfg.AIProjectionEpoch(), Profile: cfg.AIProfile()}
 	s.PlanContinuations = planner.Continuations
+	s.PlanCompleted = planner.Completed
 	s.PlanFailure = planner.Failure
 	s.Observe = planner.Observe
 	s.AfterTerminal = planner.Finish
@@ -97,7 +102,7 @@ func RunAsync(ctx context.Context, cfg config.Config, logger *slog.Logger, role 
 			func(c context.Context) error {
 				return s.RunModule(c, "maintenance", cfg.App.InstanceID, func(live context.Context, _ uuid.UUID) error {
 					for live.Err() == nil {
-						if err := s.RecoverOutputs(live, 100, cfg.Async.OutputSafety); err != nil {
+						if err := s.RecoverLegacyOutputs(live, 100, cfg.Async.OutputSafety); err != nil {
 							return err
 						}
 						if err := s.Maintain(live, 100, cfg.Async.DetailRetention); err != nil {
@@ -137,13 +142,20 @@ func RunAsync(ctx context.Context, cfg config.Config, logger *slog.Logger, role 
 			}
 			return json.Marshal(out)
 		}
+		direct := &asyncjobs.DirectWorker{Computer: computer, Committer: applier}
 		worker := func(c context.Context) error {
+			if s.ProtocolVersion == 3 {
+				return s.RunDirectWorker(c, broker, queue, cfg.Async.Concurrency, direct, func(err error) bool { return errors.Is(err, asynccontrol.ErrInvalid) }, logger)
+			}
 			return s.RunWorker(c, broker, queue, cfg.Async.Concurrency, compute, func(err error) bool { return errors.Is(err, asynccontrol.ErrInvalid) }, logger, applier.Apply)
 		}
 		if role != "gc-worker" {
 			return worker(ctx)
 		}
 		return runAsyncGroup(ctx, worker, func(c context.Context) error {
+			if s.ProtocolVersion == 3 {
+				return s.RunDirectWorker(c, broker, "core-command", 1, direct, func(err error) bool { return errors.Is(err, asynccontrol.ErrInvalid) }, logger)
+			}
 			return s.RunWorker(c, broker, "core-command", 1, nil, func(err error) bool { return errors.Is(err, asynccontrol.ErrInvalid) }, logger, applier.Apply)
 		}, func(c context.Context) error {
 			return s.RunModule(c, "business-event-retention", cfg.App.InstanceID, func(live context.Context, _ uuid.UUID) error {

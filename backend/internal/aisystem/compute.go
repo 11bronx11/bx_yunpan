@@ -21,6 +21,7 @@ import (
 )
 
 type Computer struct {
+	ProjectDirect      func(context.Context, asynccontrol.Task, aiprotocol.Input) (any, int64, error)
 	DB                 *gorm.DB
 	Core               pb.CoreReadServiceClient
 	Parser             ai.ParserGateway
@@ -52,7 +53,16 @@ func IsPermanentComputeError(err error) bool {
 	return errors.Is(err, asynccontrol.ErrInvalid) || ai.IsProviderPermanent(err) || ai.IsParsePermanent(err) || ai.IsParseUnsupported(err) || ai.IsParseResourceLimit(err)
 }
 
-func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.RawMessage, computeErr error) {
+// ComputedValue stays in this process; it is never a generic stored manifest.
+type ComputedValue struct {
+	FailureCode string
+	OutputID    uuid.UUID
+	Value       any
+	RowCount    int64
+	Coverage    string
+}
+
+func (c *Computer) ComputeValue(ctx context.Context, t asynccontrol.Task) (value *ComputedValue, computeErr error) {
 	ctx, finishTrace := stageTrace(ctx, t.Kind)
 	defer func() { finishTrace(computeErr) }()
 	in, err := decode[aiprotocol.Input](t.Input)
@@ -235,16 +245,37 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (body json.
 		data = in
 		count = 1
 	case "ai.project.text", "ai.project.vector":
-		if c.Project == nil {
-			return nil, errors.New("projection.unavailable")
+		if t.ProtocolVersion == 3 {
+			if c.ProjectDirect == nil {
+				return nil, errors.New("projection.unavailable")
+			}
+			data, count, err = c.ProjectDirect(ctx, t, in)
+		} else {
+			if c.Project == nil {
+				return nil, errors.New("projection.unavailable")
+			}
+			data, count, err = c.Project(ctx, t.Kind, in)
 		}
-		data, count, err = c.Project(ctx, t.Kind, in)
 		if err != nil {
 			return nil, err
 		}
 	default:
 		return nil, asynccontrol.ErrInvalid
 	}
+	return &ComputedValue{OutputID: outputID, Value: data, RowCount: count, Coverage: coverage}, nil
+}
+
+// Compute is retained solely for accepted v2 tasks and historical tools.
+func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (json.RawMessage, error) {
+	value, err := c.ComputeValue(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	in, err := decode[aiprotocol.Input](t.Input)
+	if err != nil {
+		return nil, err
+	}
+	data, count, coverage, outputID := value.Value, value.RowCount, value.Coverage, value.OutputID
 	raw, err := json.Marshal(data)
 	if err != nil {
 		return nil, err

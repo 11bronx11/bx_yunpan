@@ -13,6 +13,9 @@ import (
 // Reserve only claims a due publisher record. It reserves no execution slot,
 // rotates no owner/priority, and never changes a task's processing state.
 func (s *Store) Reserve(ctx context.Context, queue string, _ ...uuid.UUID) (t Task, ok bool, err error) {
+	if s.ProtocolVersion == 3 {
+		return s.reserveDirect(ctx, queue)
+	}
 	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		q := tx.Raw(`SELECT t.* FROM tasks t JOIN task_deliveries d ON d.task_id=t.id AND d.generation=t.dispatch_generation
  WHERE t.protocol_version=2 AND t.state='pending' AND t.queue=? AND d.not_before<=clock_timestamp()
@@ -40,6 +43,9 @@ func (s *Store) Reserve(ctx context.Context, queue string, _ ...uuid.UUID) (t Ta
 }
 
 func (s *Store) Published(ctx context.Context, t Task, cause error) error {
+	if t.ProtocolVersion == 3 {
+		return s.publishedDirect(ctx, t, cause)
+	}
 	if t.DeliveryToken == nil {
 		return ErrInvalid
 	}
@@ -62,6 +68,9 @@ func errorText(err error) string {
 // Recovery is limited to expired leases, deadlines and exhausted sends. A
 // confirmed queued notification is left to RabbitMQ until its explicit deadline.
 func (s *Store) Recover(ctx context.Context, limit int) error {
+	if s.ProtocolVersion == 3 {
+		return s.recoverDirect(ctx, limit)
+	}
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var rows []Task
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).Where(`protocol_version=2 AND

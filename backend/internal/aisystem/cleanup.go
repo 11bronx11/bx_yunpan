@@ -134,6 +134,16 @@ func (p *Publisher) cleanArtifacts(tx *gorm.DB, i aiprotocol.Intent, ids []uuid.
 	if !versionsSafe {
 		return false, nil
 	}
+	// A direct write-ahead orphan still needs immutable version metadata for its
+	// retirement proof. The independent projector removes it before a later GC
+	// pass can collect normalized rows.
+	var directOrphans int64
+	if err := tx.Table("ai_orphan_projections").Where("object_id=? AND content_generation=? AND writer_deadline IS NOT NULL", i.ObjectID, i.ContentGeneration).Count(&directOrphans).Error; err != nil {
+		return false, err
+	}
+	if directOrphans > 0 {
+		return false, nil
+	}
 	// Old versions are removed in dependency order. Active source/content/set/
 	// summary pointers, same-generation tombstones and compact receipts remain.
 	queries := []string{
@@ -190,7 +200,15 @@ func (p *Projector) projectDelete(ctx context.Context, backend string, in aiprot
 		TargetVersion     string
 		ArtifactVersionID uuid.UUID
 	}
-	if err := p.DB.WithContext(ctx).Table("ai_published_orphan_projections").Select("target_id,target_version,artifact_version_id").Where("object_id=? AND content_generation=? AND backend=?", in.Intent.ObjectID, in.Intent.ContentGeneration, backend).Find(&orphans).Error; err != nil {
+	orphanQuery := p.DB.WithContext(ctx).Table("ai_orphan_projections x").Select("x.target_id,x.target_version,x.artifact_version_id").Joins("LEFT JOIN ai_objects o ON o.object_id=x.object_id AND o.content_generation=x.content_generation").Where("x.object_id=? AND x.content_generation=? AND x.backend=?", in.Intent.ObjectID, in.Intent.ContentGeneration, backend)
+	// Write-ahead records may describe active outputs. Only an immutable retired
+	// version or a tombstone, past its writer window, can authorize physical GC.
+	table, column := "ai_content_versions", "active_content_version_id"
+	if backend == "qd" {
+		table, column = "ai_embedding_sets", "active_embedding_set_id"
+	}
+	orphanQuery = orphanQuery.Where("x.writer_deadline IS NULL OR (x.writer_deadline<clock_timestamp() AND x.created_at<clock_timestamp()-interval '8 days' AND (o.tombstoned_at IS NOT NULL OR EXISTS(SELECT 1 FROM " + table + " v WHERE v.id=x.artifact_version_id AND v.retired_at<clock_timestamp()-interval '8 days' AND v.id IS DISTINCT FROM o." + column + ")))")
+	if err := orphanQuery.Find(&orphans).Error; err != nil {
 		return nil, 0, err
 	}
 	rows = append(rows, orphans...)
@@ -260,6 +278,10 @@ func publishDelete(tx *gorm.DB, in aiprotocol.Input, a Artifact) error {
 	if err != nil {
 		return err
 	}
+	return publishCleanupData(tx, in, d)
+}
+
+func publishCleanupData(tx *gorm.DB, in aiprotocol.Input, d cleanupData) error {
 	if d.Backend != "es" && d.Backend != "qd" {
 		return errors.New("invalid cleanup backend")
 	}

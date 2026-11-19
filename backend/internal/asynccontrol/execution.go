@@ -17,6 +17,9 @@ import (
 // one new delivery identity; publisher retries keep that identity unchanged.
 func (s *Store) delivery(tx *gorm.DB, t *Task, due time.Time) error {
 	t.DispatchGeneration++
+	if t.ProtocolVersion == 3 {
+		return tx.Model(&Task{}).Where("id=?", t.ID).Updates(map[string]any{"dispatch_generation": t.DispatchGeneration, "dispatch_state": "pending", "dispatch_not_before": due, "publish_token": nil, "publish_lease_until": nil, "publish_confirmed_at": nil}).Error
+	}
 	if err := tx.Model(&Task{}).Where("id=?", t.ID).Update("dispatch_generation", t.DispatchGeneration).Error; err != nil {
 		return err
 	}
@@ -25,6 +28,9 @@ func (s *Store) delivery(tx *gorm.DB, t *Task, due time.Time) error {
 }
 
 func (s *Store) Claim(ctx context.Context, n Notice) (t Task, claimed bool, err error) {
+	if s.ProtocolVersion == 3 {
+		return s.claimDirect(ctx, n)
+	}
 	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		q := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id=?", n.TaskID).Find(&t)
 		if q.Error != nil {
@@ -119,7 +125,10 @@ func (s *Store) Renew(ctx context.Context, t Task) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.Lease/6)
 	defer cancel()
-	return owned(s.critical().WithContext(ctx).Exec(`UPDATE tasks SET lease_until=LEAST(CASE WHEN phase='compute' THEN deadline ELSE COALESCE(commit_deadline,deadline) END,started_at+(timeout_ms*interval '1 millisecond'),clock_timestamp()+(?*interval '1 millisecond')),updated_at=clock_timestamp()
+	if t.ProtocolVersion == 3 {
+		return owned(s.critical().WithContext(ctx).Exec(`UPDATE tasks SET lease_until=LEAST(CASE WHEN phase='reconcile' THEN receipt_check_deadline ELSE deadline END,started_at+(timeout_ms*interval '1 millisecond'),clock_timestamp()+(?*interval '1 millisecond')),updated_at=clock_timestamp() WHERE id=? AND protocol_version=3 AND generation=? AND token=? AND state='running' AND lease_until>clock_timestamp() AND started_at+(timeout_ms*interval '1 millisecond')>clock_timestamp()`, s.Lease.Milliseconds(), t.ID, t.Generation, *t.Token))
+	}
+	return owned(s.critical().WithContext(ctx).Exec(`UPDATE tasks SET lease_until=LEAST(CASE WHEN protocol_version=3 THEN CASE WHEN phase='reconcile' THEN receipt_check_deadline ELSE deadline END WHEN phase='compute' THEN deadline ELSE COALESCE(commit_deadline,deadline) END,started_at+(timeout_ms*interval '1 millisecond'),clock_timestamp()+(?*interval '1 millisecond')),updated_at=clock_timestamp()
  WHERE id=? AND generation=? AND token=? AND state='running' AND lease_until>clock_timestamp() AND started_at+(timeout_ms*interval '1 millisecond')>clock_timestamp()`, s.Lease.Milliseconds(), t.ID, t.Generation, *t.Token))
 }
 
@@ -186,6 +195,9 @@ func CommandResult(t Task) Result {
 }
 
 func (s *Store) Fail(ctx context.Context, t Task, cause error, permanent bool) error {
+	if t.ProtocolVersion == 3 {
+		return s.failDirect(ctx, t, cause, permanent)
+	}
 	if t.Token == nil || cause == nil {
 		return ErrInvalid
 	}
@@ -243,6 +255,9 @@ func (s *Store) reconcile(tx *gorm.DB, t *Task, now time.Time, reason string) er
 }
 
 func (s *Store) stop(tx *gorm.DB, t *Task, reason string, now time.Time) error {
+	if t.ProtocolVersion == 3 {
+		return s.stopDirect(tx, t, reason, now)
+	}
 	if Terminal(t.State) {
 		return nil
 	}

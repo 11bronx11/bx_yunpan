@@ -30,7 +30,9 @@ ARG TARGET=api
 COPY --from=build --chown=65532:65532 /out/${TARGET} /app/service
 COPY --chown=65532:65532 migrations /app/migrations
 COPY --chown=65532:65532 control-migrations /app/control-migrations
+COPY --chown=65532:65532 control-contract-migrations /app/control-contract-migrations
 COPY --chown=65532:65532 ai-migrations /app/ai-migrations
+COPY --chown=65532:65532 ai-contract-migrations /app/ai-contract-migrations
 COPY --chown=65532:65532 archive-migrations /app/archive-migrations
 USER 65532:65532
 EXPOSE 8081 8082

@@ -1,5 +1,7 @@
 # AI 独立系统实现与验证记录
 
+2026-11-19 v3 补充：直接发布、稳定任务回执、摘要专用节点、投影写前清理线索及 15 表收缩已在专用环境验证，详见 [PG 简化实施记录](../PG_SIMPLIFICATION_EXECUTION_2026-11-19.md)。默认配置仍为 v2；下文通用 staging/接纳 checkpoint/发布的描述作为 v2 兼容基线保留。v3 不启动独立 committer，不把完整计算值写入通用 artifact 或控制 results。
+
 更新：2026-11-19；原基线日期 2026-11-16。当前协调链路以 `ASYNC_COORDINATION_SIMPLIFICATION_PLAN_2026-11-19.md` 为准，最新验证/部署边界见 [协调裁剪交付报告](ASYNC_COORDINATION_IMPLEMENTATION_2026-11-19.md)。施工基准为根目录 `AI_SYSTEM_SPLIT_CONSTRUCTION_2026-11-16.md`；该施工书保留为需求快照，本文记录实际代码、执行证据和运行边界。原有异步系统说明仍见 `ASYNC_SYSTEM_IMPLEMENTATION_2026-11-16.md`。
 
 ## 1. 实际实现

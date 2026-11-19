@@ -7,6 +7,7 @@ import (
 )
 
 type Async struct {
+	ProtocolVersion                                                  int
 	BrokerPrefix, LegacyBrokerPrefix                                 string
 	MaxAttempts, MaxDispatches, StagingDays                          int
 	TaskLifetime                                                     time.Duration
@@ -22,6 +23,7 @@ type Async struct {
 
 func loadAsync() Async {
 	return Async{
+		ProtocolVersion:    envInt("ASYNC_PROTOCOL_VERSION", 2),
 		BrokerPrefix:       env("ASYNC_BROKER_PREFIX", "bx.async.v2"),
 		LegacyBrokerPrefix: env("ASYNC_LEGACY_BROKER_PREFIX", "bx.async.v1"),
 		MaxAttempts:        envInt("ASYNC_MAX_ATTEMPTS", 12), MaxDispatches: envInt("ASYNC_MAX_DISPATCHES", 20), StagingDays: envInt("ASYNC_STAGING_DAYS", 14), TaskLifetime: envDuration("ASYNC_TASK_LIFETIME", 24*time.Hour),
@@ -35,6 +37,12 @@ func loadAsync() Async {
 
 func (c Config) validateAsync() error {
 	a := c.Async
+	if a.ProtocolVersion != 2 && a.ProtocolVersion != 3 {
+		return errors.New("ASYNC_PROTOCOL_VERSION must be 2 or 3")
+	}
+	if a.ProtocolVersion == 3 && (a.BrokerPrefix == "bx.async.v2" || a.BrokerPrefix == "bx.async.v1") {
+		return errors.New("v3 requires an isolated ASYNC_BROKER_PREFIX")
+	}
 	if a.BrokerPrefix == "bx.async.v1" {
 		return errors.New("ASYNC_BROKER_PREFIX must use an isolated v2 topology; old messages require async-handover")
 	}
@@ -69,6 +77,16 @@ func (c Config) validateAsync() error {
 }
 
 func (a Async) validateRuntime() error {
+	if a.ProtocolVersion != 0 && a.ProtocolVersion != 2 && a.ProtocolVersion != 3 {
+		return errors.New("ASYNC_PROTOCOL_VERSION must be 2 or 3")
+	}
+	if a.ProtocolVersion == 3 && (a.TaskLifetime <= 0 || a.TaskLifetime+a.OutputSafety+time.Hour >= 8*24*time.Hour) {
+		return errors.New("v3 task lifetime and I/O safety must fit the eight-day AI retirement grace")
+	}
+	if a.ProtocolVersion == 3 && (a.BrokerPrefix == "bx.async.v2" || a.BrokerPrefix == "bx.async.v1") {
+		return errors.New("v3 requires an isolated broker prefix")
+	}
+
 	if a.ControlMaxOpen < 1 || a.ControlMaxIdle < 0 || a.ControlMaxIdle > a.ControlMaxOpen || a.CriticalMaxOpen < 1 || a.RelayRows < 1 || a.RelayRows > 2000 || a.RelayBytes < 1024 || a.RelayBytes > 16<<20 || a.Concurrency < 1 || a.Concurrency > 128 || a.ScanBatch < 1 {
 		return errors.New("invalid async bounds")
 	}

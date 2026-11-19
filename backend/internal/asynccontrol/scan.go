@@ -63,6 +63,9 @@ func (s *Store) ScanExpiry(ctx context.Context, business *gorm.DB, token uuid.UU
 }
 
 func (s *Store) Maintain(ctx context.Context, limit int, retention time.Duration) error {
+	if s.ProtocolVersion == 3 {
+		return s.maintainDirect(ctx, limit, retention)
+	}
 	// Keep compact semantic identities, source relationships, budgets, receipts
 	// and stops forever. Only completed detail payloads are bounded here.
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -98,7 +101,7 @@ func (s *Store) CheckProtocol(ctx context.Context) error {
 	if err := s.DB.WithContext(ctx).Table("control_settings").Select("value").Where("key='coordination_protocol'").Scan(&protocol).Error; err != nil {
 		return err
 	}
-	if protocol != "v2" {
+	if protocol != fmt.Sprintf("v%d", s.ProtocolVersion) {
 		return fmt.Errorf("coordination handover incomplete (%s); run async-handover with old writers stopped", protocol)
 	}
 	return nil

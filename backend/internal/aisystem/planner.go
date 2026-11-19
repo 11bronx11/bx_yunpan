@@ -91,6 +91,28 @@ func (p *Planner) Continuations(t asynccontrol.Task, r asynccontrol.Result) ([]a
 	if json.Unmarshal(t.Input, &in) != nil || json.Unmarshal(r.Body, &out) != nil || out.Validate() != nil || out.TaskID != t.ID || out.Generation != t.Generation || out.InputDigest != t.InputDigest || out.ObjectID != in.Intent.ObjectID || out.ContentGeneration != in.Intent.ContentGeneration {
 		return nil, asynccontrol.ErrInvalid
 	}
+	return p.successors(t, in, aiprotocol.Published{OutputID: out.OutputID, ObjectID: out.ObjectID, ContentGeneration: out.ContentGeneration, SourceID: out.SourceID, ContentVersionID: out.ContentVersionID, EmbeddingSetID: out.EmbeddingSetID})
+}
+
+func (p *Planner) Completed(t asynccontrol.Task, c asynccontrol.Completion) ([]asynccontrol.Spec, error) {
+	if !strings.HasPrefix(t.Kind, "ai.") || t.Kind == "ai.job.finish" {
+		return nil, nil
+	}
+	if t.ContractVersion != 1 || c.Validate(t) != nil {
+		return nil, asynccontrol.ErrInvalid
+	}
+	in, err := decode[aiprotocol.Input](t.Input)
+	if err != nil {
+		return nil, err
+	}
+	out, err := decode[aiprotocol.Published](c.Refs)
+	if err != nil || out.Validate() != nil || out.ObjectID != in.Intent.ObjectID || out.ContentGeneration != in.Intent.ContentGeneration {
+		return nil, asynccontrol.ErrConflict
+	}
+	return p.successors(t, in, out)
+}
+
+func (p *Planner) successors(t asynccontrol.Task, in aiprotocol.Input, out aiprotocol.Published) ([]asynccontrol.Spec, error) {
 	if !slices.Contains([]string{"ai.intent.apply", "ai.source.prepare", "ai.text.build", "ai.embedding.generate", "ai.object.tombstone", "ai.artifact.gc"}, t.Kind) {
 		return nil, nil
 	}

@@ -34,16 +34,28 @@ func TestLegacyDrainPersistsProofBeforeAckAndResumes(t *testing.T) {
 	n := task.Notice()
 	n.Version, n.ShardKey, n.Shard, n.LayoutVersion = 1, task.ShardKey, task.Shard, task.LayoutVersion
 	body, _ := json.Marshal(n)
+	if err := ch.Confirm(false); err != nil {
+		t.Fatal(err)
+	}
+	confirms := ch.NotifyPublish(make(chan amqp.Confirmation, 1))
 	if err := ch.PublishWithContext(ctx, "", queue, false, false, amqp.Publishing{Body: body, DeliveryMode: amqp.Persistent}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DB.Exec("ALTER TABLE coordination_messages RENAME TO paused_messages").Error; err != nil {
+	select {
+	case confirmed := <-confirms:
+		if !confirmed.Ack {
+			t.Fatal("publish rejected")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("publish confirm timeout")
+	}
+	if err := s.DB.Exec("CREATE FUNCTION pause_message_proof() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected unavailable message proof'; END $$;CREATE TRIGGER pause_message_proof BEFORE INSERT ON coordination_messages FOR EACH ROW EXECUTE FUNCTION pause_message_proof()").Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DrainLegacy(ctx, b.URL, b.Prefix); err == nil {
 		t.Fatal("ACKed without durable proof")
 	}
-	if err := s.DB.Exec("ALTER TABLE paused_messages RENAME TO coordination_messages").Error; err != nil {
+	if err := s.DB.Exec("DROP TRIGGER pause_message_proof ON coordination_messages;DROP FUNCTION pause_message_proof()").Error; err != nil {
 		t.Fatal(err)
 	}
 	// A failed drain closes its channel, returning the unacknowledged message.

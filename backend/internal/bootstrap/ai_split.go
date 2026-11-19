@@ -195,14 +195,14 @@ func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, rol
 	}
 	controlCfg := cfg
 	controlCfg.Postgres.MaxOpenConns = cfg.Async.ControlMaxOpen
-	ctrl, ctrlSQL, err := dependencies.OpenRoleDB(ctx, controlCfg, dependencies.ControlDSN(cfg.Async.ControlDSN), false)
+	ctrl, ctrlSQL, err := dependencies.OpenRoleDB(ctx, controlCfg, dependencies.ProtocolDSN(cfg.Async.ControlDSN, cfg.Async.ProtocolVersion), false)
 	if err != nil {
 		return err
 	}
 	defer ctrlSQL.Close()
 	criticalCfg := cfg
 	criticalCfg.Postgres.MaxOpenConns = cfg.Async.CriticalMaxOpen
-	critical, criticalSQL, err := dependencies.OpenRoleDB(ctx, criticalCfg, dependencies.ControlDSN(cfg.Async.ControlDSN), false)
+	critical, criticalSQL, err := dependencies.OpenRoleDB(ctx, criticalCfg, dependencies.ProtocolDSN(cfg.Async.ControlDSN, cfg.Async.ProtocolVersion), false)
 	if err != nil {
 		return err
 	}
@@ -211,6 +211,7 @@ func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, rol
 	aisystem.Register(store.Registry)
 	planner := &aisystem.Planner{ProjectionBackends: cfg.Search.WriteBackends, TextEpoch: cfg.AITextEpoch(), VectorEpoch: cfg.AIVectorEpoch(), TargetNamespace: cfg.AISplit.ProjectionNamespace, TargetEpoch: cfg.AIProjectionEpoch(), Profile: cfg.AIProfile()}
 	store.PlanContinuations = planner.Continuations
+	store.PlanCompleted = planner.Completed
 	store.PlanFailure = planner.Failure
 	store.Observe = planner.Observe
 	store.AfterTerminal = planner.Finish
@@ -247,7 +248,7 @@ func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, rol
 		return err
 	}
 	defer parser.Close()
-	computer := &aisystem.Computer{DB: db, Core: coreClient, Parser: parser, Vision: ai.NewProvider(cfg.AI), MaxObjectBytes: cfg.AI.MaxObjectBytes, Embedding: ai.NewProvider(cfg.AI), Summary: ai.NewProvider(cfg.AI), Profile: cfg.AIProfile(), HTTP: &http.Client{Timeout: cfg.Parser.CallTimeout}, SummaryCalls: cfg.AISplit.SummaryCalls, Project: projector.Project}
+	computer := &aisystem.Computer{DB: db, Core: coreClient, Parser: parser, Vision: ai.NewProvider(cfg.AI), MaxObjectBytes: cfg.AI.MaxObjectBytes, Embedding: ai.NewProvider(cfg.AI), Summary: ai.NewProvider(cfg.AI), Profile: cfg.AIProfile(), HTTP: &http.Client{Timeout: cfg.Parser.CallTimeout}, SummaryCalls: cfg.AISplit.SummaryCalls, Project: projector.Project, ProjectDirect: projector.ProjectDirect}
 	queue := map[string]string{"ai-content-worker": "ai-content", "ai-embedding-worker": "ai-embedding", "ai-summary-worker": "ai-summary", "ai-text-projector": "ai-project-text", "ai-vector-projector": "ai-project-vector"}[role]
 	if queue == "" {
 		return fmt.Errorf("unknown AI role %s", role)
@@ -258,6 +259,9 @@ func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, rol
 		return outcome, nil, err
 	}
 	worker := func(c context.Context, q string, n int) error {
+		if store.ProtocolVersion == 3 {
+			return store.RunDirectWorker(c, broker, q, n, &aisystem.DirectWorker{Computer: computer, Publisher: publisher}, aisystem.IsPermanentComputeError, logger)
+		}
 		return store.RunWorker(c, broker, q, n, computer.Compute, aisystem.IsPermanentComputeError, logger, apply)
 	}
 	if role == "ai-content-worker" {

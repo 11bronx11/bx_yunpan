@@ -5,9 +5,9 @@ deploy_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 root_dir=$(cd -- "$deploy_dir/.." && pwd)
 
 case "${1:-}" in
-  api|worker|aisvc|core-internal|ai-query|ai-content-worker|ai-embedding-worker|ai-summary-worker|ai-text-projector|ai-vector-projector|ai-migrate|parser-svc|async-control|gc-worker|upload-worker|object-worker|media-worker|search-indexer|async-import|async-admin|async-handover|reader-init|ai-reader-init|migrate) target=$1; shift ;;
+  api|worker|aisvc|core-internal|ai-query|ai-content-worker|ai-embedding-worker|ai-summary-worker|ai-text-projector|ai-vector-projector|ai-migrate|ai-direct-admin|parser-svc|async-control|gc-worker|upload-worker|object-worker|media-worker|search-indexer|async-import|async-admin|async-handover|reader-init|ai-reader-init|migrate) target=$1; shift ;;
   *)
-    echo "Usage: ./deploy/local-run.sh {api|async-control|upload-worker|object-worker|media-worker|gc-worker|core-internal|ai-query|ai-content-worker|ai-embedding-worker|ai-summary-worker|ai-text-projector|ai-vector-projector|ai-migrate|parser-svc|async-import|async-admin|async-handover|reader-init|ai-reader-init|migrate} [args...]" >&2
+    echo "Usage: ./deploy/local-run.sh {api|async-control|upload-worker|object-worker|media-worker|gc-worker|core-internal|ai-query|ai-content-worker|ai-embedding-worker|ai-summary-worker|ai-text-projector|ai-vector-projector|ai-migrate|ai-direct-admin|parser-svc|async-import|async-admin|async-handover|reader-init|ai-reader-init|migrate} [args...]" >&2
     exit 2
     ;;
 esac

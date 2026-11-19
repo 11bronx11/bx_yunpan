@@ -45,12 +45,22 @@ func TestAISplitRealDependencies(t *testing.T) {
 	if os.Getenv("TEST_AI_SPLIT") != "true" {
 		t.Skip("TEST_AI_SPLIT enables isolated full-chain resources")
 	}
+	protocol := "2"
+	if os.Getenv("TEST_AI_PROTOCOL_VERSION") == "3" {
+		protocol = "3"
+	}
+	t.Setenv("ASYNC_PROTOCOL_VERSION", protocol)
 	for _, key := range []string{"TEST_POSTGRES_DSN", "TEST_CONTROL_POSTGRES_DSN", "TEST_AI_POSTGRES_DSN", "TEST_POSTGRES_READONLY_DSN", "TEST_RABBITMQ_URL", "TEST_RABBITMQ_MANAGEMENT_URL", "TEST_MINIO_ENDPOINT", "TEST_SEARCH_ES_ENDPOINT", "TEST_SEARCH_QDRANT_ENDPOINT", "TEST_ETCD_ENDPOINT"} {
 		if os.Getenv(key) == "" {
 			t.Fatalf("missing %s", key)
 		}
 	}
 	biz, ctrl, aidb := testdb.Business(t), testdb.Control(t), testdb.AI(t)
+	if protocol == "3" {
+		if e := ctrl.Exec("UPDATE control_settings SET value='v3' WHERE key='coordination_protocol'").Error; e != nil {
+			t.Fatal(e)
+		}
+	}
 	scoped := func(db *gorm.DB, key string) string {
 		var schema string
 		if err := db.Raw("SELECT current_schema()").Scan(&schema).Error; err != nil {
@@ -62,7 +72,7 @@ func TestAISplitRealDependencies(t *testing.T) {
 		}
 		q := u.Query()
 		q.Set("search_path", schema+",public")
-		q.Set("options", "-c bx.coordination_protocol=v2")
+		q.Set("options", "-c bx.coordination_protocol=v"+protocol+" -c bx.ai_protocol=v"+protocol)
 		u.RawQuery = q.Encode()
 		return u.String()
 	}
@@ -531,4 +541,9 @@ func TestAISplitRealDependencies(t *testing.T) {
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
+}
+
+func TestAISplitDirectRealDependencies(t *testing.T) {
+	t.Setenv("TEST_AI_PROTOCOL_VERSION", "3")
+	TestAISplitRealDependencies(t)
 }

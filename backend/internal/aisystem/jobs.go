@@ -19,7 +19,7 @@ func (p *Planner) Observe(tx *gorm.DB, t asynccontrol.Task) error {
 	if err != nil {
 		return err
 	}
-	observers, err := requestObservers(tx, in.Intent)
+	observers, err := taskObservers(tx, t, in.Intent)
 	if err != nil {
 		return err
 	}
@@ -80,7 +80,7 @@ func (p *Planner) Finish(tx *gorm.DB, s *asynccontrol.Store, t asynccontrol.Task
 	if err != nil {
 		return err
 	}
-	observers, err := requestObservers(tx, in.Intent)
+	observers, err := taskObservers(tx, t, in.Intent)
 	if err != nil {
 		return err
 	}
@@ -111,7 +111,11 @@ func (p *Planner) finishJob(tx *gorm.DB, s *asynccontrol.Store, t asynccontrol.T
 		Target, State string
 		ResultBody    json.RawMessage
 	}
-	if err := tx.Raw(`SELECT l.target,CASE WHEN t.state IN ('done','stopped') THEN t.outcome ELSE t.state END AS state,r.body AS result_body FROM ai_job_task_links l JOIN tasks t ON t.id=l.task_id LEFT JOIN results r ON r.id=t.result_id WHERE l.job_id=?`, observer.JobID).Scan(&rows).Error; err != nil {
+	query := `SELECT l.target,CASE WHEN t.state IN ('done','stopped') THEN t.outcome ELSE t.state END AS state,l.completion_refs AS result_body FROM ai_job_task_links l JOIN tasks t ON t.id=l.task_id WHERE l.job_id=?`
+	if t.ProtocolVersion != 3 {
+		query = `SELECT l.target,CASE WHEN t.state IN ('done','stopped') THEN t.outcome ELSE t.state END AS state,r.body AS result_body FROM ai_job_task_links l JOIN tasks t ON t.id=l.task_id LEFT JOIN results r ON r.id=t.result_id WHERE l.job_id=?`
+	}
+	if err := tx.Raw(query, observer.JobID).Scan(&rows).Error; err != nil {
 		return err
 	}
 	states := map[string]string{}
@@ -119,19 +123,31 @@ func (p *Planner) finishJob(tx *gorm.DB, s *asynccontrol.Store, t asynccontrol.T
 	for _, r := range rows {
 		states[r.Target] = r.State
 		if r.State == asynccontrol.Succeeded && (r.Target == "source" || r.Target == "text" || r.Target == "vectors" || r.Target == "summary") {
-			var output aiprotocol.Output
-			if json.Unmarshal(r.ResultBody, &output) == nil && output.Validate() == nil && output.ObjectID == in.Intent.ObjectID && output.ContentGeneration == in.Intent.ContentGeneration {
+			var output aiprotocol.Published
+			valid := json.Unmarshal(r.ResultBody, &output) == nil && output.Validate() == nil
+			if valid && output.ObjectID == in.Intent.ObjectID && output.ContentGeneration == in.Intent.ContentGeneration {
 				versions[r.Target] = output.OutputID
 			}
 		}
 	}
 	outcomes := map[string]string{}
 	successful := 0
+	needsAttention := false
 	for _, target := range targets {
 		state := states[target]
 		if state == "" {
 			if stopped(states["intent"]) || stopped(states["source"]) && target != "source" || stopped(states["text"]) && (target == "vectors" || target == "projection_text" || target == "projection_vector") || stopped(states["vectors"]) && target == "projection_vector" {
 				state = "failed"
+				if t.ProtocolVersion == 3 {
+					// A descendant which will never run inherits the proved parent
+					// conclusion. An unknown receipt is never reported as failure.
+					for _, prerequisite := range []string{"intent", "source", "text", "vectors"} {
+						if stopped(states[prerequisite]) {
+							state = states[prerequisite]
+							break
+						}
+					}
+				}
 			} else {
 				return nil
 			}
@@ -140,6 +156,7 @@ func (p *Planner) finishJob(tx *gorm.DB, s *asynccontrol.Store, t asynccontrol.T
 			return nil
 		}
 		outcomes[target] = state
+		needsAttention = needsAttention || state == asynccontrol.NeedsAttention
 		if state == asynccontrol.Succeeded {
 			successful++
 		}
@@ -150,6 +167,9 @@ func (p *Planner) finishJob(tx *gorm.DB, s *asynccontrol.Store, t asynccontrol.T
 	} else if successful > 0 {
 		status = "partial_success"
 	}
+	if needsAttention {
+		status = asynccontrol.NeedsAttention
+	}
 	finish := aiprotocol.JobFinish{JobID: observer.JobID, OwnerID: observer.OwnerID, ObjectID: in.Intent.ObjectID, Outcomes: outcomes, Status: status, VersionRefs: versions}
 	b, _ := json.Marshal(finish)
 	child, err := s.EnsureTx(tx, asynccontrol.Spec{Kind: "ai.job.finish", SemanticKey: "ai.v2.job.finish:" + finish.JobID.String(), OwnerKey: t.OwnerKey, ResourceKey: t.ResourceKey, ShardKey: t.ShardKey, Input: b}, "job:"+finish.JobID.String())
@@ -159,3 +179,10 @@ func (p *Planner) finishJob(tx *gorm.DB, s *asynccontrol.Store, t asynccontrol.T
 	return tx.Exec("UPDATE ai_job_aggregates SET outcomes=?::jsonb,finish_task_id=?,revision=revision+1,updated_at=clock_timestamp() WHERE job_id=?", string(jsonValue(outcomes)), child.ID, finish.JobID).Error
 }
 func stopped(s string) bool { return asynccontrol.Terminal(s) && s != asynccontrol.Succeeded }
+
+func taskObservers(tx *gorm.DB, t asynccontrol.Task, i aiprotocol.Intent) ([]aiprotocol.JobObserver, error) {
+	if t.ProtocolVersion != 3 {
+		return requestObservers(tx, i)
+	}
+	return jobObservers(i), nil
+}

@@ -11,15 +11,20 @@ ALTER ROLE yunpan_ai_commit PASSWORD :'commit_password';
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO yunpan_ai_query,yunpan_ai_compute,yunpan_ai_commit;
 GRANT SELECT ON ai_published_objects,ai_published_sources,ai_published_blocks,ai_published_content,ai_published_parents,ai_published_children,ai_published_sets,ai_published_vectors,ai_published_summaries,ai_published_capabilities,ai_published_targets,ai_published_projections TO yunpan_ai_query,yunpan_ai_compute;
-GRANT INSERT ON ai_artifact_manifests TO yunpan_ai_compute;
+SELECT 'GRANT INSERT ON ai_artifact_manifests TO yunpan_ai_compute' WHERE to_regclass('ai_artifact_manifests') IS NOT NULL \gexec
 GRANT SELECT ON ai_summary_checkpoints TO yunpan_ai_compute;
 GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO yunpan_ai_commit;
 -- Query stays restricted. Background v2 workers use the existing commit role
 -- for staging and domain-local publication; the old compute role is retired.
-REVOKE ALL ON ai_artifact_manifests FROM yunpan_ai_query;
+SELECT 'REVOKE ALL ON ai_artifact_manifests FROM yunpan_ai_query' WHERE to_regclass('ai_artifact_manifests') IS NOT NULL \gexec
 REVOKE ALL ON ai_summary_checkpoints FROM yunpan_ai_query;
-REVOKE UPDATE,DELETE ON ai_artifact_manifests FROM yunpan_ai_compute;
+SELECT 'REVOKE UPDATE,DELETE ON ai_artifact_manifests FROM yunpan_ai_compute' WHERE to_regclass('ai_artifact_manifests') IS NOT NULL \gexec
 ALTER ROLE yunpan_ai_query SET default_transaction_read_only=on;
 
 GRANT SELECT ON ai_projection_catalog TO yunpan_ai_compute;
 GRANT SELECT ON ai_published_orphan_projections TO yunpan_ai_query,yunpan_ai_compute;
+
+-- Dedicated summary nodes stay private in both expansion and contracted schemas.
+REVOKE ALL ON ai_summary_nodes,ai_direct_summary_checkpoints FROM yunpan_ai_query,yunpan_ai_compute;
+GRANT SELECT,INSERT,UPDATE,DELETE ON ai_summary_nodes TO yunpan_ai_commit;
+GRANT SELECT ON ai_direct_summary_checkpoints TO yunpan_ai_commit;

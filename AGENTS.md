@@ -4,7 +4,7 @@ BX YunPan：React 18 + Go（Gin）的私有云盘，带分片上传、秒传、�
 
 ## 先知道这几件事
 
-- **README 有一部分是旧的。** 任务队列在 2026-10-08 从 Asynq 换成了 RabbitMQ，README 的架构图和「Redis/Asynq Worker」等说法没跟上。当前异步系统已改成独立控制 PG + worker 自行计算与提交（2026-11-19 协议 v2）；Redis 只做缓存与限流，不再负责异步选主。当前入口见 `docs/ASYNC_SYSTEM_IMPLEMENTATION_2026-11-16.md` 和 `docs/AI_SYSTEM_IMPLEMENTATION_2026-11-16.md`；两个 11-03 文档保留为旧源码快照。
+- **README 有一部分是旧的。** 任务队列在 2026-10-08 从 Asynq 换成了 RabbitMQ，README 的架构图和「Redis/Asynq Worker」等说法没跟上。异步系统使用独立控制 PG + worker 自行计算与提交；2026-11-19 新增可选 v3 直接执行协议，默认配置仍为 v2。v3 代码、迁移、交接及验证边界见根目录 `PG_SIMPLIFICATION_EXECUTION_2026-11-19.md`。Redis 只做缓存与限流，不负责异步选主。`docs/ASYNC_SYSTEM_IMPLEMENTATION_2026-11-16.md` 和 `docs/AI_SYSTEM_IMPLEMENTATION_2026-11-16.md` 保留 v2 兼容链路说明；两个 11-03 文档是更早源码快照。
 - **`docs/` 默认被 `.gitignore` 忽略**，只有白名单里的文件入库；`artifacts/` 整个忽略。新文档要入库，得在 `.gitignore` 加一行 `!docs/<文件名>`。
 - **仓库里没有 CI 配置**（无 `.github/`），格式化、vet、测试都靠本地跑。
 - 写验证报告的惯例：只写实际执行过的结果。单机 smoke、fake provider、静态检查不写成容量或高可用结论。
@@ -40,7 +40,7 @@ HTTP handler 不依赖 `internal/contract` 的生成代码，改接口时要同�
 
 夹具的隔离程度不一样：identity、outbox 等包在目标库里建独立 schema（RabbitMQ 用独立 vhost），结束时删除；storageops、recovery、upload 并发、sharing、search 等夹具使用独立迁移 schema；仍有兼容用例读写目标库 `public`，不能据此把整个测试套件指向开发库。outbox 的夹具还用 `CREATE TABLE ... LIKE public.<表>` 克隆表结构。所以要用一个跑过迁移的专用测试库，不要指向开发库。
 
-迁移文件是 `backend/migrations/NNNNNN_name.{up,down}.sql`（golang-migrate，当前到 000036；控制迁移独立放在 `backend/control-migrations/`，当前到 000005；AI 迁移在 `backend/ai-migrations/`，当前到 000007；归档独立放在 `backend/archive-migrations/`）：
+迁移文件是 `backend/migrations/NNNNNN_name.{up,down}.sql`（golang-migrate，源码到 000037；控制迁移独立放在 `backend/control-migrations/`，到 000006；AI 迁移在 `backend/ai-migrations/`，到 000012；旧 AI 拆库归档在 `backend/archive-migrations/`）。v3 收缩单独放在 `control-contract-migrations/` 和 `ai-contract-migrations/`，不会随普通 `up` 自动执行。源码版本不代表运行库已经升级：
 
 ```bash
 ./deploy/local-run.sh migrate up        # 业务库；还支持 down-one、version
@@ -103,6 +103,10 @@ ASYNC_LEGACY_WRITERS_STOPPED=true ./deploy/local-run.sh async-import # 先停旧
 
 ### 异步链路与修改入口
 
+以下 1–8 描述默认 v2 兼容路径。显式设置 `ASYNC_PROTOCOL_VERSION=3` 并完成交接激活后，核心使用 `RunDirectWorker` / `asyncjobs.DirectWorker`，AI 使用 `aisystem.DirectWorker`：领取 → 查稳定领域回执 → 计算并提交领域事务 → `Store.Complete` → ACK。v3 不写控制 results/executions/continuations/deliveries；投递字段在 tasks 内，完成事务登记后继和作业引用；最后一次恢复只能读回执，无法确认时停止为 needs_attention。AI 类型化计算值直接发布，摘要只写专用 ai_summary_nodes，外部投影在写前登记清理线索。
+
+v3 切换必须停旧写者，先处理旧已接纳结果，再用 `async-handover` 和 `ai-direct-admin` 保留预算、摘要节点和消息证据并激活。旧结果或 observers 未核清时工具会拒绝切换/归档。前缀必须与旧队列隔离，数据库连接同时带协议标记；不能只靠队列前缀。历史兼容字段/参数在 v2 尚需运行时保留，实际 `.env` 不自动改为 v3。
+
 1. `outbox.AddTyped` 在事实事务内只追加 `outbox_events`，不写 deliveries，旧 V2/search context 开关不再静默丢弃事实事件。
 2. `asynccontrol.Relay` 用同语句快照的 `xmin` 和 `(event_xid,seq)` 索引读取；inbox、冻结计划、任务/来源、投递意图、位点在控制库同事务接管。不能改回只按自增号推进。
 3. 任务契约与预算在 `asynccontrol/model.go`，订阅在 `asyncjobs/planner.go`，计算在 `asyncjobs/compute.go`；共享载荷在 `asyncprotocol`。新增类型要同步这些入口与领域提交函数。
@@ -114,7 +118,7 @@ ASYNC_LEGACY_WRITERS_STOPPED=true ./deploy/local-run.sh async-import # 先停旧
 
 v1 控制协议升级用 `async-handover inspect/transfer/activate`：停旧写者、等待旧租约到期，分批保留 checkpoint/预算/快照并逐条转移旧消息后 ACK。数据库 trigger 拒绝旧镜像写入已切换任务；不能用旧镜像或 down migration 回滚。不要对已有 v1 控制库重新跑核心 async-import。
 
-长期输入、结果和执行详情有界维护；终态语义屏障、停止预算和未提交结果保留。`internal/workflow` 仍没有接入启动链，不要引入第二个任务权威。`docs/ASYNC_CONTROL_PLANE_DESIGN_2026-11-12.md` 是历史提案，当前裁剪基准是根目录 `ASYNC_COORDINATION_SIMPLIFICATION_PLAN_2026-11-19.md`，11-16 施工书是保留基线。
+长期输入、结果和执行详情有界维护；终态语义屏障、停止预算和历史未提交结果保留。`internal/workflow` 仍没有接入启动链，不要引入第二个任务权威。`docs/ASYNC_CONTROL_PLANE_DESIGN_2026-11-12.md` 是历史提案，`ASYNC_COORDINATION_SIMPLIFICATION_PLAN_2026-11-19.md` 是 v2 基线；v3 依据根目录 CONTROL_PG / AI_PG 两份 2026-11-19 计划及实际实施记录，11-16 施工书继续作为历史基线。
 
 ### 上传与对象模型
 

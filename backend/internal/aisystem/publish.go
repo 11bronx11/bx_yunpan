@@ -212,15 +212,36 @@ func insert(tx *gorm.DB, table string, row map[string]any) error {
 }
 
 func publishContent(tx *gorm.DB, kind string, in aiprotocol.Input, out aiprotocol.Output, a Artifact) error {
-	i := in.Intent
-	common := map[string]any{"id": out.OutputID, "object_id": i.ObjectID, "content_generation": i.ContentGeneration, "input_digest": in.Profile.Digest()}
+	var data any
+	var err error
 	switch kind {
 	case "ai.source.prepare":
-		d, err := decode[sourceData](a.Data)
-		if err != nil {
-			return err
+		data, err = decode[sourceData](a.Data)
+	case "ai.text.build":
+		data, err = decode[textData](a.Data)
+	case "ai.embedding.generate":
+		data, err = decode[vectorData](a.Data)
+	case "ai.summary.generate":
+		data, err = decode[summaryData](a.Data)
+	default:
+		return asynccontrol.ErrInvalid
+	}
+	if err != nil {
+		return err
+	}
+	return publishTypedContent(tx, kind, in, out.OutputID, data, a.RowCount, a.ArtifactHash)
+}
+
+func publishTypedContent(tx *gorm.DB, kind string, in aiprotocol.Input, outputID uuid.UUID, data any, rowCount int64, contentHash string) error {
+	i := in.Intent
+	common := map[string]any{"id": outputID, "object_id": i.ObjectID, "content_generation": i.ContentGeneration, "input_digest": in.Profile.Digest()}
+	switch kind {
+	case "ai.source.prepare":
+		d, ok := data.(sourceData)
+		if !ok {
+			return asynccontrol.ErrInvalid
 		}
-		if int64(len(d.Parsed.Sections)) != a.RowCount {
+		if int64(len(d.Parsed.Sections)) != rowCount || rowCount < 1 || rowCount > 200000 {
 			return asynccontrol.ErrConflict
 		}
 		common["source_seq"] = i.Seqs.Source
@@ -238,20 +259,22 @@ func publishContent(tx *gorm.DB, kind string, in aiprotocol.Input, out aiprotoco
 		if err := insert(tx, "ai_sources", common); err != nil {
 			return err
 		}
+		rows := make([]map[string]any, 0, len(d.Parsed.Sections))
 		for n, b := range d.Parsed.Sections {
 			loc := b
 			loc.Text = ""
-			row := map[string]any{"source_id": out.OutputID, "ordinal": n, "block_key": fmt.Sprintf("%s:%d", out.OutputID, n), "text": b.Text, "kind": b.Kind, "heading_path": b.HeadingPath, "location": jsonValue(loc), "source_kind": b.SourceKind, "encoding": b.Encoding}
-			if err := insert(tx, "ai_source_blocks", row); err != nil {
-				return err
-			}
+			row := map[string]any{"source_id": outputID, "ordinal": n, "block_key": fmt.Sprintf("%s:%d", outputID, n), "text": b.Text, "kind": b.Kind, "heading_path": b.HeadingPath, "location": jsonValue(loc), "source_kind": b.SourceKind, "encoding": b.Encoding}
+			rows = append(rows, row)
+		}
+		if e := insertRows(tx, "ai_source_blocks", rows); e != nil {
+			return e
 		}
 	case "ai.text.build":
-		d, err := decode[textData](a.Data)
-		if err != nil {
-			return err
+		d, ok := data.(textData)
+		if !ok {
+			return asynccontrol.ErrInvalid
 		}
-		if int64(len(d.Chunks.Parents)+len(d.Chunks.Children)) != a.RowCount || len(d.Chunks.Children) == 0 {
+		if int64(len(d.Chunks.Parents)+len(d.Chunks.Children)) != rowCount || len(d.Chunks.Children) == 0 {
 			return asynccontrol.ErrConflict
 		}
 		delete(common, "input_digest")
@@ -263,11 +286,13 @@ func publishContent(tx *gorm.DB, kind string, in aiprotocol.Input, out aiprotoco
 		common["config_digest"] = aiprotocol.HashJSON(in.Profile.Chunker)
 		common["parent_count"] = len(d.Chunks.Parents)
 		common["child_count"] = len(d.Chunks.Children)
-		common["text_hash"] = a.ArtifactHash
+		common["text_hash"] = contentHash
 		common["coverage"] = d.Chunks.Coverage
 		if err := insert(tx, "ai_content_versions", common); err != nil {
 			return err
 		}
+		parentRows := make([]map[string]any, 0, len(d.Chunks.Parents))
+		childRows := make([]map[string]any, 0, len(d.Chunks.Children))
 		parents := map[uuid.UUID]string{}
 		for _, p := range d.Chunks.Parents {
 			parents[p.ID] = p.Content
@@ -276,9 +301,10 @@ func publishContent(tx *gorm.DB, kind string, in aiprotocol.Input, out aiprotoco
 			if p.TokenCount > 2400 {
 				return asynccontrol.ErrConflict
 			}
-			if err := insert(tx, "ai_parent_chunks", map[string]any{"id": p.ID, "content_version_id": out.OutputID, "ordinal": p.Ordinal, "parent_key": p.Key, "content": p.Content, "heading_path": p.Heading, "kind": p.Kind, "block_start": p.BlockStart, "block_end": p.BlockEnd, "location": jsonValue(loc), "token_count": p.TokenCount}); err != nil {
-				return err
-			}
+			parentRows = append(parentRows, map[string]any{"id": p.ID, "content_version_id": outputID, "ordinal": p.Ordinal, "parent_key": p.Key, "content": p.Content, "heading_path": p.Heading, "kind": p.Kind, "block_start": p.BlockStart, "block_end": p.BlockEnd, "location": jsonValue(loc), "token_count": p.TokenCount})
+		}
+		if e := insertRows(tx, "ai_parent_chunks", parentRows); e != nil {
+			return e
 		}
 		for _, c := range d.Chunks.Children {
 			pr := []rune(parents[c.ParentID])
@@ -287,20 +313,21 @@ func publishContent(tx *gorm.DB, kind string, in aiprotocol.Input, out aiprotoco
 			}
 			loc := c.Location
 			loc.Text = ""
-			if err := insert(tx, "ai_child_chunks", map[string]any{"id": c.ID, "content_version_id": out.OutputID, "parent_id": c.ParentID, "ordinal": c.Ordinal, "child_key": c.Key, "content": c.Content, "heading_path": c.Heading, "location": jsonValue(loc), "block_start": c.BlockStart, "block_end": c.BlockEnd, "parent_start": c.ParentStart, "parent_end": c.ParentEnd, "token_count": c.TokenCount}); err != nil {
-				return err
-			}
+			childRows = append(childRows, map[string]any{"id": c.ID, "content_version_id": outputID, "parent_id": c.ParentID, "ordinal": c.Ordinal, "child_key": c.Key, "content": c.Content, "heading_path": c.Heading, "location": jsonValue(loc), "block_start": c.BlockStart, "block_end": c.BlockEnd, "parent_start": c.ParentStart, "parent_end": c.ParentEnd, "token_count": c.TokenCount})
+		}
+		if e := insertRows(tx, "ai_child_chunks", childRows); e != nil {
+			return e
 		}
 	case "ai.embedding.generate":
-		d, err := decode[vectorData](a.Data)
-		if err != nil {
-			return err
+		d, ok := data.(vectorData)
+		if !ok {
+			return asynccontrol.ErrInvalid
 		}
 		var count int64
 		if err := tx.Table("ai_child_chunks").Where("content_version_id=?", in.ContentVersionID).Count(&count).Error; err != nil {
 			return err
 		}
-		if int64(len(d.Items)) != count || count != a.RowCount {
+		if int64(len(d.Items)) != count || count != rowCount {
 			return asynccontrol.ErrConflict
 		}
 		common["content_version_id"] = in.ContentVersionID
@@ -314,24 +341,34 @@ func publishContent(tx *gorm.DB, kind string, in aiprotocol.Input, out aiprotoco
 		if err := insert(tx, "ai_embedding_sets", common); err != nil {
 			return err
 		}
+		var children []struct {
+			ID                   uuid.UUID
+			Content, HeadingPath string
+		}
+		if e := tx.Table("ai_child_chunks").Select("id,content,heading_path").Where("content_version_id=?", in.ContentVersionID).Find(&children).Error; e != nil {
+			return e
+		}
+		childTexts := map[uuid.UUID]string{}
+		for _, ch := range children {
+			childTexts[ch.ID] = embeddingText(in.Profile.Chunker, ch.HeadingPath, ch.Content)
+		}
+		rows := make([]map[string]any, 0, len(d.Items))
 		for _, v := range d.Items {
-			var child struct{ Content, HeadingPath string }
-			if err := tx.Table("ai_child_chunks").Select("content,heading_path").Where("id=? AND content_version_id=?", v.ChildID, in.ContentVersionID).Take(&child).Error; err != nil {
-				return err
-			}
-			if aiprotocol.Hash([]byte(embeddingText(in.Profile.Chunker, child.HeadingPath, child.Content))) != v.TextHash || !validVector(v.Vector, 1024) {
+			text, ok := childTexts[v.ChildID]
+			if !ok || aiprotocol.Hash([]byte(text)) != v.TextHash || !validVector(v.Vector, 1024) {
 				return asynccontrol.ErrConflict
 			}
-			if err := insert(tx, "ai_chunk_vectors", map[string]any{"embedding_set_id": out.OutputID, "child_id": v.ChildID, "content_version_id": in.ContentVersionID, "embedding": vectorLiteral(v.Vector), "input_text_hash": v.TextHash}); err != nil {
-				return err
-			}
+			rows = append(rows, map[string]any{"embedding_set_id": outputID, "child_id": v.ChildID, "content_version_id": in.ContentVersionID, "embedding": vectorLiteral(v.Vector), "input_text_hash": v.TextHash})
+		}
+		if e := insertRows(tx, "ai_chunk_vectors", rows); e != nil {
+			return e
 		}
 	case "ai.summary.generate":
-		d, err := decode[summaryData](a.Data)
-		if err != nil {
-			return err
+		d, ok := data.(summaryData)
+		if !ok {
+			return asynccontrol.ErrInvalid
 		}
-		if d.SourceBlocks < 1 || d.ProcessedBlocks != d.SourceBlocks || int64(d.SourceBlocks) != a.RowCount || strings.TrimSpace(d.Insight.Summary) == "" {
+		if d.SourceBlocks < 1 || d.ProcessedBlocks != d.SourceBlocks || int64(d.SourceBlocks) != rowCount || strings.TrimSpace(d.Insight.Summary) == "" {
 			return asynccontrol.ErrConflict
 		}
 		common["source_id"] = in.SourceID
@@ -360,4 +397,11 @@ func vectorLiteral(v []float32) string {
 		b[i] = strconv.FormatFloat(float64(f), 'g', -1, 32)
 	}
 	return "[" + strings.Join(b, ",") + "]"
+}
+
+func insertRows(tx *gorm.DB, table string, rows []map[string]any) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	return tx.Table(table).CreateInBatches(rows, 128).Error
 }

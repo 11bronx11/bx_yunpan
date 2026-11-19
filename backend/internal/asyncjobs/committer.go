@@ -32,7 +32,15 @@ type Committer struct {
 	// Test-only injection at the real crash window, after the business commit.
 	AfterCommit func() error
 }
+type commitIdentity struct {
+	ID                  uuid.UUID
+	InputDigest, Digest string
+}
+
 type receipt struct {
+	ProtocolVersion                        int
+	TaskID                                 *uuid.UUID
+	EffectKind                             string
 	SemanticKey, InputDigest, ResultDigest string
 	ResultID                               uuid.UUID
 	Outcome                                string
@@ -91,6 +99,10 @@ func (c *Committer) timeout() time.Duration {
 
 // commitTx serializes one semantic effect and validates its immutable receipt.
 func (c *Committer) commitTx(tx *gorm.DB, t asynccontrol.Task, r asynccontrol.Result, in asyncprotocol.Input, out asyncprotocol.Output) (decision asyncprotocol.Decision, err error) {
+	return c.commitDomain(tx, t, commitIdentity{ID: r.ID, InputDigest: r.InputDigest, Digest: r.ResultDigest}, in, out)
+}
+
+func (c *Committer) commitDomain(tx *gorm.DB, t asynccontrol.Task, r commitIdentity, in asyncprotocol.Input, out asyncprotocol.Output) (decision asyncprotocol.Decision, err error) {
 	if err := dblock.Transaction(tx, "async:commit:"+t.SemanticKey); err != nil {
 		return decision, err
 	}
@@ -100,8 +112,16 @@ func (c *Committer) commitTx(tx *gorm.DB, t asynccontrol.Task, r asynccontrol.Re
 		return decision, q.Error
 	}
 	if q.RowsAffected > 0 {
-		if existing.InputDigest != r.InputDigest || existing.ResultDigest != r.ResultDigest || existing.ResultID != r.ID {
+		if existing.InputDigest != r.InputDigest || existing.ResultDigest != r.Digest || existing.ResultID != r.ID {
 			return decision, asynccontrol.ErrConflict
+		}
+		if t.ProtocolVersion == 3 {
+			if existing.ProtocolVersion != 3 || existing.TaskID == nil || *existing.TaskID != t.ID || existing.EffectKind != t.Kind {
+				return decision, asynccontrol.ErrConflict
+			}
+			if e := cleanupUnadopted(tx, t, in, out); e != nil {
+				return decision, e
+			}
 		}
 		decision.Outcome = existing.Outcome
 		c.Control.ReceiptHits.Add(1)
@@ -109,6 +129,15 @@ func (c *Committer) commitTx(tx *gorm.DB, t asynccontrol.Task, r asynccontrol.Re
 	}
 	if t.Phase == "reconcile" {
 		return decision, asynccontrol.ErrReceiptMissing
+	}
+	if t.ProtocolVersion == 3 {
+		var now time.Time
+		if e := tx.Raw("SELECT clock_timestamp()").Scan(&now).Error; e != nil {
+			return decision, e
+		}
+		if !now.Before(t.Deadline) {
+			return decision, asynccontrol.ErrLost
+		}
 	}
 	if in.SessionID != uuid.Nil {
 		decision, err = c.Upload.CommitAsync(tx, t.Kind, in, out)
@@ -153,5 +182,10 @@ func (c *Committer) commitTx(tx *gorm.DB, t asynccontrol.Task, r asynccontrol.Re
 	if decision.RescheduleAt != nil {
 		return decision, nil
 	}
-	return decision, tx.Create(&receipt{SemanticKey: t.SemanticKey, InputDigest: r.InputDigest, ResultDigest: r.ResultDigest, ResultID: r.ID, Outcome: decision.Outcome}).Error
+	if t.ProtocolVersion == 3 {
+		if e := cleanupUnadopted(tx, t, in, out); e != nil {
+			return decision, e
+		}
+	}
+	return decision, tx.Create(&receipt{SemanticKey: t.SemanticKey, InputDigest: r.InputDigest, ResultDigest: r.Digest, ResultID: r.ID, Outcome: decision.Outcome, ProtocolVersion: t.ProtocolVersion, TaskID: &t.ID, EffectKind: t.Kind}).Error
 }

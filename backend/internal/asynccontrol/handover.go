@@ -148,7 +148,7 @@ func (s *Store) TransferMessage(ctx context.Context, queue string, body []byte) 
 	sum := sha256.Sum256(append([]byte(queue+":"), body...))
 	key := hex.EncodeToString(sum[:])
 	var n Notice
-	valid := len(body) <= 1<<20 && json.Unmarshal(body, &n) == nil && n.Version == 1
+	valid := len(body) <= 1<<20 && json.Unmarshal(body, &n) == nil && (n.Version == 1 || s.ProtocolVersion == 3 && n.Version == 2)
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		disposition := "quarantined"
 		if valid {
@@ -157,7 +157,12 @@ func (s *Store) TransferMessage(ctx context.Context, queue string, body []byte) 
 			if q.Error != nil {
 				return q.Error
 			}
-			if q.RowsAffected == 1 && t.ProtocolVersion == 2 && n.SemanticKey == t.SemanticKey && n.InputDigest == t.InputDigest && n.ShardKey == t.ShardKey && n.Shard == t.Shard && n.LayoutVersion == t.LayoutVersion && (n.EffectTarget == t.EffectTarget || n.EffectTarget == "" && t.EffectTarget != EffectAI) {
+			identityMatches := n.SemanticKey == t.SemanticKey && n.InputDigest == t.InputDigest && n.ShardKey == t.ShardKey && n.Shard == t.Shard && n.LayoutVersion == t.LayoutVersion && (n.EffectTarget == t.EffectTarget || n.EffectTarget == "" && t.EffectTarget != EffectAI)
+			if n.Version == 2 && s.ProtocolVersion == 3 {
+				// v2 work notices no longer carry the v1 shard/layout fields.
+				identityMatches = n.validWire() && n.matches(t) && n.ContractVersion == t.ContractVersion
+			}
+			if q.RowsAffected == 1 && t.ProtocolVersion == s.ProtocolVersion && identityMatches {
 				if n.ResultID == nil || t.ResultID != nil && *n.ResultID == *t.ResultID {
 					disposition = "transferred"
 				}
@@ -175,7 +180,7 @@ func (s *Store) TransferMessage(ctx context.Context, queue string, body []byte) 
 
 func LegacyQueues(prefix string) []string {
 	queues := []string{prefix + ".dead"}
-	for _, q := range []string{"upload", "object", "media", "gc", "ai", "search", "ai-content", "ai-embedding", "ai-summary", "ai-project-text", "ai-project-vector", "ai-maintenance"} {
+	for _, q := range []string{"upload", "object", "media", "gc", "core-command", "ai", "search", "ai-content", "ai-embedding", "ai-summary", "ai-project-text", "ai-project-vector", "ai-maintenance"} {
 		queues = append(queues, prefix+".work."+q)
 	}
 	for shard := range 32 {

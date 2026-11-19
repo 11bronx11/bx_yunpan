@@ -40,6 +40,13 @@ func (m *Migrator) legacyStopped(ctx context.Context) error {
 	if os.Getenv("AI_LEGACY_WRITERS_STOPPED") != "true" {
 		return errors.New("AI_LEGACY_WRITERS_STOPPED=true required after stopping old AI/search consumers")
 	}
+	var protocol string
+	if e := m.Control.WithContext(ctx).Table("control_settings").Select("value").Where("key='coordination_protocol'").Scan(&protocol).Error; e != nil {
+		return e
+	}
+	if protocol == "v3" || protocol == "handover-v3" {
+		return errors.New("legacy AI split migration is retired; use ai-direct-admin for direct protocol handover")
+	}
 	if err := m.Control.WithContext(ctx).Exec("UPDATE queue_budgets SET paused_until='infinity' WHERE queue IN ('ai','search')").Error; err != nil {
 		return err
 	}

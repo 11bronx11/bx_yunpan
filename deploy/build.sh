@@ -76,11 +76,11 @@ done
 
 targets=("$@")
 if ((${#targets[@]} == 0)); then
-	targets=(migrate api async-import async-handover async-control upload-worker object-worker media-worker gc-worker core-internal ai-query ai-content-worker ai-embedding-worker ai-summary-worker ai-text-projector ai-vector-projector ai-migrate parser-svc web)
+	targets=(migrate api async-import async-handover async-control upload-worker object-worker media-worker gc-worker core-internal ai-query ai-content-worker ai-embedding-worker ai-summary-worker ai-text-projector ai-vector-projector ai-migrate ai-direct-admin parser-svc web)
 fi
 for target in "${targets[@]}"; do
   case "$target" in
-		core-internal|ai-query|ai-content-worker|ai-embedding-worker|ai-summary-worker|ai-text-projector|ai-vector-projector|ai-migrate|migrate|migrate-asynq|async-admin|async-import|async-handover|async-control|gc-worker|api|worker|aisvc|parser-svc|outbox-relay|object-worker|media-worker|maintenance-worker|upload-worker|search-indexer|web) ;;
+		core-internal|ai-query|ai-content-worker|ai-embedding-worker|ai-summary-worker|ai-text-projector|ai-vector-projector|ai-migrate|ai-direct-admin|migrate|migrate-asynq|async-admin|async-import|async-handover|async-control|gc-worker|api|worker|aisvc|parser-svc|outbox-relay|object-worker|media-worker|maintenance-worker|upload-worker|search-indexer|web) ;;
     *) echo "Unsupported build target: $target" >&2; exit 2 ;;
   esac
 done

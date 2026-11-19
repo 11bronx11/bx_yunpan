@@ -40,6 +40,11 @@ func TestAsyncCoreRealDependencies(t *testing.T) {
 	if os.Getenv("TEST_ASYNC_CORE") != "true" {
 		t.Skip("TEST_ASYNC_CORE enables dedicated end-to-end resources")
 	}
+	protocol := "2"
+	if os.Getenv("TEST_ASYNC_PROTOCOL_VERSION") == "3" {
+		protocol = "3"
+	}
+	t.Setenv("ASYNC_PROTOCOL_VERSION", protocol)
 	for _, key := range []string{"TEST_POSTGRES_DSN", "TEST_CONTROL_POSTGRES_DSN", "TEST_POSTGRES_READONLY_DSN", "TEST_RABBITMQ_URL", "TEST_MINIO_ENDPOINT", "TEST_MINIO_ACCESS_KEY", "TEST_MINIO_SECRET_KEY"} {
 		if os.Getenv(key) == "" {
 			t.Fatalf("missing %s", key)
@@ -64,7 +69,7 @@ func TestAsyncCoreRealDependencies(t *testing.T) {
 		}
 		q := u.Query()
 		q.Set("search_path", schema+",public")
-		q.Set("options", "-c bx.coordination_protocol=v2")
+		q.Set("options", "-c bx.coordination_protocol=v"+protocol)
 		u.RawQuery = q.Encode()
 		t.Setenv(key, u.String())
 		scoped, err := gorm.Open(postgres.Open(u.String()), &gorm.Config{})
@@ -82,6 +87,11 @@ func TestAsyncCoreRealDependencies(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if protocol == "3" {
+				if e := scoped.Exec("UPDATE control_settings SET value='v3' WHERE key='coordination_protocol'").Error; e != nil {
+					t.Fatal(e)
+				}
+			}
 		} else {
 			if err := scoped.Exec(`DO $$ DECLARE r record; BEGIN FOR r IN SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename<>'schema_migrations' LOOP EXECUTE format('CREATE TABLE %I.%I (LIKE public.%I INCLUDING ALL)',current_schema(),r.tablename,r.tablename); END LOOP; END $$`).Error; err != nil {
 				t.Fatal(err)
@@ -92,7 +102,7 @@ func TestAsyncCoreRealDependencies(t *testing.T) {
 			}
 			rq := ru.Query()
 			rq.Set("search_path", schema+",public")
-			q.Set("options", "-c bx.coordination_protocol=v2")
+			q.Set("options", "-c bx.coordination_protocol=v"+protocol)
 			ru.RawQuery = rq.Encode()
 			t.Setenv("TEST_POSTGRES_READONLY_DSN", ru.String())
 			reader := ru.User.Username()
@@ -163,6 +173,9 @@ func TestAsyncCoreRealDependencies(t *testing.T) {
 	}
 	business, control := open(os.Getenv("TEST_POSTGRES_DSN")), open(os.Getenv("TEST_CONTROL_POSTGRES_DSN"))
 	s := asynccontrol.New(control)
+	if protocol == "3" {
+		s.ProtocolVersion = 3
+	}
 	s.RetryBase = 100 * time.Millisecond
 	s.RetryCap = time.Second
 	if err := asyncjobs.CheckImport(ctx, business, s); err != nil {
@@ -390,18 +403,26 @@ func TestAsyncCoreRealDependencies(t *testing.T) {
 		_ = control.Table("tasks").Where("semantic_key=?", expiryKey).Count(&count).Error
 		return count == 1
 	})
-	if err := control.Exec("WITH changed AS (UPDATE tasks SET not_before=clock_timestamp() WHERE semantic_key=? RETURNING id) UPDATE task_deliveries SET not_before=clock_timestamp() WHERE task_id IN (SELECT id FROM changed)", expiryKey).Error; err != nil {
+	expirySQL := "WITH changed AS (UPDATE tasks SET not_before=clock_timestamp() WHERE semantic_key=? RETURNING id) UPDATE task_deliveries SET not_before=clock_timestamp() WHERE task_id IN (SELECT id FROM changed)"
+	if protocol == "3" {
+		expirySQL = "UPDATE tasks SET not_before=clock_timestamp(),dispatch_not_before=clock_timestamp() WHERE semantic_key=?"
+	}
+	if err := control.Exec(expirySQL, expiryKey).Error; err != nil {
 		t.Fatal(err)
 	}
 	await("early expiry rescheduled", func() bool {
 		var generation int64
-		_ = control.Table("tasks").Select("commit_attempts").Where("semantic_key=?", expiryKey).Scan(&generation).Error
+		column := "commit_attempts"
+		if protocol == "3" {
+			column = "attempts"
+		}
+		_ = control.Table("tasks").Select(column).Where("semantic_key=?", expiryKey).Scan(&generation).Error
 		return generation > 0
 	})
 	if err := business.Exec("UPDATE upload_sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE id=?", expired).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := control.Exec("WITH changed AS (UPDATE tasks SET not_before=clock_timestamp() WHERE semantic_key=? RETURNING id) UPDATE task_deliveries SET not_before=clock_timestamp() WHERE task_id IN (SELECT id FROM changed)", expiryKey).Error; err != nil {
+	if err := control.Exec(expirySQL, expiryKey).Error; err != nil {
 		t.Fatal(err)
 	}
 	await("expiry committed", func() bool { return request("GET", "/api/v1/uploads/"+expired, nil, 200)["status"] == "expired" })
@@ -425,4 +446,9 @@ func TestAsyncCoreRealDependencies(t *testing.T) {
 		t.Fatal("GC retained authorized object bytes")
 	}
 	t.Log("share import/reference/quota, hash mismatch, cancellation, expiry/rescheduling and authorized shared-object GC passed")
+}
+
+func TestAsyncCoreDirectRealDependencies(t *testing.T) {
+	t.Setenv("TEST_ASYNC_PROTOCOL_VERSION", "3")
+	TestAsyncCoreRealDependencies(t)
 }

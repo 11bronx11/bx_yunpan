@@ -31,6 +31,9 @@ func main() {
 	must(err)
 	defer deps.Close()
 	s := asynccontrol.New(deps.Control)
+	if cfg.Async.ProtocolVersion == 3 {
+		s.ProtocolVersion = 3
+	}
 	aisystem.Register(s.Registry)
 	id, err := uuid.Parse(os.Args[2])
 	must(err)
@@ -39,14 +42,18 @@ func main() {
 	switch os.Args[1] {
 	case "inspect":
 		var rows []map[string]any
-		must(s.DB.WithContext(ctx).Raw(`SELECT t.id,t.semantic_key,t.kind,t.effect_target,t.state,t.resource_key,t.parent_id,t.attempts,t.max_attempts,t.dispatches,t.max_dispatches,t.phase,t.outcome,t.commit_attempts,t.max_commit_attempts,t.deadline,t.commit_deadline,t.generation,t.result_id,t.last_error,t.trace,t.created_at,t.updated_at,
+		query := `SELECT t.id,t.semantic_key,t.kind,t.effect_target,t.state,t.resource_key,t.parent_id,t.attempts,t.max_attempts,t.dispatches,t.max_dispatches,t.phase,t.outcome,t.commit_attempts,t.max_commit_attempts,t.deadline,t.commit_deadline,t.generation,t.result_id,t.last_error,t.trace,t.created_at,t.updated_at,
   (SELECT to_jsonb(d) FROM task_deliveries d WHERE d.task_id=t.id) AS delivery,
   (SELECT jsonb_agg(source_key) FROM task_sources WHERE task_id=t.id) AS sources,
   (SELECT jsonb_agg(jsonb_build_object('generation',generation,'outcome',outcome,'error',error,'outputs',outputs)) FROM executions WHERE task_id=t.id) AS executions,
   (SELECT jsonb_agg(jsonb_build_object('id',id,'outcome',outcome,'effect_target',effect_target,'output',body,'committed_at',committed_at)) FROM results WHERE task_id=t.id) AS results,
   (SELECT jsonb_agg(jsonb_build_object('ordinal',ordinal,'state',state,'child_task_id',child_task_id)) FROM task_continuations WHERE parent_task_id=t.id) AS continuations,
   (SELECT jsonb_agg(jsonb_build_object('job_id',job_id,'target',target)) FROM ai_job_task_links WHERE task_id=t.id) AS ai_jobs
-  FROM tasks t WHERE t.id=? OR t.resource_key IN ? OR t.resource_key LIKE ? ORDER BY t.created_at LIMIT 100`, id, []string{"session:" + id.String(), "operation:" + id.String(), "object:" + id.String()}, "object:"+id.String()+":%").Scan(&rows).Error)
+  FROM tasks t WHERE t.id=? OR t.resource_key IN ? OR t.resource_key LIKE ? ORDER BY t.created_at LIMIT 100`
+		if s.ProtocolVersion == 3 {
+			query = `SELECT t.*,(SELECT jsonb_agg(source_key) FROM task_sources WHERE task_id=t.id) AS sources,(SELECT jsonb_agg(jsonb_build_object('job_id',job_id,'target',target,'refs',completion_refs)) FROM ai_job_task_links WHERE task_id=t.id) AS ai_jobs FROM tasks t WHERE t.id=? OR t.resource_key IN ? OR t.resource_key LIKE ? ORDER BY t.created_at LIMIT 100`
+		}
+		must(s.DB.WithContext(ctx).Raw(query, id, []string{"session:" + id.String(), "operation:" + id.String(), "object:" + id.String()}, "object:"+id.String()+":%").Scan(&rows).Error)
 		var keys []string
 		for _, row := range rows {
 			if key, ok := row["semantic_key"].(string); ok {

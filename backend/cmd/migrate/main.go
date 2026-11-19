@@ -29,6 +29,20 @@ func main() {
 		u.RawQuery = q.Encode()
 		dsn = u.String()
 	}
+	if len(args) > 0 && args[0] == "control-contract" {
+		dsn = os.Getenv("ASYNC_CONTROL_DSN")
+		source = "file://control-contract-migrations"
+		args = args[1:]
+		u, e := url.Parse(dsn)
+		if e != nil || dsn == "" {
+			fail("ASYNC_CONTROL_DSN required", nil)
+		}
+		q := u.Query()
+		q.Set("x-migrations-table", "control_contract_migrations")
+		q.Set("options", "-c bx.coordination_protocol=v3")
+		u.RawQuery = q.Encode()
+		dsn = u.String()
+	}
 	if len(args) > 0 && args[0] == "control" {
 		dsn = os.Getenv("ASYNC_CONTROL_DSN")
 		source = env("CONTROL_MIGRATIONS_SOURCE", "file://control-migrations")
@@ -73,7 +87,7 @@ func main() {
 			fmt.Printf("version=%d dirty=%t\n", version, dirty)
 		}
 	default:
-		fail("usage: migrate [control|ai|archive] [up|down-one|version]", nil)
+		fail("usage: migrate [control|control-contract|ai|archive] [up|down-one|version]", nil)
 	}
 	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		fail("run migration", err)

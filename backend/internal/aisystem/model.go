@@ -11,6 +11,7 @@ import (
 )
 
 type Object struct {
+	WriterProtocol                                                                int
 	ObjectID                                                                      uuid.UUID
 	ContentGeneration                                                             int64
 	ContentHash                                                                   string
@@ -41,6 +42,10 @@ type Artifact struct {
 func (Artifact) TableName() string { return "ai_artifact_manifests" }
 
 type Receipt struct {
+	ProtocolVersion                                              int
+	ObjectID                                                     *uuid.UUID
+	ContentGeneration                                            int64
+	ContractVersion                                              int
 	ResultID, TaskID                                             uuid.UUID
 	Generation                                                   int64
 	InputDigest, ResultDigest, ArtifactHash, EffectKind, Outcome string
@@ -55,18 +60,20 @@ type sourceData struct {
 	Parsed   ai.ParseResult
 	Coverage string
 }
-type textData struct{ Chunks rag.ParentChild }
-type vectorItem struct {
-	ChildID  uuid.UUID
-	Vector   []float32
-	TextHash string
-}
-type vectorData struct{ Items []vectorItem }
-type summaryData struct {
-	Insight                       ai.Insight
-	Coverage                      string
-	SourceBlocks, ProcessedBlocks int
-	Parts                         []string
-}
+type (
+	textData   struct{ Chunks rag.ParentChild }
+	vectorItem struct {
+		ChildID  uuid.UUID
+		Vector   []float32
+		TextHash string
+	}
+	vectorData  struct{ Items []vectorItem }
+	summaryData struct {
+		Insight                       ai.Insight
+		Coverage                      string
+		SourceBlocks, ProcessedBlocks int
+		Parts                         []string
+	}
+)
 
 func decode[T any](b []byte) (T, error) { var v T; err := json.Unmarshal(b, &v); return v, err }

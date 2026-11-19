@@ -52,6 +52,11 @@ yunpan_assert_compose_owner "$deploy_dir"
 set -a
 source "$env_file"
 set +a
+if [[ ${ASYNC_PROTOCOL_VERSION:-2} == 3 ]]; then
+  if [[ ${ASYNC_BROKER_PREFIX:-bx.async.v2} == bx.async.v[12] || ${ASYNC_LEGACY_BROKER_PREFIX:-bx.async.v1} == bx.async.v1 || ${ASYNC_BROKER_PREFIX:-} == "${ASYNC_LEGACY_BROKER_PREFIX:-}" ]]; then
+    echo 'v3 requires a new ASYNC_BROKER_PREFIX and the actual v2 ASYNC_LEGACY_BROKER_PREFIX; finish v1 handover using v2 first.' >&2; exit 1
+  fi
+fi
 if [[ ${AI_ENABLED:-true} == true && ${AI_EMBEDDING_DIMENSION:-1024} != 1024 ]]; then
   echo 'AI_EMBEDDING_DIMENSION must match vector(1024).' >&2; exit 1
 fi
@@ -60,6 +65,7 @@ services=(postgres async-postgres redis rabbitmq minio minio-init migrate migrat
 targets=(async-handover migrate api async-control upload-worker object-worker media-worker gc-worker web)
 if [[ ${AI_ENABLED:-true} == true ]]; then
   targets+=(core-internal ai-query ai-content-worker ai-embedding-worker ai-summary-worker ai-text-projector ai-vector-projector ai-migrate)
+  if [[ ${ASYNC_PROTOCOL_VERSION:-2} == 3 ]]; then targets+=(ai-direct-admin); fi
   profiles+=(--profile ai-split); services+=(ai-postgres migrate-ai ai-role-init core-internal ai-query ai-content-worker ai-embedding-worker ai-summary-worker)
   if [[ "$search_indexer" == true || ${SEARCH_INDEX_ENABLED:-false} == true || "$search_backends" == true ]]; then
     if [[ -n ${SEARCH_ES_ENDPOINT:-} || "$search_backends" == true ]]; then services+=(ai-text-projector); fi
@@ -102,12 +108,16 @@ yunpan_wait_one_shots compose migrate migrate-control async-reader-init
 # Existing .env values remain untouched. Retired v1 default needs an explicit
 # new-protocol launch value for this invocation.
 if [[ ${ASYNC_BROKER_PREFIX:-bx.async.v1} == bx.async.v1 ]]; then export ASYNC_BROKER_PREFIX=bx.async.v2; fi
-"${compose[@]}" --profile async-admin run --rm --no-deps async-handover transfer
-"${compose[@]}" --profile async-admin run --rm --no-deps async-handover activate
 if [[ ${AI_ENABLED:-true} == true ]]; then
   "${compose[@]}" --profile ai-split up -d --no-build migrate-ai ai-role-init
   yunpan_wait_one_shots compose migrate-ai ai-role-init
 fi
+"${compose[@]}" --profile async-admin run --rm --no-deps async-handover transfer
+if [[ ${ASYNC_PROTOCOL_VERSION:-2} == 3 && ${AI_ENABLED:-true} == true ]]; then
+  "${compose[@]}" --profile async-admin run --rm --no-deps ai-direct-admin transfer
+  "${compose[@]}" --profile async-admin run --rm --no-deps ai-direct-admin activate
+fi
+"${compose[@]}" --profile async-admin run --rm --no-deps async-handover activate
 scale=()
 [[ -z "$api_replicas" ]] || scale+=(--scale "api=$api_replicas")
 if [[ -n "$aisvc_replicas" ]]; then

@@ -47,6 +47,9 @@ func (s *Store) Monitor(ctx context.Context, addr, holder string, business *gorm
 		defer cancel()
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		fmt.Fprintf(w, "bx_async_commit_calls_total %d\nbx_async_commit_seconds_sum %g\nbx_async_receipt_hits_total %d\n", s.CommitCalls.Load(), float64(s.CommitNanos.Load())/float64(time.Second), s.ReceiptHits.Load())
+		if s.ProtocolVersion == 3 {
+			fmt.Fprintf(w, "bx_async_direct_executions_total %d\nbx_async_direct_recomputes_total %d\nbx_async_completion_reports_total %d\nbx_async_completion_errors_total %d\nbx_async_receipt_checks_total %d\n", s.DirectExecutions.Load(), s.DirectRecomputes.Load(), s.CompletionReports.Load(), s.CompletionErrors.Load(), s.ReceiptChecks.Load())
+		}
 		if holder != "async-control" && !strings.HasPrefix(holder, "control:") {
 			return
 		}
@@ -56,12 +59,20 @@ func (s *Store) Monitor(ctx context.Context, addr, holder string, business *gorm
 			Age               float64
 			Attempts, Commits int64
 		}
-		if err := s.DB.WithContext(bounded).Raw(`SELECT queue,state,count(*) AS count,EXTRACT(EPOCH FROM clock_timestamp()-min(updated_at)) AS age,sum(attempts) AS attempts,sum(commit_attempts) AS commits FROM tasks WHERE protocol_version=2 GROUP BY queue,state`).Scan(&groups).Error; err != nil {
+		query := `SELECT queue,state,count(*) AS count,EXTRACT(EPOCH FROM clock_timestamp()-min(updated_at)) AS age,sum(attempts) AS attempts,sum(commit_attempts) AS commits FROM tasks WHERE protocol_version=2 GROUP BY queue,state`
+		if s.ProtocolVersion == 3 {
+			query = `SELECT queue,state,count(*) AS count,EXTRACT(EPOCH FROM clock_timestamp()-min(updated_at)) AS age,sum(attempts) AS attempts,0 AS commits FROM tasks WHERE protocol_version=3 GROUP BY queue,state`
+		}
+		if err := s.DB.WithContext(bounded).Raw(query).Scan(&groups).Error; err != nil {
 			http.Error(w, "control unavailable", 503)
 			return
 		}
 		for _, g := range groups {
 			labels := fmt.Sprintf("queue=%s,state=%s", strconv.Quote(g.Queue), strconv.Quote(g.State))
+			if s.ProtocolVersion == 3 {
+				fmt.Fprintf(w, "bx_async_tasks{%s} %d\nbx_async_oldest_age_seconds{%s} %g\nbx_async_execution_starts{%s} %d\n", labels, g.Count, labels, g.Age, labels, g.Attempts)
+				continue
+			}
 			fmt.Fprintf(w, "bx_async_tasks{%s} %d\nbx_async_oldest_age_seconds{%s} %g\nbx_async_execution_starts{%s} %d\nbx_async_commit_attempts{%s} %d\n", labels, g.Count, labels, g.Age, labels, g.Attempts, labels, g.Commits)
 		}
 		var modules []struct {

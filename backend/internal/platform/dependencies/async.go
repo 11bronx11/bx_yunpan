@@ -43,10 +43,10 @@ func OpenAsync(ctx context.Context, cfg config.Config, role string) (*AsyncSet, 
 	}
 	fail := func(err error) (*AsyncSet, error) { a.Close(); return nil, err }
 	var err error
-	if a.Control, err = open(ControlDSN(cfg.Async.ControlDSN), cfg.Async.ControlMaxOpen, cfg.Async.ControlMaxIdle); err != nil {
+	if a.Control, err = open(ProtocolDSN(cfg.Async.ControlDSN, cfg.Async.ProtocolVersion), cfg.Async.ControlMaxOpen, cfg.Async.ControlMaxIdle); err != nil {
 		return fail(err)
 	}
-	if a.Critical, err = open(ControlDSN(cfg.Async.ControlDSN), cfg.Async.CriticalMaxOpen, 1); err != nil {
+	if a.Critical, err = open(ProtocolDSN(cfg.Async.ControlDSN, cfg.Async.ProtocolVersion), cfg.Async.CriticalMaxOpen, 1); err != nil {
 		return fail(err)
 	}
 	readDSN, err := readOnlyDSN(cfg.Async.BusinessReadDSN)
@@ -105,16 +105,25 @@ func readOnlyDSN(dsn string) (string, error) {
 
 // ControlDSN tags every pooled connection, including reconnects, for the
 // database-side writer fence installed by control migration 5.
-func ControlDSN(dsn string) string {
+func ControlDSN(dsn string) string { return ProtocolDSN(dsn, 2) }
+
+func ProtocolDSN(dsn string, protocol int) string {
+	if strings.TrimSpace(dsn) == "" {
+		return ""
+	}
+	if protocol != 3 {
+		protocol = 2
+	}
+	marker := fmt.Sprintf("-c bx.coordination_protocol=v%d -c bx.ai_protocol=v%d", protocol, protocol)
 	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
 		u, err := url.Parse(dsn)
 		if err != nil {
 			return dsn
 		}
 		q := u.Query()
-		q.Set("options", strings.TrimSpace(q.Get("options")+" -c bx.coordination_protocol=v2"))
+		q.Set("options", strings.TrimSpace(q.Get("options")+" "+marker))
 		u.RawQuery = q.Encode()
 		return u.String()
 	}
-	return dsn + " options='-c bx.coordination_protocol=v2'"
+	return dsn + " options='" + marker + "'"
 }

@@ -88,6 +88,12 @@ func CoreRegistry() Registry {
 }
 
 type Task struct {
+	DispatchState                                                                                            string `gorm:"default:pending"`
+	DispatchNotBefore                                                                                        time.Time
+	PublishToken                                                                                             *uuid.UUID `gorm:"type:uuid"`
+	PublishLeaseUntil, PublishConfirmedAt                                                                    *time.Time
+	ReceiptCheckClaimed                                                                                      bool
+	ReceiptCheckDeadline                                                                                     *time.Time
 	ProtocolVersion                                                                                          int
 	Outcome, Phase                                                                                           string
 	CommitAttempts, MaxCommitAttempts                                                                        int
@@ -161,11 +167,11 @@ type Notice struct {
 }
 
 func (t Task) Notice() Notice {
-	return Notice{ContractVersion: t.ContractVersion, EffectTarget: t.EffectTarget, TaskID: t.ID, DispatchGeneration: t.DispatchGeneration, Version: 2, SemanticKey: t.SemanticKey, InputDigest: t.InputDigest, Trace: json.RawMessage(t.Trace)}
+	return Notice{ContractVersion: t.ContractVersion, EffectTarget: t.EffectTarget, TaskID: t.ID, DispatchGeneration: t.DispatchGeneration, Version: t.ProtocolVersion, SemanticKey: t.SemanticKey, InputDigest: t.InputDigest, Trace: json.RawMessage(t.Trace)}
 }
 
 func (n Notice) validWire() bool {
-	return n.Version == 2 && n.ContractVersion == 1 && n.TaskID != uuid.Nil && n.SemanticKey != "" && n.InputDigest != "" && n.DispatchGeneration > 0
+	return (n.Version == 2 || n.Version == 3) && n.ContractVersion == 1 && n.TaskID != uuid.Nil && n.SemanticKey != "" && n.InputDigest != "" && n.DispatchGeneration > 0
 }
 
 func (n Notice) matches(t Task) bool {

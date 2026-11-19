@@ -21,17 +21,24 @@ func main() {
 	fatal(err)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	db, pool, err := dependencies.OpenRoleDB(ctx, cfg, dependencies.ControlDSN(cfg.Async.ControlDSN), false)
+	db, pool, err := dependencies.OpenRoleDB(ctx, cfg, dependencies.ProtocolDSN(cfg.Async.ControlDSN, cfg.Async.ProtocolVersion), false)
 	fatal(err)
 	defer pool.Close()
 	s := asynccontrol.New(db)
+	if cfg.Async.ProtocolVersion == 3 {
+		s.ProtocolVersion = 3
+	}
 	aisystem.Register(s.Registry)
 	planner := &aisystem.Planner{ProjectionBackends: cfg.Search.WriteBackends, TextEpoch: cfg.AITextEpoch(), VectorEpoch: cfg.AIVectorEpoch(), TargetNamespace: cfg.AISplit.ProjectionNamespace, TargetEpoch: cfg.AIProjectionEpoch(), Profile: cfg.AIProfile()}
 	s.PlanContinuations, s.PlanFailure = planner.Continuations, planner.Failure
 	s.Observe, s.AfterTerminal = planner.Observe, planner.Finish
 	if os.Args[1] == "inspect" {
 		var rows []map[string]any
-		fatal(db.Raw("SELECT protocol_version,state,phase,count(*),count(result_id) AS checkpoints,sum(attempts) AS attempts,sum(dispatches) AS dispatches FROM tasks GROUP BY protocol_version,state,phase").Scan(&rows).Error)
+		query := "SELECT protocol_version,state,phase,count(*),count(result_id) AS checkpoints,sum(attempts) AS attempts,sum(dispatches) AS dispatches FROM tasks GROUP BY protocol_version,state,phase"
+		if s.ProtocolVersion == 3 {
+			query = "SELECT protocol_version,state,phase,dispatch_state,count(*),sum(attempts) AS attempts,sum(dispatches) AS dispatches FROM tasks GROUP BY protocol_version,state,phase,dispatch_state"
+		}
+		fatal(db.Raw(query).Scan(&rows).Error)
 		fatal(json.NewEncoder(os.Stdout).Encode(rows))
 		return
 	}
@@ -44,7 +51,13 @@ func main() {
 	switch os.Args[1] {
 	case "transfer":
 		for {
-			n, err := s.HandoverBatch(ctx, 100)
+			var n int
+			var err error
+			if s.ProtocolVersion == 3 {
+				n, err = s.HandoverDirectBatch(ctx, 100)
+			} else {
+				n, err = s.HandoverBatch(ctx, 100)
+			}
 			fatal(err)
 			if n == 0 {
 				break
@@ -53,7 +66,11 @@ func main() {
 		fatal(s.DrainLegacy(ctx, cfg.TaskQueue.URL, cfg.Async.LegacyBrokerPrefix))
 	case "activate":
 		fatal(s.DrainLegacy(ctx, cfg.TaskQueue.URL, cfg.Async.LegacyBrokerPrefix))
-		fatal(s.Activate(ctx))
+		if s.ProtocolVersion == 3 {
+			fatal(s.ActivateDirect(ctx))
+		} else {
+			fatal(s.Activate(ctx))
+		}
 	default:
 		fatal(fmt.Errorf("unknown action"))
 	}

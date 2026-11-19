@@ -42,22 +42,32 @@ func OpenAI(ctx context.Context, cfg config.Config, role string) (*gorm.DB, *sql
 	if role == "ai-committer" {
 		dsn = cfg.AISplit.CommitDSN
 	}
+	if role != "ai-query" {
+		dsn = ProtocolDSN(dsn, cfg.Async.ProtocolVersion)
+	}
 	db, sqlDB, err := OpenRoleDB(ctx, cfg, dsn, role == "ai-query")
 	if err != nil {
 		return nil, nil, err
 	}
 	fail := func(e error) (*gorm.DB, *sql.DB, error) { _ = sqlDB.Close(); return nil, nil, e }
 	var canWrite, canStage, canReadStage, canReadCheckpoints bool
-	if err := db.Raw(`SELECT has_table_privilege(current_user,'ai_objects','INSERT,UPDATE,DELETE') OR has_table_privilege(current_user,'ai_commit_receipts','INSERT,UPDATE,DELETE'),has_table_privilege(current_user,'ai_artifact_manifests','INSERT'),has_table_privilege(current_user,'ai_artifact_manifests','SELECT'),has_table_privilege(current_user,'ai_summary_checkpoints','SELECT')`).Row().Scan(&canWrite, &canStage, &canReadStage, &canReadCheckpoints); err != nil {
+	if err := db.Raw(`SELECT has_table_privilege(current_user,'ai_objects','INSERT,UPDATE,DELETE') OR has_table_privilege(current_user,'ai_commit_receipts','INSERT,UPDATE,DELETE'),COALESCE(has_table_privilege(current_user,to_regclass('ai_artifact_manifests'),'INSERT'),false),COALESCE(has_table_privilege(current_user,to_regclass('ai_artifact_manifests'),'SELECT'),false),has_table_privilege(current_user,'ai_summary_checkpoints','SELECT')`).Row().Scan(&canWrite, &canStage, &canReadStage, &canReadCheckpoints); err != nil {
 		return fail(err)
 	}
 	if role == "ai-query" && (canWrite || canStage || canReadStage || canReadCheckpoints) {
 		return fail(errors.New("AI query role has excess privileges"))
 	}
-	if role != "ai-query" && (!canWrite || !canStage) {
+	if role != "ai-query" && (!canWrite || cfg.Async.ProtocolVersion != 3 && !canStage) {
 		return fail(errors.New("AI background worker requires staging and publication privileges"))
 	}
-	if role == "ai-summary-worker" && !canReadCheckpoints {
+	var canReadNodes bool
+	if err := db.Raw("SELECT COALESCE(has_table_privilege(current_user,to_regclass('ai_summary_nodes'),'SELECT'),false)").Scan(&canReadNodes).Error; err != nil {
+		return fail(err)
+	}
+	if role == "ai-query" && canReadNodes {
+		return fail(errors.New("AI query role can read private summary nodes"))
+	}
+	if role == "ai-summary-worker" && !(canReadCheckpoints || cfg.Async.ProtocolVersion == 3 && canReadNodes) {
 		return fail(errors.New("AI summary compute requires private checkpoint reads"))
 	}
 	if role == "ai-committer" && !canWrite {

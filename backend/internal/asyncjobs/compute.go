@@ -96,7 +96,7 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (asyncproto
 		if !strings.HasPrefix(key, "objects/compute/") {
 			return out, asynccontrol.ErrInvalid
 		}
-		if err := c.Control.RecordOutput(ctx, t, in.TargetBucket, key); err != nil {
+		if err := c.recordOutput(ctx, t, in.TargetBucket, key); err != nil {
 			return out, err
 		}
 		_, err := c.Storage.CopyObject(ctx, minio.CopyDestOptions{Bucket: in.TargetBucket, Object: key}, minio.CopySrcOptions{Bucket: in.Bucket, Object: in.Key})
@@ -104,7 +104,7 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (asyncproto
 	case "thumbnail":
 		key := fmt.Sprintf("variants/compute/%s/%d/%s/g%d.jpg", in.ObjectID, in.ContentGeneration, t.ID, t.Generation)
 		if strings.HasPrefix(in.Mime, "image/") {
-			if err := c.Control.RecordOutput(ctx, t, in.Bucket, key); err != nil {
+			if err := c.recordOutput(ctx, t, in.Bucket, key); err != nil {
 				return out, err
 			}
 		}
@@ -182,4 +182,11 @@ func (c *Computer) Compute(ctx context.Context, t asynccontrol.Task) (asyncproto
 	default:
 		return out, asynccontrol.ErrInvalid
 	}
+}
+
+func (c *Computer) recordOutput(ctx context.Context, t asynccontrol.Task, bucket, key string) error {
+	if t.ProtocolVersion == 3 {
+		return nil
+	}
+	return c.Control.RecordOutput(ctx, t, bucket, key)
 }

@@ -25,6 +25,9 @@ type summaryCheckpoint struct {
 // level, position and exact input text. Generations share completed nodes, while
 // an explicit new task or changed input never borrows a previous summary.
 func (c *Computer) summarizeTask(ctx context.Context, parts []string, t asynccontrol.Task, in aiprotocol.Input) (ai.Insight, []string, error) {
+	if t.ProtocolVersion == 3 {
+		return c.summarizeDirect(ctx, parts, t, in)
+	}
 	return c.summarizeParts(ctx, parts, func(ctx context.Context, level, index int, text string) (ai.Insight, error) {
 		inputHash := aiprotocol.Hash([]byte(text))
 		kind := "ai.summary.checkpoint.v1:" + aiprotocol.Hash([]byte(fmt.Sprintf("%d:%d:%s", level, index, inputHash)))

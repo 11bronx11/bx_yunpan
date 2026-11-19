@@ -182,8 +182,15 @@ func publishProjection(tx *gorm.DB, in aiprotocol.Input, a Artifact) error {
 	if err != nil || d.Count != int(a.RowCount) || d.Count < 1 || d.ContentID != in.ContentVersionID || (d.Backend == "qd" && d.SetID != in.EmbeddingSetID) || len(d.ConfigDigest) != 64 {
 		return errors.New("projection.invalid_manifest")
 	}
+	return publishProjectionData(tx, in, d, a.Kind)
+}
+
+func publishProjectionData(tx *gorm.DB, in aiprotocol.Input, d projectionData, taskKind string) error {
+	if d.Count < 1 || d.ContentID != in.ContentVersionID || (d.Backend == "qd" && d.SetID != in.EmbeddingSetID) || len(d.ConfigDigest) != 64 {
+		return errors.New("projection.invalid_manifest")
+	}
 	expectedBackend := "es"
-	if a.Kind == "ai.project.vector" {
+	if taskKind == "ai.project.vector" {
 		expectedBackend = "qd"
 	}
 	id, name, digest, identityErr := projectionIdentity(expectedBackend, in)
@@ -233,7 +240,7 @@ func publishProjection(tx *gorm.DB, in aiprotocol.Input, a Artifact) error {
 	if d.Backend == "qd" {
 		set = d.SetID
 	}
-	err = tx.Exec(`INSERT INTO ai_projection_states(backend,target_id,object_id,content_generation,content_version_id,embedding_set_id,artifact_version_id,operation,source_revision,artifact_hash,expected_count,applied_count,state,published_at) VALUES(?,?,?,?,?,?,?,'upsert',?,?,?,?,'complete',clock_timestamp()) ON CONFLICT(target_id,artifact_version_id,operation) DO UPDATE SET applied_count=EXCLUDED.applied_count,state='complete',published_at=clock_timestamp() WHERE ai_projection_states.artifact_hash=EXCLUDED.artifact_hash`, d.Backend, d.TargetID, in.Intent.ObjectID, in.Intent.ContentGeneration, d.ContentID, set, artifact, d.Epoch, d.Hash, d.Count, d.Count).Error
+	err := tx.Exec(`INSERT INTO ai_projection_states(backend,target_id,object_id,content_generation,content_version_id,embedding_set_id,artifact_version_id,operation,source_revision,artifact_hash,expected_count,applied_count,state,published_at) VALUES(?,?,?,?,?,?,?,'upsert',?,?,?,?,'complete',clock_timestamp()) ON CONFLICT(target_id,artifact_version_id,operation) DO UPDATE SET applied_count=EXCLUDED.applied_count,state='complete',published_at=clock_timestamp() WHERE ai_projection_states.artifact_hash=EXCLUDED.artifact_hash`, d.Backend, d.TargetID, in.Intent.ObjectID, in.Intent.ContentGeneration, d.ContentID, set, artifact, d.Epoch, d.Hash, d.Count, d.Count).Error
 	if err != nil {
 		return err
 	}
