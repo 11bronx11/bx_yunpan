@@ -1,6 +1,6 @@
 import React from 'react';
 import { App } from 'antd';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import SearchResultModal from './SearchResultModal';
 import {
   deleteFile,
@@ -107,4 +107,43 @@ test('opens the existing directory picker for moving', async () => {
 
   expect(await screen.findByRole('tree', { name: '目标目录' })).toBeInTheDocument();
   expect(getRoot).toHaveBeenCalledTimes(1);
+});
+
+test('changing the search target discards the previous rename form', async () => {
+  const props = { open: true, onClose: jest.fn() };
+  const view = render(<App><SearchResultModal {...props} hit={hit} /></App>);
+  await screen.findByText('根目录 / 资料');
+  fireEvent.click(screen.getByRole('button', { name: '重命名' }));
+  fireEvent.change(screen.getByLabelText('新文件名'), { target: { value: 'old-draft.pdf' } });
+  const nextHit = { file: { ...hit.file, id: 'file-2', name: 'other.pdf' } };
+  view.rerender(<App><SearchResultModal {...props} hit={nextHit} /></App>);
+  await waitFor(() => expect(screen.queryByLabelText('新文件名')).not.toBeInTheDocument());
+  expect(screen.getByText('other.pdf')).toBeInTheDocument();
+  expect(renameFile).not.toHaveBeenCalled();
+});
+
+test('closing file details also closes its rename form', async () => {
+  const props = { hit, onClose: jest.fn() };
+  const view = render(<App><SearchResultModal {...props} open /></App>);
+  await screen.findByText('根目录 / 资料');
+  fireEvent.click(screen.getByRole('button', { name: '重命名' }));
+  view.rerender(<App><SearchResultModal {...props} open={false} /></App>);
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+});
+
+test('a late rename of the old target cannot close the new file details', async () => {
+  let finishRename;
+  renameFile.mockImplementationOnce(() => new Promise(resolve => { finishRename = resolve; }));
+  const props = { open: true, onClose: jest.fn(), onChanged: jest.fn() };
+  const view = render(<App><SearchResultModal {...props} hit={hit} /></App>);
+  await screen.findByText('根目录 / 资料');
+  fireEvent.click(screen.getByRole('button', { name: '重命名' }));
+  fireEvent.change(screen.getByLabelText('新文件名'), { target: { value: 'renamed.pdf' } });
+  fireEvent.click(screen.getByRole('button', { name: /保\s*存/ }));
+  const nextHit = { file: { ...hit.file, id: 'file-2', name: 'other.pdf' } };
+  view.rerender(<App><SearchResultModal {...props} hit={nextHit} /></App>);
+  await act(async () => finishRename({}));
+  expect(props.onClose).not.toHaveBeenCalled();
+  expect(props.onChanged).toHaveBeenCalledTimes(1);
+  expect(screen.getByText('other.pdf')).toBeInTheDocument();
 });

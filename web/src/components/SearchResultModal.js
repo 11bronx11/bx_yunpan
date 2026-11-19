@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { App, Button, Modal, Tag } from 'antd';
 import Input from './IMEInput';
 import {
@@ -49,7 +49,7 @@ const formatSize = bytes => {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 };
 
-const SearchResultModal = ({ hit, open, onClose, onChanged }) => {
+const SearchResultDetails = ({ hit, open, onClose, onChanged }) => {
   const { message, modal } = App.useApp();
   const file = hit?.file;
   const [path, setPath] = useState('');
@@ -59,6 +59,12 @@ const SearchResultModal = ({ hit, open, onClose, onChanged }) => {
   const [renameName, setRenameName] = useState('');
   const [moveOpen, setMoveOpen] = useState(false);
   const [root, setRoot] = useState(null);
+  const active = useRef(false);
+
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
 
   useEffect(() => { setShareOpen(false); }, [file?.id, open]);
 
@@ -77,7 +83,7 @@ const SearchResultModal = ({ hit, open, onClose, onChanged }) => {
   }, [file?.folder_id, open]);
 
   const finishChange = async successMessage => {
-    onClose();
+    if (active.current) onClose();
     await onChanged?.();
     message.success(successMessage);
   };
@@ -211,5 +217,8 @@ const SearchResultModal = ({ hit, open, onClose, onChanged }) => {
     />
   </>;
 };
+
+const SearchResultModal = props => props.open && props.hit?.file
+  ? <SearchResultDetails key={props.hit.file.id} {...props} /> : null;
 
 export default SearchResultModal;

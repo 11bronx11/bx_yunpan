@@ -1,7 +1,10 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { abortUpload, listActiveUploads, uploadFile } from '../services/drive';
+import { abortUpload, getUpload, listActiveUploads, uploadFile, waitForUpload } from '../services/drive';
 import { TransferProvider, useTransfers } from './TransferContext';
+import { uploadRequest } from '../services/uploadRequest';
+
+jest.mock('../services/uploadRequest', () => ({ uploadRequest: jest.fn() }));
 
 jest.mock('./AuthContext', () => ({
   useAuth: () => ({ user: { id: 'user-1' }, ready: true }),
@@ -9,17 +12,18 @@ jest.mock('./AuthContext', () => ({
 
 jest.mock('../services/drive', () => ({
   abortUpload: jest.fn(() => Promise.resolve()),
+  getUpload: jest.fn(),
   listActiveUploads: jest.fn(),
   uploadFile: jest.fn(),
   waitForUpload: jest.fn(),
 }));
 
 const Probe = () => {
-  const { uploads, enqueueUploads, cancelUpload, pauseUpload } = useTransfers();
+  const { uploads, enqueueUploads, cancelUpload, pauseUpload, removeUpload } = useTransfers();
   return <div>
     <button type="button" onClick={() => enqueueUploads([new File(['data'], 'sample.txt', { type: 'text/plain' })], 'folder-1', '根目录')}>添加</button>
     <button type="button" onClick={() => enqueueUploads(Array.from({ length: 5 }, (_, i) => new File(['data'], `file-${i}.txt`)), 'folder-1', '根目录')}>添加五个</button>
-    {uploads.map(task => <div key={task.id}><span data-error-code={task.errorCode} data-speed={task.speed}>{task.status}:{task.name}:{task.progress}</span><button type="button" onClick={() => cancelUpload(task.id)}>取消 {task.name}</button><button type="button" onClick={() => pauseUpload(task.id)}>暂停 {task.name}</button></div>)}
+    {uploads.map(task => <div key={task.id}><span data-error-code={task.errorCode} data-speed={task.speed}>{task.status}:{task.name}:{task.progress}</span><button type="button" onClick={() => cancelUpload(task.id)}>取消 {task.name}</button><button type="button" onClick={() => pauseUpload(task.id)}>暂停 {task.name}</button><button type="button" onClick={() => removeUpload(task.id)}>移除 {task.name}</button></div>)}
   </div>;
 };
 
@@ -203,4 +207,90 @@ test('late progress while draining a pause does not restore the upload speed', a
   act(() => { jest.advanceTimersByTime(100); });
   emit(600);
   expect(screen.getByText('pausing:sample.txt:0')).toHaveAttribute('data-speed', '0');
+});
+
+test('restores a local session omitted from the active list and confirms its completion', async () => {
+  const session = { id: 'finished-session', filename: 'finished.txt', size_bytes: 4, status: 'verifying' };
+  localStorage.setItem('bx-yunpan:uploads:user-1', JSON.stringify([{ id: 'finished-task', name: 'finished.txt', size: 4, session }]));
+  listActiveUploads.mockResolvedValue({ items: [] });
+  getUpload.mockResolvedValue({ ...session, status: 'completed', completed_entry_id: 'finished-file' });
+  renderTransfers();
+  expect(await screen.findByText('completed:finished.txt:100')).toBeInTheDocument();
+  expect(getUpload).toHaveBeenCalledWith(session.id, expect.any(Object));
+  await waitFor(() => expect(localStorage.getItem('bx-yunpan:uploads:user-1')).toBeNull());
+});
+
+test('keeps local session evidence when its status cannot be read during restoration', async () => {
+  const session = { id: 'missing-session', filename: 'missing.txt', size_bytes: 4, status: 'uploading' };
+  localStorage.setItem('bx-yunpan:uploads:user-1', JSON.stringify([{ id: 'missing-task', name: 'missing.txt', size: 4, session, cancelRequested: true }]));
+  listActiveUploads.mockResolvedValue({ items: [] });
+  getUpload.mockRejectedValue(new Error('offline'));
+  renderTransfers();
+  expect(await screen.findByText('cancel_pending:missing.txt:0')).toBeInTheDocument();
+  await waitFor(() => expect(JSON.parse(localStorage.getItem('bx-yunpan:uploads:user-1'))[0].session.id).toBe('missing-session'));
+});
+
+test('a failed verification cannot be removed while server completion is still possible', async () => {
+  const session = { id: 'verifying-session', status: 'verifying' };
+  listActiveUploads.mockResolvedValue({ items: [] });
+  uploadFile.mockImplementation(async (file, folder, progress, control) => {
+    control.onSession(session);
+    throw new Error('offline');
+  });
+  abortUpload.mockRejectedValue(new Error('completion already started'));
+  getUpload.mockResolvedValue(session);
+  waitForUpload.mockImplementation(() => new Promise(() => {}));
+  renderTransfers();
+  fireEvent.click(screen.getByRole('button', { name: '添加', exact: true }));
+  await screen.findByText('failed:sample.txt:0');
+  fireEvent.click(screen.getByRole('button', { name: '移除 sample.txt' }));
+  expect(await screen.findByText('verifying:sample.txt:99')).toBeInTheDocument();
+  expect(abortUpload).toHaveBeenCalledWith(session.id, expect.any(Object));
+});
+
+test('persists uncertain upload creation and resolves it before removing the task', async () => {
+  listActiveUploads.mockResolvedValue({ items: [] });
+  const creation = { folder_id: 'folder-1', filename: 'sample.txt', size_bytes: 4, sha256: 'a'.repeat(64) };
+  uploadFile.mockImplementation(async (file, folder, progress, control) => {
+    control.creation = creation;
+    throw new Error('response lost');
+  });
+  uploadRequest.mockResolvedValue({ mode: 'multipart', upload: { id: 'uncertain-session', status: 'uploading' } });
+  renderTransfers();
+  fireEvent.click(screen.getByRole('button', { name: '添加', exact: true }));
+  await screen.findByText('failed:sample.txt:0');
+  await waitFor(() => expect(JSON.parse(localStorage.getItem('bx-yunpan:uploads:user-1'))?.[0].creation).toEqual(creation));
+  const stored = JSON.parse(localStorage.getItem('bx-yunpan:uploads:user-1'))[0];
+  fireEvent.click(screen.getByRole('button', { name: '移除 sample.txt' }));
+  await waitFor(() => expect(abortUpload).toHaveBeenCalledWith('uncertain-session', expect.any(Object)));
+  expect(uploadRequest).toHaveBeenCalledWith('/api/v1/uploads', expect.objectContaining({
+    method: 'POST', headers: { 'Idempotency-Key': stored.idempotencyKey }, body: JSON.stringify(creation),
+  }), expect.any(Object));
+  await waitFor(() => expect(screen.queryByText(/sample.txt:0/)).not.toBeInTheDocument());
+});
+
+test('retains a failed task when removal cannot confirm cancellation', async () => {
+  listActiveUploads.mockResolvedValue({ items: [] });
+  uploadFile.mockImplementation(async (file, folder, progress, control) => {
+    control.onSession({ id: 'uncertain-session', status: 'uploading' });
+    throw new Error('offline');
+  });
+  abortUpload.mockRejectedValue(new Error('offline'));
+  getUpload.mockRejectedValue(new Error('offline'));
+  renderTransfers();
+  fireEvent.click(screen.getByRole('button', { name: '添加', exact: true }));
+  await screen.findByText('failed:sample.txt:0');
+  fireEvent.click(screen.getByRole('button', { name: '移除 sample.txt' }));
+  expect(await screen.findByText('cancel_pending:sample.txt:0')).toBeInTheDocument();
+});
+
+test('continues server verification without a file when the active list is unavailable', async () => {
+  const session = { id: 'background-session', filename: 'background.txt', size_bytes: 4, status: 'verifying' };
+  localStorage.setItem('bx-yunpan:uploads:user-1', JSON.stringify([{ id: 'background-task', name: 'background.txt', size: 4, session }]));
+  listActiveUploads.mockRejectedValue(new Error('offline'));
+  waitForUpload.mockResolvedValue({ session: { ...session, status: 'completed' }, file: { id: 'background-file' } });
+  renderTransfers();
+  expect(await screen.findByText('completed:background.txt:100')).toBeInTheDocument();
+  expect(waitForUpload).toHaveBeenCalledWith(session, expect.any(Function), expect.any(Object));
+  expect(uploadFile).not.toHaveBeenCalled();
 });

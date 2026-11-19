@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import ImportShareModal from './ImportShareModal';
 import { importShare, resolveShare } from '../services/share';
 
-jest.mock('../services/share', () => ({ importShare: jest.fn(), resolveShare: jest.fn() }));
+jest.mock('../services/share', () => ({ ...jest.requireActual('../services/share'), importShare: jest.fn(), resolveShare: jest.fn() }));
 const resolved = { share: { id: 'share-1', file_name: 'report.pdf', expires_at: null }, share_access_token: 'token' };
 beforeEach(() => { jest.clearAllMocks(); Object.defineProperty(global, 'crypto', { configurable: true, value: { randomUUID: jest.fn(() => 'retry-key') } }); });
 const show = props => render(<ConfigProvider theme={{ token: { motion: false } }}><App><ImportShareModal open folderId="root" targetLabel="根目录" onCancel={jest.fn()} {...props} /></App></ConfigProvider>);
@@ -35,4 +35,20 @@ test('reuses the same idempotency key after a failed import request', async () =
   expect(importShare.mock.calls).toEqual([
     ['share-1', 'root', 'token', 'retry-key'], ['share-1', 'root', 'token', 'retry-key'],
   ]);
+});
+
+test('imports with a stable retry key when randomUUID is unavailable', async () => {
+  crypto.randomUUID = undefined;
+  resolveShare.mockResolvedValue(resolved);
+  importShare.mockRejectedValueOnce(new Error('网络连接失败')).mockResolvedValueOnce({});
+  const onImported = jest.fn(); show({ onImported }); enterKey();
+  fireEvent.click(screen.getByRole('button', { name: '解析分享' }));
+  fireEvent.click(await screen.findByRole('button', { name: '导入到当前目录' }));
+  await screen.findByText('网络连接失败');
+  fireEvent.click(screen.getByRole('button', { name: '导入到当前目录' }));
+  await waitFor(() => expect(onImported).toHaveBeenCalledTimes(1));
+  const key = importShare.mock.calls[0][3];
+  expect(key).toEqual(expect.any(String));
+  expect(key.length).toBeGreaterThan(0);
+  expect(importShare.mock.calls[1][3]).toBe(key);
 });

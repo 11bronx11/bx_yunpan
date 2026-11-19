@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, App, Modal, Space } from 'antd';
 import Input from './IMEInput';
-import { importShare, resolveShare } from '../services/share';
+import { createImportIdempotencyKey, importShare, resolveShare } from '../services/share';
 import { formatShareExpiry } from './ShareModal';
 
 const ImportForm = ({ folderId, targetLabel, onCancel, onImported }) => {
@@ -23,7 +23,7 @@ const ImportForm = ({ folderId, targetLabel, onCancel, onImported }) => {
       const controller = new AbortController(); request.current = controller; setBusy('resolve');
       try {
         const resolved = await resolveShare(key.trim(), { signal: controller.signal });
-        if (!controller.signal.aborted) { setResult(resolved); idempotency.current = crypto.randomUUID(); }
+        if (!controller.signal.aborted) { setResult(resolved); idempotency.current = createImportIdempotencyKey(); }
       } catch (error) { if (!controller.signal.aborted) message.error(error.message || '解析分享失败'); }
       finally { if (!controller.signal.aborted) setBusy(''); }
       return;

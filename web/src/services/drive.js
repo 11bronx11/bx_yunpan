@@ -26,7 +26,7 @@ export const getPreview = (id, { signal } = {}) => api(`/api/v1/files/${id}/prev
 
 const randomId = () => window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-export const listActiveUploads = () => api('/api/v1/uploads?status=active');
+export const listActiveUploads = ({ signal } = {}) => api('/api/v1/uploads?status=active', { signal });
 export const abortUpload = (uploadId, control = {}) => uploadRequest(`/api/v1/uploads/${uploadId}`, { method: 'DELETE' }, control);
 export const getUpload = (uploadId, control = {}) => uploadRequest(`/api/v1/uploads/${uploadId}`, {}, control);
 
@@ -108,6 +108,7 @@ export const uploadFile = async (file, folderId, onProgress, control = {}, exist
     return { file: { id: session.completed_entry_id, name: session.filename }, session };
   }
   if (['completing', 'verifying'].includes(session.status)) return waitForUpload(session, onProgress, control);
+  if (['failed', 'aborted', 'expired'].includes(session.status)) return waitForUpload(session, onProgress, control);
   if (!['created', 'uploading'].includes(session.status)) throw clientError(session.error_code || 'upload.conflict');
 
   const result = await multipartUpload(file, session, onProgress, control);

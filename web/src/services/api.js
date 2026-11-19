@@ -1,5 +1,6 @@
 let accessToken = null;
 let refreshPromise = null;
+let sessionRevision = 0;
 const sessionExpiredListeners = new Set();
 
 export const onSessionExpired = listener => {
@@ -85,8 +86,12 @@ export const clientError = (code, fallback) => {
 };
 
 export const setAccessToken = token => {
+  sessionRevision += 1;
   accessToken = token || null;
+  refreshPromise = null;
 };
+
+const sessionChanged = () => new DOMException('Session changed', 'AbortError');
 
 const parseResponse = async response => {
   if (response.status === 204) return null;
@@ -108,27 +113,45 @@ const parseResponse = async response => {
 
 const refreshAccess = async () => {
   if (!refreshPromise) {
-    refreshPromise = fetch('/api/v1/auth/refresh', {
+    const revision = sessionRevision;
+    const pending = fetch('/api/v1/auth/refresh', {
       method: 'POST',
       credentials: 'include',
     }).then(parseResponse).then(session => {
-      setAccessToken(session.access_token);
+      if (revision !== sessionRevision) throw sessionChanged();
+      accessToken = session.access_token || null;
       return session;
     }).catch(error => {
+      if (revision !== sessionRevision) throw sessionChanged();
       if (error.status === 401) {
         setAccessToken(null);
         sessionExpiredListeners.forEach(listener => listener());
       }
+      if (error.name === 'AbortError') throw error;
       if (error.status || error.code) throw error;
       throw clientError('client.network');
     }).finally(() => {
-      refreshPromise = null;
+      if (refreshPromise === pending) refreshPromise = null;
     });
+    refreshPromise = pending;
   }
   return refreshPromise;
 };
 
+// Each caller can stop waiting while the shared refresh continues for other requests.
+const waitForRefresh = signal => {
+  if (signal?.aborted) return Promise.reject(new DOMException('Request canceled', 'AbortError'));
+  const pending = refreshAccess();
+  if (!signal) return pending;
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(new DOMException('Request canceled', 'AbortError'));
+    signal.addEventListener('abort', abort, { once: true });
+    pending.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+};
+
 export const api = async (path, options = {}, retry = true) => {
+  const revision = sessionRevision;
   const headers = new Headers(options.headers || {});
   if (options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
@@ -142,7 +165,10 @@ export const api = async (path, options = {}, retry = true) => {
     throw clientError('client.network');
   }
   if (response.status === 401 && retry && path !== '/api/v1/auth/refresh') {
-    await refreshAccess();
+    if (revision !== sessionRevision) throw sessionChanged();
+    await waitForRefresh(options.signal);
+    if (revision !== sessionRevision) throw sessionChanged();
+    if (options.signal?.aborted) throw new DOMException('Request canceled', 'AbortError');
     return api(path, options, false);
   }
   return parseResponse(response);

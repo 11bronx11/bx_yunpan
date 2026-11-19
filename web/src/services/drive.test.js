@@ -160,6 +160,16 @@ test('asynchronous create waits for initialization before signing parts', async 
   fetchMock.mockClear();
 });
 
+test('reports a terminal initialization failure so retries can create a fresh session', async () => {
+  const session = { id: 'failed-init', status: 'initializing', filename: 'failed.txt', size_bytes: 3 };
+  api.mockImplementation(async path => path === '/api/v1/uploads'
+    ? { mode: 'multipart', upload: session }
+    : { ...session, status: 'failed', error_code: 'upload.storage_unavailable' });
+  await expect(uploadFile(new File(['abc'], 'failed.txt'), 'folder-1', jest.fn(), { pollInterval: 0 })).rejects.toMatchObject({
+    code: 'upload.storage_unavailable', uploadStatus: 'failed', session: expect.objectContaining({ id: 'failed-init' }),
+  });
+});
+
 test('resuming completion polls without requiring the original file', async () => {
   api.mockResolvedValue({ id: 'complete-upload', status: 'completed', completed_entry_id: 'complete-file' });
   const result = await uploadFile(null, 'folder', jest.fn(), {}, { id: 'complete-upload', status: 'completing' });

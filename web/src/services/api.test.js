@@ -118,3 +118,53 @@ test('a gateway failure during refresh keeps the session available for retry', a
     expect(expired).not.toHaveBeenCalled();
   } finally { unsubscribe(); fetchMock.mockRestore(); }
 });
+
+test('canceling a request stops waiting for refresh without canceling other requests', async () => {
+  let finishRefresh;
+  const ok = value => ({ status: 200, ok: true, headers: { get: () => 'application/json' }, json: async () => value });
+  const controller = new AbortController();
+  setAccessToken('expired');
+  const fetchMock = jest.spyOn(global, 'fetch').mockImplementation(async (path, options) => {
+    if (path === '/api/v1/auth/refresh') return new Promise(resolve => { finishRefresh = () => resolve(ok({ access_token: 'renewed' })); });
+    return options.headers.get('Authorization') === 'Bearer expired' ? { status: 401 } : ok({ id: path });
+  });
+  let canceled, other;
+  try {
+    canceled = api('/canceled', { signal: controller.signal }).catch(error => error);
+    other = api('/other').catch(error => error);
+    await new Promise(resolve => jest.requireActual('timers').setImmediate(resolve));
+    controller.abort();
+    // Cancellation must settle before the shared refresh responds.
+    const winner = await Promise.race([canceled, new Promise(resolve => jest.requireActual('timers').setImmediate(() => resolve('still waiting')))]);
+    expect(winner).toMatchObject({ name: 'AbortError' });
+    finishRefresh();
+    await expect(other).resolves.toEqual({ id: '/other' });
+    expect(fetchMock.mock.calls.filter(([path]) => path === '/canceled')).toHaveLength(1);
+  } finally {
+    finishRefresh?.();
+    await Promise.allSettled([canceled, other]);
+    setAccessToken(null); fetchMock.mockRestore();
+  }
+});
+
+test.each([200, 401])('a late refresh response (%s) cannot replace or expire a newer login', async status => {
+  let finishRefresh;
+  const expired = jest.fn();
+  const unsubscribe = onSessionExpired(expired);
+  setAccessToken('old-token');
+  const fetchMock = jest.spyOn(global, 'fetch')
+    .mockResolvedValueOnce({ status: 401 })
+    .mockImplementationOnce(() => new Promise(resolve => { finishRefresh = resolve; }))
+    .mockResolvedValue({ status: 204 });
+  try {
+    const oldRequest = api('/old-user').catch(error => error);
+    await new Promise(resolve => jest.requireActual('timers').setImmediate(resolve));
+    setAccessToken('new-login-token');
+    finishRefresh({ status, ok: status === 200, headers: { get: () => 'application/json' }, json: async () => ({ access_token: 'old-refresh-token', error: { code: 'auth.unauthorized' } }) });
+    expect(await oldRequest).toMatchObject({ name: 'AbortError' });
+    await api('/new-user', {}, false);
+    expect(fetchMock.mock.calls.at(-1)[1].headers.get('Authorization')).toBe('Bearer new-login-token');
+    expect(expired).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.filter(([path]) => path === '/old-user')).toHaveLength(1);
+  } finally { unsubscribe(); setAccessToken(null); fetchMock.mockRestore(); }
+});

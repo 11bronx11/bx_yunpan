@@ -43,13 +43,15 @@ const storedUpload = task => ({
 });
 
 const sessionProgress = session => {
+  if (session.status === 'completed') return 100;
   if (['completing', 'verifying'].includes(session.status)) return 99;
   const bytes = (session.confirmed_parts || []).reduce((total, part) => total + part.size_bytes, 0);
-  return Math.min(99, Math.floor(bytes / session.size_bytes * 100));
+  return session.size_bytes > 0 ? Math.min(99, Math.floor(bytes / session.size_bytes * 100)) : 0;
 };
 
 const recoveredUpload = (session, local) => {
   const progress = sessionProgress(session);
+  const terminal = ['completed', 'failed', 'aborted', 'expired'].includes(session.status);
   return {
     id: local?.id || `upload-${session.id}`,
     file: null,
@@ -58,10 +60,12 @@ const recoveredUpload = (session, local) => {
     name: session.filename,
     size: session.size_bytes,
     mimeType: local?.mimeType || 'application/octet-stream',
-    status: local?.cancelRequested ? 'cancel_pending' : ['completing', 'verifying'].includes(session.status) ? session.status : 'interrupted',
-    cancelRequested: local?.cancelRequested,
+    status: terminal ? session.status === 'completed' ? 'completed' : session.status === 'failed' ? 'failed' : 'canceled'
+      : local?.cancelRequested ? 'cancel_pending' : ['completing', 'verifying'].includes(session.status) ? session.status : 'interrupted',
+    cancelRequested: !terminal && local?.cancelRequested,
     progress,
-    transferred: ['completing', 'verifying'].includes(session.status) ? session.size_bytes : (session.confirmed_parts || []).reduce((sum, p) => sum + p.size_bytes, 0),
+    transferred: ['completed', 'completing', 'verifying'].includes(session.status) ? session.size_bytes : (session.confirmed_parts || []).reduce((sum, p) => sum + p.size_bytes, 0),
+    completedFile: session.status === 'completed' ? { id: session.completed_entry_id, name: session.filename } : null,
     speed: 0,
     session,
     idempotencyKey: local?.idempotencyKey,
@@ -73,7 +77,7 @@ const recoveredUpload = (session, local) => {
 const localInterruptedUpload = local => ({
   ...local,
   file: null,
-  status: local.cancelRequested ? 'cancel_pending' : 'interrupted',
+  status: local.cancelRequested ? 'cancel_pending' : ['completing', 'verifying'].includes(local.session?.status) ? local.session.status : 'interrupted',
   progress: local.progress || 0,
   transferred: local.transferred || 0,
   speed: 0,
@@ -132,6 +136,7 @@ export const TransferProvider = ({ children }) => {
     if (!nextOwnerId) return undefined;
 
     let mounted = true;
+    const controller = new AbortController();
     const local = readStoredUploads(nextOwnerId);
     const localBySession = new Map(local.filter(task => task.session?.id).map(task => [task.session.id, task]));
     const restoreUploads = recovered => setUploads(current => {
@@ -139,12 +144,22 @@ export const TransferProvider = ({ children }) => {
       const sessions = new Set(current.map(task => task.session?.id).filter(Boolean));
       return [...current, ...recovered.filter(task => !ids.has(task.id) && !sessions.has(task.session?.id))];
     });
-    listActiveUploads()
-      .then(response => {
+    listActiveUploads({ signal: controller.signal })
+      .then(async response => {
         if (!mounted || ownerId.current !== nextOwnerId) return;
         const sessions = response.items || [];
         const backendTasks = sessions.map(session => recoveredUpload(session, localBySession.get(session.id)));
-        const localOnly = local.filter(task => !task.session?.id).map(localInterruptedUpload);
+        const activeSessionIds = new Set(sessions.map(session => session.id));
+        // Terminal sessions disappear from the active list; reconcile their local evidence separately.
+        const localOnly = await Promise.all(local.filter(task => !activeSessionIds.has(task.session?.id)).map(async task => {
+          if (!task.session?.id) return localInterruptedUpload(task);
+          try {
+            return recoveredUpload(await getUpload(task.session.id, { signal: controller.signal }), task);
+          } catch {
+            return localInterruptedUpload(task);
+          }
+        }));
+        if (!mounted || ownerId.current !== nextOwnerId) return;
         hydratedOwner.current = nextOwnerId;
         restoreUploads([...backendTasks, ...localOnly]);
       })
@@ -153,13 +168,13 @@ export const TransferProvider = ({ children }) => {
         hydratedOwner.current = nextOwnerId;
         restoreUploads(local.map(localInterruptedUpload));
       });
-    return () => { mounted = false; };
+    return () => { mounted = false; controller.abort(); };
   }, [ready, user?.id]);
 
   useEffect(() => {
     if (!ready || !user?.id || hydratedOwner.current !== user.id) return;
     const persist = () => {
-      const records = uploadsRef.current.filter(task => persistedStatuses.has(task.status) || (task.status === 'failed' && task.session)).map(storedUpload);
+      const records = uploadsRef.current.filter(task => persistedStatuses.has(task.status) || (task.status === 'failed' && (task.session || task.creation || task.control?.creation))).map(storedUpload);
       try {
         if (records.length > 0) localStorage.setItem(storageKey(user.id), JSON.stringify(records));
         else localStorage.removeItem(storageKey(user.id));
@@ -321,6 +336,12 @@ export const TransferProvider = ({ children }) => {
   const resumeUpload = useCallback(id => {
     const task = uploadsRef.current.find(item => item.id === id);
     if (!task || !['paused', 'failed', 'verification_pending'].includes(task.status)) return;
+    if (['failed', 'aborted', 'expired'].includes(task.session?.status)) {
+      releasePendingParts(task.pendingParts);
+      updateUpload(id, { status: task.file ? 'queued' : 'interrupted', session: null, creation: null, pendingParts: null,
+        idempotencyKey: `upload-${randomId()}`, error: null, control: null, speed: 0, progress: 0, transferred: 0 });
+      return;
+    }
     const status = ['completing', 'verifying'].includes(task.session?.status) ? task.session.status : 'queued';
     updateUpload(id, { status, error: null, control: null, speed: 0 });
   }, [updateUpload]);
@@ -338,7 +359,7 @@ export const TransferProvider = ({ children }) => {
 
   const cancelUpload = useCallback(async id => {
     const task = uploadsRef.current.find(item => item.id === id);
-    if (!task || terminalStatuses.has(task.status) || cancelControls.current.has(id)) return;
+    if (!task || (terminalStatuses.has(task.status) && task.status !== 'failed') || cancelControls.current.has(id)) return;
     const runOwner = ownerId.current;
     const running = controls.current.get(id);
     releasePendingParts(task.pendingParts);
@@ -364,6 +385,7 @@ export const TransferProvider = ({ children }) => {
         }
         session = created.upload;
       }
+      if (!current()) return;
       if (session) {
         updateUpload(id, { session, creation });
         try { await abortUpload(session.id, { signal: controller.signal }); }
@@ -374,7 +396,7 @@ export const TransferProvider = ({ children }) => {
               cancelRequested: false, control: null, progress: latest.status === 'completed' ? 100 : 99 });
             return;
           }
-          if (latest.status !== 'aborted') throw error;
+          if (!['aborted', 'expired', 'failed'].includes(latest.status)) throw error;
         }
       }
       if (current()) updateUpload(id, { status: 'canceled', cancelRequested: false, control: null, pendingParts: null, creation: null });
@@ -386,13 +408,23 @@ export const TransferProvider = ({ children }) => {
   const removeUpload = useCallback(id => {
     const task = uploadsRef.current.find(item => item.id === id);
     if (!task || !['failed', 'canceled'].includes(task.status)) return;
-    const remove = () => { releasePendingParts(task.pendingParts); setUploads(current => current.filter(item => item.id !== id)); };
-    if (task.status === 'failed' && task.session?.id && !['completing', 'verifying'].includes(task.session.status)) {
-      abortUpload(task.session.id).then(remove).catch(error => updateUpload(id, { error: `移除失败：${error.message}` }));
+    const runOwner = ownerId.current;
+    const remove = () => {
+      if (ownerId.current !== runOwner) return;
+      releasePendingParts(task.pendingParts);
+      const next = uploadsRef.current.filter(item => item.id !== id);
+      uploadsRef.current = next;
+      setUploads(next);
+    };
+    if (task.status === 'failed' && (task.session || task.creation)) {
+      // Resolve uncertain creation and cancellation before discarding the only local recovery record.
+      cancelUpload(id).then(() => {
+        if (uploadsRef.current.find(item => item.id === id)?.status === 'canceled') remove();
+      });
       return;
     }
     remove();
-  }, [updateUpload]);
+  }, [cancelUpload]);
 
   const activeCount = uploads.filter(task => activeStatuses.has(task.status)).length;
   const value = useMemo(() => ({
