@@ -29,6 +29,7 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/asyncjobs"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"github.com/11bronx11/bx_yunpan/backend/internal/testdb"
+	"github.com/11bronx11/bx_yunpan/backend/internal/testfault"
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -173,6 +174,21 @@ func TestAISplitRealDependencies(t *testing.T) {
 		u.User = url.UserPassword(role, password)
 		roleDSNs[kind] = u.String()
 	}
+	var aiFault, businessFault *testfault.TCP
+	if os.Getenv("TEST_AI_ASYNC_FAULTS") == "true" {
+		u, _ := url.Parse(aiDSN)
+		aiFault = testfault.NewTCP(t, u.Host)
+		for kind, dsn := range roleDSNs {
+			u, _ := url.Parse(dsn)
+			u.Host = aiFault.Address
+			roleDSNs[kind] = u.String()
+		}
+		u, _ = url.Parse(bizDSN)
+		businessFault = testfault.NewTCP(t, u.Host)
+		u.Host = businessFault.Address
+		bizDSN = u.String()
+		readerDSN.Host = businessFault.Address
+	}
 	for key, value := range map[string]string{"POSTGRES_PRIMARY_DSN": bizDSN, "POSTGRES_READONLY_DSN": readerDSN.String(), "ASYNC_CONTROL_DSN": ctrlDSN, "RABBITMQ_URL": os.Getenv("TEST_RABBITMQ_URL"), "S3_ENDPOINT": os.Getenv("TEST_MINIO_ENDPOINT"), "S3_PUBLIC_ENDPOINT": os.Getenv("TEST_MINIO_ENDPOINT"), "S3_ACCESS_KEY": os.Getenv("TEST_MINIO_ACCESS_KEY"), "S3_SECRET_KEY": os.Getenv("TEST_MINIO_SECRET_KEY"), "S3_BUCKET": "ai-split-" + suffix, "S3_PUBLIC_PATH_PREFIX": "", "AI_QUERY_DSN": roleDSNs["query"], "AI_COMPUTE_DSN": roleDSNs["compute"], "AI_COMMIT_DSN": roleDSNs["commit"], "AI_ENABLED": "true", "AI_PROVIDER": "fake", "AI_PROFILE_ID": "smoke-" + suffix, "AI_PROJECTION_NAMESPACE": "bx-ai-test-" + suffix, "AI_PROFILE_REVISION": "v1", "ETCD_ENABLED": "true", "ETCD_ENDPOINTS": os.Getenv("TEST_ETCD_ENDPOINT"), "PARSER_WORKER_DIR": "../../parser_worker", "PARSER_REMOTE_ENABLED": "true", "PARSER_SERVICE_TOKEN": uuid.NewString(), "CORE_INTERNAL_SERVICE_TOKEN": uuid.NewString(), "AI_QUERY_SERVICE_TOKEN": uuid.NewString(), "CACHE_ENABLED": "false", "AI_RATE_LIMIT_ENABLED": "false", "POSTGRES_MAX_OPEN_CONNS": "2", "POSTGRES_MAX_IDLE_CONNS": "1", "ASYNC_CONTROL_MAX_OPEN_CONNS": "2", "ASYNC_CONTROL_CRITICAL_CONNS": "1", "ASYNC_WORKER_CONCURRENCY": "1", "ASYNC_BROKER_PREFIX": "bx.ai.test." + suffix, "ASYNC_RETRY_BASE": "100ms", "ASYNC_RETRY_CAP": "1s", "SEARCH_READ_BACKEND": "es_qdrant", "SEARCH_WRITE_BACKENDS": "postgres,es_qdrant", "SEARCH_ES_ENDPOINT": esEndpoint, "SEARCH_QDRANT_ENDPOINT": qdEndpoint, "AI_EMBEDDING_REVISION": "config-v1", "AI_SUMMARY_REVISION": "config-v1", "AI_SUMMARY_PROMPT_VERSION": "overview-v1"} {
 		t.Setenv(key, value)
 	}
@@ -288,23 +304,35 @@ func TestAISplitRealDependencies(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	logs := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	start := func(role string, fn func(context.Context, config.Config, *slog.Logger) error) {
+	stops := map[string]func(){}
+	start := func(role string, fn func(context.Context, config.Config, *slog.Logger) error) func() {
 		local := cfg
 		local.Role = role
-		local.App.InstanceID = role + "-" + suffix
+		local.App.InstanceID = role + "-" + suffix + "-" + uuid.NewString()[:8]
+		runCtx, stop := context.WithCancel(ctx)
+		done := make(chan struct{})
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if e := fn(ctx, local, logs); e != nil && ctx.Err() == nil {
+			defer close(done)
+			if e := fn(runCtx, local, logs); e != nil && runCtx.Err() == nil {
 				t.Errorf("%s: %v", role, e)
 			}
 		}()
+		return func() {
+			stop()
+			select {
+			case <-done:
+			case <-time.After(15 * time.Second):
+				t.Errorf("%s did not stop", role)
+			}
+		}
 	}
 	defer func() { cancel(); wg.Wait() }()
 	start("parser-svc", RunParserSvc)
 	for _, r := range []string{"core-internal", "ai-query", "ai-content-worker", "ai-embedding-worker", "ai-summary-worker", "ai-text-projector", "ai-vector-projector"} {
 		role := r
-		start(role, func(c context.Context, v config.Config, l *slog.Logger) error { return RunAISplit(c, v, l, role) })
+		stops[role] = start(role, func(c context.Context, v config.Config, l *slog.Logger) error { return RunAISplit(c, v, l, role) })
 	}
 	for _, r := range []string{"async-control", "upload-worker", "object-worker", "media-worker", "gc-worker"} {
 		role := r
@@ -521,7 +549,99 @@ func TestAISplitRealDependencies(t *testing.T) {
 		}
 	}
 	t.Log("real upload -> source -> parent/child text -> vectors/summary -> independent ES/QD -> Search/Ask -> citations and summary-only user job: PASS")
+	if os.Getenv("TEST_AI_SCALE") == "true" {
+		runAIScaleChecks(t, ctx, cfg, ctrl, aidb, base, a, b, stops, start, request, upload)
+	}
+	if aiFault != nil {
+		aiFault.Cut()
+		request("GET", "/api/v1/folders/root", nil, 200)
+		isolatedFile := upload("ai-db-outage.txt", "独立 AI PG 断连时业务上传和配额仍能完成；恢复后继续构建，不丢事实事件。")
+		var isolatedEntry struct{ ObjectID uuid.UUID }
+		if err := biz.Table("file_entries").Select("object_id").Where("id=?", isolatedFile).Take(&isolatedEntry).Error; err != nil {
+			t.Fatal(err)
+		}
+		var failedTask asynccontrol.Task
+		await("AI PG outage is durably retried", func() bool {
+			return ctrl.Where("resource_key LIKE ? AND kind='ai.intent.apply' AND attempts>0 AND last_error<>''", "object:"+isolatedEntry.ObjectID.String()+":%").Take(&failedTask).Error == nil
+		})
+		if failedTask.Attempts >= failedTask.MaxAttempts || asynccontrol.Terminal(failedTask.State) {
+			t.Fatal("AI database outage escaped bounded retry", failedTask.State, failedTask.Attempts)
+		}
+		var premature int64
+		if err := aidb.Table("ai_objects").Where("object_id=?", isolatedEntry.ObjectID).Count(&premature).Error; err != nil || premature != 0 {
+			t.Fatal("disconnected AI worker fabricated publication", premature, err)
+		}
+		request("GET", "/api/v1/folders/root", nil, 200)
+		aiFault.Restore()
+		await("AI PG reconnect resumes the original task", func() bool {
+			var object struct{ ActiveContentVersionID, ActiveEmbeddingSetID, ActiveSummaryID *uuid.UUID }
+			return aidb.Table("ai_objects").Where("object_id=?", isolatedEntry.ObjectID).Take(&object).Error == nil && object.ActiveContentVersionID != nil && object.ActiveEmbeddingSetID != nil && object.ActiveSummaryID != nil
+		})
+		var recovered asynccontrol.Task
+		if err := ctrl.First(&recovered, "id=?", failedTask.ID).Error; err != nil || recovered.State != asynccontrol.Done || recovered.Outcome != asynccontrol.Succeeded || recovered.InputDigest != failedTask.InputDigest || recovered.Attempts < failedTask.Attempts {
+			t.Fatal("database reconnect replaced task identity or budget", recovered.State, recovered.Attempts, err)
+		}
+		caps := request("GET", "/api/v1/files/"+isolatedFile+"/ai", nil, 200)["capabilities"].(map[string]any)
+		if !caps["askable"].(bool) {
+			t.Fatal("AI query did not reconnect after database recovery")
+		}
+		t.Log("AI PG existing/new connections cut: API and core upload remained usable; original AI task retried and all capabilities recovered")
+
+		// Hold summary-node access until its task is durably scheduled, then cut
+		// every online business SQL pool before allowing AI-local work to proceed.
+		barrier := aidb.WithContext(ctx).Begin()
+		if barrier.Error != nil {
+			t.Fatal(barrier.Error)
+		}
+		defer barrier.Rollback()
+		if err := barrier.Exec("LOCK TABLE ai_summary_nodes IN ACCESS EXCLUSIVE MODE").Error; err != nil {
+			t.Fatal(err)
+		}
+		isolatedJob := request("POST", "/api/v1/files/"+isolatedFile+"/ai/reprocess", map[string]any{"targets": []string{"summary"}}, 202)
+		isolatedJobID := isolatedJob["job_id"].(string)
+		var summaryTask asynccontrol.Task
+		await("summary task admitted before business outage", func() bool {
+			return ctrl.Table("tasks t").Select("t.*").Joins("JOIN ai_job_task_links l ON l.task_id=t.id").Where("l.job_id=? AND t.kind='ai.summary.generate'", isolatedJobID).Take(&summaryTask).Error == nil
+		})
+		if asynccontrol.Terminal(summaryTask.State) {
+			t.Fatal("summary barrier did not hold execution", summaryTask.State)
+		}
+		businessFault.Cut()
+		if err := barrier.Rollback().Error; err != nil {
+			t.Fatal(err)
+		}
+		await("AI summary completes without business SQL", func() bool {
+			var current asynccontrol.Task
+			return ctrl.First(&current, "id=?", summaryTask.ID).Error == nil && current.State == asynccontrol.Done && current.Outcome == asynccontrol.Succeeded
+		})
+		var summaryReceipts int64
+		if err := aidb.Table("ai_commit_receipts").Where("task_id=?", summaryTask.ID).Count(&summaryReceipts).Error; err != nil || summaryReceipts != 1 {
+			t.Fatal("AI-local receipt missing during business outage", summaryReceipts, err)
+		}
+		await("business job finish waits for business PG", func() bool {
+			var pending int64
+			return ctrl.Table("tasks").Where("kind='ai.job.finish' AND input->>'job_id'=? AND state='pending' AND last_error<>''", isolatedJobID).Count(&pending).Error == nil && pending == 1
+		})
+		businessFault.Restore()
+		await("business job finish recovers", func() bool {
+			var status string
+			return biz.Table("async_tasks").Where("id=?", isolatedJobID).Select("status").Scan(&status).Error == nil && status == "succeeded"
+		})
+		t.Log("Business PG connections cut: scheduled AI summary published one receipt; core job finish retried independently and recovered")
+	}
 	if os.Getenv("TEST_AI_ONLINE") == "true" {
+		// Later MIME, scaling and outage fixtures add objects after the first
+		// projection barrier. Global retrieval needs coverage for every active
+		// version before asserting that the external backend serves the scope.
+		await("all current versions externally projected before online matrix", func() bool {
+			var missing int64
+			return aidb.Raw(`SELECT count(*) FROM ai_objects o WHERE o.tombstoned_at IS NULL AND
+ (o.active_content_version_id IS NULL OR o.active_embedding_set_id IS NULL OR
+ NOT EXISTS (SELECT 1 FROM ai_projection_states p JOIN ai_projection_targets t ON t.id=p.target_id
+   WHERE p.backend='es' AND p.artifact_version_id=o.active_content_version_id AND p.state='complete' AND p.operation='upsert' AND t.state='active') OR
+ NOT EXISTS (SELECT 1 FROM ai_projection_states p JOIN ai_projection_targets t ON t.id=p.target_id
+   WHERE p.backend='qd' AND p.artifact_version_id=o.active_embedding_set_id AND p.state='complete' AND p.operation='upsert' AND t.state='active'))`).Scan(&missing).Error == nil && missing == 0
+		})
 		runAIOnlineChecks(t, ctx, base, token, root, a, b, &esFail, &qdFail, &qdGate, upload)
 	}
 	if ready := os.Getenv("TEST_AI_BROWSER_READY_FILE"); ready != "" {
@@ -545,5 +665,11 @@ func TestAISplitRealDependencies(t *testing.T) {
 
 func TestAISplitDirectRealDependencies(t *testing.T) {
 	t.Setenv("TEST_AI_PROTOCOL_VERSION", "3")
+	TestAISplitRealDependencies(t)
+}
+
+func TestAISplitDirectFailureIsolationRealDependencies(t *testing.T) {
+	t.Setenv("TEST_AI_PROTOCOL_VERSION", "3")
+	t.Setenv("TEST_AI_ASYNC_FAULTS", "true")
 	TestAISplitRealDependencies(t)
 }

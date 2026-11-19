@@ -239,6 +239,20 @@ func TestFinalCrashedAttemptConverges(t *testing.T) {
 
 func TestRelaySafeWatermarkAndAtomicTakeover(t *testing.T) {
 	s, biz := testStore(t)
+	testRelaySafeWatermarkAndAtomicTakeover(t, s, biz)
+}
+
+func TestDirectRelaySafeWatermarkAndAtomicTakeover(t *testing.T) {
+	s, biz := testStore(t)
+	s.ProtocolVersion = 3
+	if err := s.DB.Exec("SET bx.coordination_protocol='v3'; UPDATE control_settings SET value='v3' WHERE key='coordination_protocol'").Error; err != nil {
+		t.Fatal(err)
+	}
+	testRelaySafeWatermarkAndAtomicTakeover(t, s, biz)
+}
+
+func testRelaySafeWatermarkAndAtomicTakeover(t *testing.T, s *Store, biz *gorm.DB) {
+	t.Helper()
 	ctx := context.Background()
 	sqlBiz, _ := biz.DB()
 	sqlBiz.SetMaxOpenConns(3)

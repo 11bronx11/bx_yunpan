@@ -32,6 +32,14 @@ import (
 // Optional bounded external-provider check: one vision, document embedding,
 // summary, query embedding and grounded answer. Credentials exist only in env.
 func TestRealModelImagePipeline(t *testing.T) {
+	realModelImagePipeline(t, false)
+}
+
+func TestDirectRealModelImagePipeline(t *testing.T) {
+	realModelImagePipeline(t, true)
+}
+
+func realModelImagePipeline(t *testing.T, direct bool) {
 	if os.Getenv("TEST_REAL_AI_CONFIG") == "" {
 		t.Skip("explicit real model configuration required")
 	}
@@ -45,6 +53,15 @@ func TestRealModelImagePipeline(t *testing.T) {
 	}
 	provider := ai.NewProvider(cfg)
 	db, store := databases(t)
+	if direct {
+		store.ProtocolVersion = 3
+		if err := store.DB.Exec("SET bx.coordination_protocol='v3'; UPDATE control_settings SET value='v3' WHERE key='coordination_protocol'").Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Exec("SET bx.ai_protocol='v3'").Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	in := testInput()
 	in.Intent.MediaType = "image/png"
 	in.Profile.EmbeddingProvider = cfg.Provider
@@ -88,6 +105,11 @@ func TestRealModelImagePipeline(t *testing.T) {
 	in.Intent.Size = int64(buf.Len())
 	in.Intent.ContentHash = aiprotocol.Hash(buf.Bytes())
 	seedObject(t, db, in)
+	if direct {
+		if err := db.Exec("UPDATE ai_objects SET writer_protocol=3").Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	object := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(buf.Bytes()) }))
 	defer object.Close()
 	file := &corepb.FileRef{FileId: uuid.NewString(), ObjectId: in.Intent.ObjectID.String(), ContentGeneration: 1, MimeType: "image/png", Name: "equipment.png"}
@@ -96,6 +118,22 @@ func TestRealModelImagePipeline(t *testing.T) {
 	p := &Publisher{DB: db, Control: store}
 	compute := func(kind string, input aiprotocol.Input) aiprotocol.Output {
 		t.Helper()
+		if direct {
+			task := directTask(kind, input)
+			value, err := c.ComputeValue(context.Background(), task)
+			if err != nil {
+				t.Fatalf("real direct model computation %s failed: %s", kind, safeRealError(err))
+			}
+			completion, err := p.ApplyDirect(context.Background(), task, value)
+			if err != nil || completion.Outcome != "succeeded" {
+				t.Fatalf("real direct model stage %s failed: %s", kind, safeRealError(err))
+			}
+			refs, err := decode[aiprotocol.Published](completion.Refs)
+			if err != nil {
+				t.Fatal("direct publication references invalid")
+			}
+			return aiprotocol.Output{OutputID: refs.OutputID}
+		}
 		task := claim(t, store, kind, input)
 		body, e := c.Compute(context.Background(), task)
 		if e != nil {
@@ -153,6 +191,10 @@ func TestRealModelImagePipeline(t *testing.T) {
 
 func safeRealError(err error) string {
 	// Provider errors may include a transport URL. Keep test artifacts bounded.
+	var build *modelBuildError
+	if errors.As(err, &build) {
+		return safeRealError(build.cause)
+	}
 	if ai.IsProviderPermanent(err) {
 		return err.Error()
 	}

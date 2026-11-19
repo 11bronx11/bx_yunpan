@@ -259,12 +259,16 @@ func safeCompute(ctx context.Context, t Task, compute func(context.Context, Task
 }
 
 func (s *Store) QuarantineMessage(ctx context.Context, body []byte, reason string) error {
+	return s.quarantineMessage(s.DB.WithContext(ctx), body, reason)
+}
+
+func (s *Store) quarantineMessage(tx *gorm.DB, body []byte, reason string) error {
 	digest, _, err := Digest(body)
 	if err != nil {
 		digest = fmt.Sprintf("invalid:%x", body[:min(len(body), 128)])
 	}
 	details, _ := json.Marshal(map[string]any{"bytes": len(body)})
-	return s.quarantine(s.DB.WithContext(ctx), "message:"+digest, nil, reason, details)
+	return s.quarantine(tx, "message:"+digest, nil, reason, details)
 }
 
 func (s *Store) RunDeadLetters(ctx context.Context, b *Broker, logger *slog.Logger) error {
@@ -288,7 +292,7 @@ func (s *Store) RunDeadLetters(ctx context.Context, b *Broker, logger *slog.Logg
 
 func (s *Store) HandleDead(ctx context.Context, n Notice, raw []byte) error {
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := s.QuarantineMessage(ctx, raw, "transport exhausted"); err != nil {
+		if err := s.quarantineMessage(tx, raw, "transport exhausted"); err != nil {
 			return err
 		}
 		var t Task
@@ -296,7 +300,7 @@ func (s *Store) HandleDead(ctx context.Context, n Notice, raw []byte) error {
 		if q.Error != nil {
 			return q.Error
 		}
-		if q.RowsAffected == 0 || !n.validWire() || !n.matches(t) || n.DispatchGeneration != t.DispatchGeneration || Terminal(t.State) || t.State == Running {
+		if q.RowsAffected == 0 || !n.validWire() || n.Version != t.ProtocolVersion || n.ContractVersion != t.ContractVersion || !n.matches(t) || n.DispatchGeneration != t.DispatchGeneration || Terminal(t.State) || t.State == Running {
 			return nil
 		}
 		var now time.Time
