@@ -1,12 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, App, Button, Modal, Space, Tag, Typography } from 'antd';
+import { Alert, App, Button, Tag } from 'antd';
 import Input from '../components/IMEInput';
-import { CommentOutlined, SendOutlined } from '@ant-design/icons';
+import { FolderOpenOutlined, SendOutlined } from '@ant-design/icons';
 import styled from '@emotion/styled';
 import AskFilePicker from '../components/AskFilePicker';
 import { askFiles, getFileAI } from '../services/ai';
-import { getDownloadURL } from '../services/drive';
-import { startDownload } from '../utils/download';
 import { GraphicEmpty, PageHeader, ProductPage } from '../components/design/ProductUI';
 
 const Workspace = styled.div`width: 100%; margin: 0;`;
@@ -16,7 +14,16 @@ const Composer = styled.section`
 
   .ant-input { min-height: 104px; padding: 14px 16px; resize: vertical; line-height: 1.7; }
 `;
-const ComposerActions = styled.div`display: flex; justify-content: flex-end;`;
+const ComposerActions = styled.div`display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px;`;
+const SelectionCount = styled.span`
+  margin-right: 4px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+
+  strong { color: var(--ink); font-weight: 600; }
+`;
 const ResultSection = styled.section`margin-top: 24px;`;
 const ResultTitle = styled.h2`
   margin: 0 0 14px;
@@ -32,12 +39,10 @@ const Answer = styled.article`
   line-height: 1.8;
   overflow-wrap: anywhere;
 `;
-const Citations = styled.div`display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; .ant-tag { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }`;
 
 const AIAsk = () => {
   const { message } = App.useApp();
   const [question, setQuestion] = useState('');
-  const [citationOpen, setCitationOpen] = useState(null);
   const [answer, setAnswer] = useState(null);
   const [asking, setAsking] = useState(false);
   const [selected, setSelected] = useState([]);
@@ -45,7 +50,6 @@ const AIAsk = () => {
   const [invalidFiles, setInvalidFiles] = useState([]);
   const [scopeError, setScopeError] = useState('');
   const [preparing, setPreparing] = useState(false);
-  const [submittedScope, setSubmittedScope] = useState(null);
   useEffect(() => {
     const fileId = new URLSearchParams(window.location.search).get('file');
     if (!fileId) return undefined;
@@ -73,7 +77,6 @@ const AIAsk = () => {
     const value = question.trim();
     if (!value || asking || preparing || scopeError) return;
     const scope = selected.length ? { mode: 'selected', file_ids: selected.map(file => file.id) } : { mode: 'all' };
-    setSubmittedScope(selected.map(file => ({ ...file })));
     setAsking(true);
     setQuestion('');
     setAnswer(null);
@@ -94,11 +97,6 @@ const AIAsk = () => {
     <Workspace>
       <PageHeader title="问答" />
       <Composer className="page-reveal">
-        <Space wrap aria-label="本次问答范围">
-          {selected.length === 0 ? <Tag>全部可问答文件</Tag> : <>{selected.slice(0, 3).map(file => <Tag key={file.id}>{file.name}</Tag>)}{selected.length > 3 && <Tag>另 {selected.length - 3} 个</Tag>}</>}
-          <Button onClick={() => setPickerOpen(true)}>选择文件</Button>
-          {selected.length > 0 && <Button onClick={() => { setSelected([]); setScopeError(''); setInvalidFiles([]); }}>清空选择</Button>}
-        </Space>
         {preparing && <Alert type="info" message="正在准备指定文件的问答文本…" />}
         {scopeError && <Alert type="warning" message={scopeError} description={invalidFiles.length ? invalidFiles.map(item => <Tag key={item.file_id}>{selected.find(file => file.id === item.file_id)?.name || '所选文件'}：{item.reason === 'text_unavailable' ? '文本尚未准备好' : '已不可用'}</Tag>) : null} />}
 
@@ -113,26 +111,21 @@ const AIAsk = () => {
           }}
           placeholder="例如：这批资料里有哪些待跟进事项？"
         />
-        <ComposerActions><Button aria-label="提问" type="primary" icon={<SendOutlined />} loading={asking} disabled={!question.trim() || preparing || Boolean(scopeError)} onClick={runAsk}>提问</Button></ComposerActions>
+        <ComposerActions>
+          <SelectionCount aria-label="当前选择文件数量" role="status" aria-live="polite" aria-atomic="true">已选 <strong>{selected.length}</strong> / 50</SelectionCount>
+          <Button aria-label="选择文件" type="primary" icon={<FolderOpenOutlined />} onClick={() => setPickerOpen(true)}>选择文件</Button>
+          <Button aria-label="提问" type="primary" icon={<SendOutlined />} loading={asking} disabled={!question.trim() || preparing || Boolean(scopeError)} onClick={runAsk}>提问</Button>
+        </ComposerActions>
       </Composer>
       <ResultSection>
         <ResultTitle>回答</ResultTitle>
-        {submittedScope && <p>本次范围：{submittedScope.length ? submittedScope.map(file => file.name).join('、') : '全部可问答文件'}</p>}
         {answer?.retrieval?.degraded && <Alert type="info" message="本次使用可用的文本检索生成回答" />}
         {answer?.coverage?.missing_evidence_file_ids?.length > 0 && <Alert type="warning" message="部分所选文件没有找到相关证据，回答未覆盖这些文件。" />}
 
         {answer
-          ? <Answer className="page-reveal">{answer.answer}<Citations>{answer.citations?.map(citation => <Button type="link" key={citation.id} onClick={() => setCitationOpen(citation)}><CommentOutlined /> {citation.file_name}{citation.page_number ? ` / 第 ${citation.page_number} 页` : ''}{citation.section ? ` / ${citation.section}` : ''}</Button>)}</Citations></Answer>
+          ? <Answer className="page-reveal">{answer.answer}</Answer>
           : <GraphicEmpty title={asking ? '正在整理答案' : '等待你的问题'} />}
       </ResultSection>
-      <Modal open={Boolean(citationOpen)} title={citationOpen?.file_name || '引用原文'} onCancel={() => setCitationOpen(null)} footer={citationOpen?.file_id ? <Button onClick={async () => {
-        try { const value = await getDownloadURL(citationOpen.file_id); startDownload(value.url, citationOpen.file_name); }
-        catch (error) { message.error(error.message || '文件已不可访问'); }
-      }}>下载原文件</Button> : null}>
-        {citationOpen?.page_number > 0 && <p>第 {citationOpen.page_number} 页</p>}
-        {citationOpen?.section && <p>{citationOpen.section}</p>}
-        <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>{citationOpen?.excerpt}</Typography.Paragraph>
-      </Modal>
       <AskFilePicker open={pickerOpen} selected={selected} onCancel={() => setPickerOpen(false)} onApply={files => { setSelected(files); setScopeError(''); setInvalidFiles([]); setPickerOpen(false); }} />
     </Workspace>
   </ProductPage>;

@@ -10,7 +10,7 @@ export const getAIJob = (taskId, options = {}) => api(`/api/v1/ai/jobs/${taskId}
 
 export const listAskableFiles = ({ signal, mime_types = [], ...options } = {}) => {
   const query = new URLSearchParams({ eligibility: 'askable', limit: '30' });
-  Object.entries(options).forEach(([key, value]) => { if (value) query.set(key, String(value)); });
+  Object.entries(options).forEach(([key, value]) => { if (value !== undefined && value !== null && value !== '') query.set(key, String(value)); });
   mime_types.forEach(value => query.append('mime_types', value));
   return api(`/api/v1/ai/files?${query}`, { signal });
 };
