@@ -27,7 +27,7 @@ func main() {
 	must(err)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	deps, err := dependencies.OpenAsync(ctx, cfg, false)
+	deps, err := dependencies.OpenAsync(ctx, cfg, "async-admin")
 	must(err)
 	defer deps.Close()
 	s := asynccontrol.New(deps.Control)
@@ -39,7 +39,8 @@ func main() {
 	switch os.Args[1] {
 	case "inspect":
 		var rows []map[string]any
-		must(s.DB.WithContext(ctx).Raw(`SELECT t.id,t.semantic_key,t.kind,t.effect_target,t.state,t.resource_key,t.parent_id,t.attempts,t.max_attempts,t.dispatches,t.recoveries,t.result_sends,t.generation,t.result_id,t.last_error,t.trace,t.created_at,t.updated_at,
+		must(s.DB.WithContext(ctx).Raw(`SELECT t.id,t.semantic_key,t.kind,t.effect_target,t.state,t.resource_key,t.parent_id,t.attempts,t.max_attempts,t.dispatches,t.max_dispatches,t.phase,t.outcome,t.commit_attempts,t.max_commit_attempts,t.deadline,t.commit_deadline,t.generation,t.result_id,t.last_error,t.trace,t.created_at,t.updated_at,
+  (SELECT to_jsonb(d) FROM task_deliveries d WHERE d.task_id=t.id) AS delivery,
   (SELECT jsonb_agg(source_key) FROM task_sources WHERE task_id=t.id) AS sources,
   (SELECT jsonb_agg(jsonb_build_object('generation',generation,'outcome',outcome,'error',error,'outputs',outputs)) FROM executions WHERE task_id=t.id) AS executions,
   (SELECT jsonb_agg(jsonb_build_object('id',id,'outcome',outcome,'effect_target',effect_target,'output',body,'committed_at',committed_at)) FROM results WHERE task_id=t.id) AS results,

@@ -73,11 +73,11 @@ func TestLegacyImportPreservesFanoutBudgetsAndConclusions(t *testing.T) {
 	for _, task := range tasks {
 		switch task.Kind {
 		case "thumbnail":
-			if task.Attempts != 3 || task.Dispatches != 3 || task.MaxAttempts != 10 || task.State != asynccontrol.Succeeded {
+			if task.Attempts != 3 || task.Dispatches != 3 || task.MaxAttempts != 10 || task.Conclusion() != asynccontrol.Succeeded {
 				t.Fatalf("thumbnail: %+v", task)
 			}
 		case "ai.index":
-			if task.Attempts != 14 || task.Dispatches != 14 || task.State != asynccontrol.Ready {
+			if task.Attempts != 14 || task.Dispatches != 14 || task.State != asynccontrol.Pending {
 				t.Fatalf("AI budget: %+v", task)
 			}
 		}
@@ -92,7 +92,7 @@ func TestLegacyImportPreservesFanoutBudgetsAndConclusions(t *testing.T) {
 	if err := s.DB.Where("kind='ai.index'").First(&ai).Error; err != nil {
 		t.Fatal(err)
 	}
-	if ai.State != asynccontrol.NeedsAttention || ai.Attempts != 14 {
+	if ai.Conclusion() != asynccontrol.NeedsAttention || ai.Attempts != 14 {
 		t.Fatal("exhausted work reopened", ai.State, ai.Attempts)
 	}
 	if err := ImportLegacy(ctx, biz, s, planner, "again"); err != nil {

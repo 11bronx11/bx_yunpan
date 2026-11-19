@@ -88,6 +88,9 @@ func TestSummaryRetryResumesImmutablePartsAcrossGenerations(t *testing.T) {
 	if e := store.Fail(context.Background(), task, err, false); e != nil {
 		t.Fatal(e)
 	}
+	if e := store.DB.Exec("UPDATE task_deliveries SET not_before=clock_timestamp() WHERE task_id=?", task.ID).Error; e != nil {
+		t.Fatal(e)
+	}
 	if e := store.DB.Exec("UPDATE tasks SET not_before=clock_timestamp() WHERE id=?", task.ID).Error; e != nil {
 		t.Fatal(e)
 	}

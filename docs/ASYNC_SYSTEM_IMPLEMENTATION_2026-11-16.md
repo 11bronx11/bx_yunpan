@@ -1,91 +1,73 @@
 # 异步系统：当前实现、启动与验证
 
-依据根目录 `ASYNC_SYSTEM_CONSTRUCTION_2026-11-16.md` 施工。本文描述当前工作区源码；验证实际日期为 2026-11-15 UTC，不代表现有业务容器已升级。
+更新：2026-11-19。当前协议以根目录 `ASYNC_COORDINATION_SIMPLIFICATION_PLAN_2026-11-19.md` 为准；11-16 施工书是旧实现基线。此次实现与验证记录见 [协调裁剪交付报告](ASYNC_COORDINATION_IMPLEMENTATION_2026-11-19.md)。以下链路描述工作区源码，生产栈尚未切换。
 
 ## 当前链路
 
 ```text
-API / committer：业务事实 + outbox 事件（同一业务事务）
- → async-control Relay：同一快照安全水位读取
- → 独立控制 PG：inbox + 冻结订阅 + 任务/来源 + 位点（同一控制事务）
- → 有界调度 → RabbitMQ 工作通知 → 独立计算角色
- → 控制 PG 持久结果 → RabbitMQ 32 个结果分片
- → committer：前提复核 + 业务效果/去重凭据 + 后续事件
- → 控制库回报 → ACK
+API / 领域 worker：业务事实 + outbox（业务本地事务）
+ → Relay：同快照 xmin + (event_xid, seq) 安全水位
+ → 控制 PG：inbox + 冻结订阅 + 任务/来源 + 投递意图 + 位点（控制本地事务）
+ → 到期发布器 → RabbitMQ 工作通知
+ → worker：条件领取 → 计算 → 控制接纳 checkpoint → 领域事务 + receipt
+ → 控制确认 + AI 后继释放/作业汇总 → ACK 工作通知
 ```
 
-业务 PG 是事实权威，控制 PG 是执行权威；双库具有独立 DSN、连接池与迁移历史。控制库支持独立 PG 实例，本次测试在一个实例内使用两个数据库。
+业务 PG 是业务事实源，控制 PG 是执行权威，AI PG 是 AI 内容和发布版本权威。MQ 负责积压和消费者分发。核心默认角色为 api、async-control、upload-worker、object-worker、media-worker、gc-worker。独立 committer / ai-committer 已从默认构建、Compose、启动和观测目标退出；保留入口明确拒绝运行。
 
-默认核心进程为 api、async-control、committer、upload-worker、object-worker、media-worker、gc-worker。API 不构造 broker、不连接控制库，配置和 readiness 不要求二者健康。核心计算角色只有业务只读池，启动时检查角色无业务写权限，并强制只读事务；committer 额外取得业务写池。AI/search 保留原有派生数据写连接，本轮没有搬迁这些数据。
+API 不打开控制库或 MQ，readiness 不要求二者健康。async-control 只有业务只读池；核心 worker 使用独立业务读/写池。只读池启动时检查数据库账号写权限。控制续租与 checkpoint 保存仍走保留池，普通 SQL 不占用该池。AI 后台角色只写 AI PG，不取得业务 SQL 连接。
 
-| 入口 | 职责 |
-|---|---|
-| `internal/asynccontrol` | Relay、任务/结果、调度/恢复、预算/租约、MQ、分片、过期扫描、维护、健康和指标 |
-| `internal/asyncprotocol` | 类型化输入、输出、提交结论 |
-| `internal/asyncjobs` | 订阅规划、计算适配、事务/批次、历史导入、定向清理、人工重做 |
-| upload/objectstore/media 的 async 文件 | 领域前提、业务幂等、失败收尾与删除授权 |
-| `bootstrap/async.go`、`async_aux.go` | 核心角色与 AI/search 装配 |
+## 控制协议与故障恢复
 
-## 正确性与资源边界
+任务生命周期为 pending/running/done/stopped，outcome 保存成功、过时、拒绝、失败、隔离和人工处理差异；phase 和 result_id 保存计算、提交、命令及 receipt 恢复进度。
 
-- outbox 只追加事件，不写 deliveries；旧 V2/search context 开关不再静默丢事件。订阅及计划版本在接管时冻结。
-- Relay 在同一 SQL 快照取得 xmin，按 `(event_xid,seq)` 索引增量读；位点与任务同事务，末尾复核 token。未知契约/永久输入冲突持久隔离，瞬态错误不推进位点。
-- 稳定语义身份保留单一预算；新来源、扫描、重投、重启不刷新预算。条件领取、执行代次和 token 阻止旧执行者续租或覆盖结果。执行、派发、失租、结果补发及清理都有上限、期限与退避。
-- `computed` 仅表示结果持久化。丢投只补发同一个结果，不重算。业务提交成功而回报失败时，业务凭据阻止重复建文件、加引用或释放配额。永久结果冲突先隔离再 ACK，瞬态失败保留恢复。
-- 各控制模块分别持有 PG 租约，Relay 与调度独立运行。续租/结果保存使用保留连接池。
-- 新 MQ 是 quorum 工作队列、32 个 SAC 结果队列及 dead 出口，有限传输保护反馈控制库；旧 TTL 队列不参与新重试权威。工作/结果通知携带语义身份、输入摘要、执行代次、提交域、分片布局和 trace；网络入口验证完整契约，领取/提交加载再核对持久身份。
-- 成员排序分配固定分片，分片模块租约实现接管。同一 owner/object 提交域只路由一个分片。小批限制条数、字节、等待及事务时间；同域兼容提交合并，批失败有界退回逐条，每项独立回报和 ACK。
-- 全局写入速率/事务并发预算不随实例增加。结果高水位触发滞回背压，提交错误/慢提交降低速率，健康等待后逐渐恢复。已运行任务保留续租和结果保存能力。
-- 配额热行拆为 `user_quota_usage.occupied_bytes`，预留转已用不改总占用。释放类批次合并一次热行更新。API/后台内容 epoch 分行，缓存与 cursor 在一个 SQL 快照组合两者。
+- 接管事务同时写 task_deliveries。发布 claim 有 token/租约；事务外执行路由检查和 publisher confirm，条件回写只修改投递记录。消费者先开始/完成时不会被发布回写倒退。确认丢失可重发同一投递代次；已确认排队的通知不周期补发。
+- 领取核对任务身份、投递代次、数据库时间、预算和租约。计算代次只在重新计算时增长。接纳 checkpoint 校验 token/租约并固定结果身份、摘要和冻结后继；保留 token，当前 worker 可以立即提交。
+- 领域提交之前复核控制库已接纳该结果；单任务短事务保留 advisory lock、版本/世代前提、配额/引用和 receipt。外部 I/O 不进入业务事务。
+- 瞬态失败必须先同事务登记退避和下一次投递意图，再 ACK 原消息。保存失败关闭消费者连接并有界退避，不热 nack/requeue。
+- 有 checkpoint 的重试只恢复提交。领域已成功而控制回报失败时复用 receipt；控制成功而 ACK 失败时重复通知直接读持久结论。最后一次提交崩溃可进入一次有截止时间的 receipt-only 恢复，缺凭据则保留结果并标记 needs_attention。
+- 计算耗尽或永久失败通过有限 failure.converge / AI 固定失败后继收尾；无法证明提交结论时不能伪造失败覆盖可能已成功的效果。停止任务不会自动重开。
 
-上传由 multipart 创建、完成、哈希/大小验证、必要的世代复制和 committer 最终创建文件推进。计算不持业务事务，不改文件/引用/配额/会话终态。取消、失败、过期和晚到结果都有领域收尾。
+新拓扑为 11 个 `bx.async.v2.work.*` 工作队列和 dead 队列；没有结果队列、SAC 结果配置、分片成员、写许可、owner 公平或结果高水位调度。并发与 prefetch 是每消费者限制，扩副本会增加总量，不承诺旧的全局并发/速率限制。
 
-GC 先由 committer 复核引用、活跃条目、延迟和世代，进入 deleting 并登记删除意图；GC 删除字节后，再提交 deleted。在线业务扫描仅保留上传会话到期兜底，具有独立租约、keyset 和条数/时间限制；普通到期依靠创建会话时登记的延迟任务。旧业务巡检实现保留兼容测试用途，没有接入新启动链。
+计算、发布、提交和期限均有限；失租消耗已领取尝试。结果发送/恢复次数、分片、公平、写速率及聚批参数退出配置模板和在线读取，历史表/字段保留供交接。提交尝试上限沿用 ASYNC_MAX_ATTEMPTS，提交窗口由 ASYNC_COMMIT_WINDOW 单独约束。
 
-复制/缩略图输出包含 task ID 和执行代次，已知废弃输出从执行记录登记有限清理。multipart 创建通过操作专属 staging key 定向找回未知成功；取消/失败/过期登记延迟 sweep，只查询/中止该操作的 multipart，不全 bucket 巡检。
+## 领域职责与维护
 
-生命周期只给 `staging/` 加规则并保留其他规则。真实测试的 MinIO 会省略 `AbortIncompleteMultipartUpload`，因此配合定向 sweep 和 MinIO 原生 stale-upload 兜底。正式 `objects/compute/`、`variants/compute/` 可能成为有效业务数据，没有自动过期规则。14 天过期/stale-upload 的实际等待清理未做等时验证。
+`asyncjobs.Committer.Apply` 保留名称，实际为单任务领域提交适配器。upload worker 完成 multipart/安全世代复制并提交；object worker 校验 hash/大小并提交；media worker 计算和发布缩略图；gc-worker 删除字节并提交。
 
-## 迁移与切换
+`upload.expire`、`object.authorize_delete`、`failure.converge`、`ai.job.finish` 进入 core-command，由 gc-worker 独立单并发消费者直接执行幂等事务，使用稳定命令 receipt 身份。GC 授权先持久进入 deleting，字节删除在事务外，最后条件提交 deleted。gc-worker 也承担业务 outbox 留存和有限上传到期扫描；事件删除仍受安全接管水位和保留期约束。
 
-业务新增 033（事务位置/索引、提交凭据、对象世代、占用配额/后台 epoch 回填、过期索引）及 034（multipart sweep 意图类型）。控制迁移独立到 002，包含状态模型、预算/租约、结果、隔离、留存索引与背压恢复状态。033 涉及 DDL/回填和表锁，需切换维护窗口；本次没有认证大表无阻塞迁移。
+控制维护保留已知废弃输出的定向清理、有界终态详情归档；停止预算、语义身份、未提交 checkpoint 和 receipt 保留。仅 staging 配自动过期，正式 objects/compute 与 variants/compute 不配自动删除；multipart 继续使用操作专属 key 的定向 sweep 和原生 stale-upload 兜底。没有恢复旧 dispatcher/recovery 巡检。
 
-`up.sh`：补缺失配置键并保留现值/密钥 → 串行构建 → 停止旧写者 → 双迁移/只读角色初始化/导入 → 等导入成功 → 启动新角色。该部署顺序不通过 API 的 Compose 依赖制造 MQ/控制库硬依赖。
+## 迁移、交接与运行
 
-`async-import` 要求先停旧 API、dispatcher、worker、AI/search 执行者，有历史事件时校验 `ASYNC_LEGACY_WRITERS_STOPPED=true`。它以原事件/意图身份导入，分开匹配旧扇出目的地，保守合并已耗预算、原上限、期限及成功/停止结论。无法证明的旧输出进入人工处理；水位被长事务阻塞时停止，不能把未接管历史标为完成。
+当前迁移：业务 000036、控制 000005、AI 000007。控制 5 只新增协议、投递、交接快照/消息证据和旧写者 fence，保留原表/结果/预算。应用连接自动带 v2 协议标记；历史 v1 连接不能修改已切换任务。
 
-旧 MQ 转移检查无消费者，先 retry/DLQ、后工作队列，每条持久记录后 ACK，不执行旧 payload、不 purge、不删队列。完整切换前保留 pending 标记，控制进程拒绝提前启动。重跑不刷新任务预算。
-
-旧 worker/outbox-relay 命令只是控制角色别名，maintenance-worker 只是 GC 别名；默认不启动。旧表保留为历史输入，旧 dispatcher/taskqueue middleware/storageops/recovery 不再作为在线执行权威。
-
-## 启动与运维
-
-整栈仍用 `./deploy/up.sh`；`--distributed-workers` 兼容为默认明确角色。AI/search/observability 参数保留。status 检查每个核心角色及 readiness，config-check 比较渲染配置和运行容器，只输出差异键名。
-
-宿主机开发，先停旧写者，所有地址从 `deploy/.env` 派生：
+已有 v1 控制库：先停全部旧核心/AI 写者并等待执行/模块租约到期，再运行：
 
 ```bash
-./deploy/init-env.sh --no-ai # 启用 AI 时省略 --no-ai
-./deploy/infra-up.sh
-./deploy/local-run.sh migrate up
 ./deploy/local-run.sh migrate control up
-./deploy/local-run.sh reader-init
-ASYNC_LEGACY_WRITERS_STOPPED=true ./deploy/local-run.sh async-import
+ASYNC_LEGACY_WRITERS_STOPPED=true ./deploy/local-run.sh async-handover inspect
+ASYNC_LEGACY_WRITERS_STOPPED=true ./deploy/local-run.sh async-handover transfer
+ASYNC_LEGACY_WRITERS_STOPPED=true ./deploy/local-run.sh async-handover activate
 ```
 
-分别在独立终端运行 local-run.sh 的 api、async-control、committer、upload-worker、object-worker、media-worker、gc-worker，再启动前端。启用 AI 时另起 aisvc/parser，启用搜索投影时另起 search-indexer。只读 DSN 指向业务主库，本轮没有实现读副本回放语义。
+transfer 可重入：原任务快照、保守预算、状态转换及投递意图同事务提交；computed 保留结果 ID/digest/代次，无法证明的结果隔离。旧 MQ 每条先持久交接或隔离再 ACK，无消费者才排空，不 purge、不删队列。activate 检查没有旧协议任务并再次排空；新角色启动检查激活标记。旧消息默认前缀 bx.async.v1，自定义旧前缀通过 ASYNC_LEGACY_BROKER_PREFIX 指定。
 
-Compose 各进程 metrics 是 `:8083`；默认本地端口依次为控制 18083、committer 18084、upload 18085、object 18086、media 18087、GC 18088、AI 18089、parser 18090、search 18091。多副本本地调试可在调用环境覆盖 `WORKER_METRICS_ADDR`。
+`up.sh` 先构建、停旧角色（包含旧 Compose 遗留的两个 committer 容器）、执行迁移和账号初始化、交接/激活，再启动 v2。它不自动重复 AI 历史归档，也不对现有 v1 控制库重跑 async-import。真正从更早的业务执行账本迁移才显式运行 async-import。当前 .env 保留旧前缀时，启动脚本为本次调用派生 v2 默认，不覆盖用户文件。
 
-```bash
-./deploy/local-run.sh async-admin inspect <会话/operation/object/task UUID>
-./deploy/local-run.sh async-admin redo <task UUID> "明确的修复和重做原因"
-./deploy/build.sh async-admin # 可选管理镜像
-```
+全新宿主机环境从 .env 派生连接，初始化基础设施、三库迁移及 reader/AI 账号后，在独立终端运行核心/AI 角色。API 18083–18100 的 metrics 分配继续按 local-run.sh；18084/18094 原 committer 端口不再使用。
 
-inspect 返回来源事件、执行输出、结果、业务凭据、存储意图及隔离。redo 校验当前前提，创建审计子任务，保留原停止记录和预算；重复同一命令返回同一子任务。维护有界清理终态详情/载荷，保留语义身份、停止预算及未提交结果；业务事件删除同时受已接管事务位点与保留期约束。
+`async-admin inspect` 展示 lifecycle/outcome、phase、投递、预算、结果、receipt 与来源；redo 校验当前前提并新建留痕子操作，保留原停止预算。指标由控制角色汇总任务表，worker 仅提供本地计数和 readiness。status/config-check 与 Prometheus 不再要求 committer。
 
-## 已执行验证与运行状态
+控制 5 的 down 明确拒绝协议逆转。新 worker 已开始提交后，不能启动旧镜像来“回滚”；恢复应停写、保留三库和 MQ、核对 receipt/交接证据并向前修复。此次没有认证跨库备份时间点恢复。
+
+## 本轮验证范围
+
+执行结果、日志与剩余边界以 [2026-11-19 报告](ASYNC_COORDINATION_IMPLEMENTATION_2026-11-19.md) 为准。以下历史记录只描述 11-16 旧协议，不作为 v2 的执行证据或当前部署状态。
+
+## 11-16 历史验证与运行记录（旧协议）
 
 集成使用专用 async_business/async_control 数据库、独立 schema、独立 RabbitMQ vhost/队列前缀和测试 MinIO bucket/key。凭据保存在忽略文件中，未写入源码/报告。
 

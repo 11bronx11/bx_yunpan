@@ -52,6 +52,7 @@ func (m *Migrator) legacyStopped(ctx context.Context) error {
 	}
 	return nil
 }
+
 func (m *Migrator) Inspect(ctx context.Context) (map[string]int64, error) {
 	out := map[string]int64{}
 	for _, table := range []string{"ai_documents", "ai_document_versions", "ai_chunks"} {
@@ -67,7 +68,7 @@ func (m *Migrator) Inspect(ctx context.Context) (map[string]int64, error) {
 		}
 		out[table] = count
 	}
-	for _, state := range []string{"ready", "retry_wait", "running", "computed", "succeeded", "needs_attention", "quarantined"} {
+	for _, state := range []string{"pending", "running", "done", "stopped", "ready", "retry_wait", "computed", "succeeded", "needs_attention", "quarantined"} {
 		var n int64
 		if err := m.Control.WithContext(ctx).Table("tasks").Where("kind IN ('ai.index','ai.reprocess','search.project') AND state=?", state).Count(&n).Error; err != nil {
 			return nil, err
@@ -103,6 +104,7 @@ func (m *Migrator) Manifest(ctx context.Context, run uuid.UUID) (map[string]any,
 	}
 	return map[string]any{"run": record, "items": items, "legacy_tasks": tasks, "limit": limit}, nil
 }
+
 func (m *Migrator) Plan(ctx context.Context, run uuid.UUID) (MigrationReport, error) {
 	report := MigrationReport{RunID: run, Stage: "planning"}
 	if err := m.legacyStopped(ctx); err != nil {
@@ -188,6 +190,7 @@ func (m *Migrator) Plan(ctx context.Context, run uuid.UUID) (MigrationReport, er
 	_ = m.AI.WithContext(ctx).Table("ai_migration_items").Where("run_id=?", run).Count(&report.Items)
 	return report, nil
 }
+
 func (m *Migrator) Enqueue(ctx context.Context, run uuid.UUID) (MigrationReport, error) {
 	report := MigrationReport{RunID: run, Stage: "enqueuing"}
 	if err := m.legacyStopped(ctx); err != nil {
@@ -376,6 +379,7 @@ func (m *Migrator) attachJobs(ctx context.Context, request uuid.UUID, observers 
 func (m *Migrator) MarkMessagesTransferred(ctx context.Context, run uuid.UUID) error {
 	return m.AI.WithContext(ctx).Exec("UPDATE ai_migration_runs SET manifest=manifest||'{\"messages_transferred\":true}'::jsonb WHERE id=?", run).Error
 }
+
 func (m *Migrator) Verify(ctx context.Context, run uuid.UUID) (MigrationReport, error) {
 	r := MigrationReport{RunID: run, Stage: "verifying"}
 	var items []struct {
@@ -475,7 +479,7 @@ func (m *Migrator) Handoff(ctx context.Context, run uuid.UUID) (MigrationReport,
 				return r, err
 			}
 		}
-		row := legacyTask{RunID: run, LegacyTaskID: old.ID, ObjectID: in.ObjectID, ContentGeneration: in.ContentGeneration, State: old.State, InputDigest: old.InputDigest, Attempts: old.Attempts, Dispatches: old.Dispatches, Recoveries: old.Recoveries, MaxAttempts: old.MaxAttempts, MaxDispatches: old.MaxDispatches, MaxRecoveries: old.MaxRecoveries, Deadline: old.Deadline, ResultID: old.ResultID}
+		row := legacyTask{RunID: run, LegacyTaskID: old.ID, ObjectID: in.ObjectID, ContentGeneration: in.ContentGeneration, State: old.Conclusion(), InputDigest: old.InputDigest, Attempts: old.Attempts, Dispatches: old.Dispatches, Recoveries: old.Recoveries, MaxAttempts: old.MaxAttempts, MaxDispatches: old.MaxDispatches, MaxRecoveries: old.MaxRecoveries, Deadline: old.Deadline, ResultID: old.ResultID}
 		if old.Kind == "ai.reprocess" && in.EventID != uuid.Nil {
 			row.JobID = &in.EventID
 			row.OwnerID = &in.OwnerID
@@ -488,7 +492,11 @@ func (m *Migrator) Handoff(ctx context.Context, run uuid.UUID) (MigrationReport,
 			if err := m.Control.WithContext(ctx).Exec("INSERT INTO quarantines(identity,task_id,reason,details) VALUES(?,?,?,?::jsonb) ON CONFLICT DO NOTHING", "ai-migration:"+old.ID.String(), old.ID, reason, string(jsonValue(row))).Error; err != nil {
 				return r, err
 			}
-			if err := m.Control.WithContext(ctx).Model(&asynccontrol.Task{}).Where("id=? AND state=?", old.ID, old.State).Updates(map[string]any{"state": asynccontrol.Quarantined, "token": nil, "lease_until": nil, "last_error": reason, "stopped_at": gorm.Expr("clock_timestamp()")}).Error; err != nil {
+			state, outcome := asynccontrol.Quarantined, ""
+			if old.ProtocolVersion == 2 {
+				state, outcome = asynccontrol.Stopped, asynccontrol.Quarantined
+			}
+			if err := m.Control.WithContext(ctx).Model(&asynccontrol.Task{}).Where("id=? AND state=?", old.ID, old.State).Updates(map[string]any{"state": state, "outcome": outcome, "token": nil, "lease_until": nil, "last_error": reason, "stopped_at": gorm.Expr("clock_timestamp()")}).Error; err != nil {
 				return r, err
 			}
 			r.Quarantined++
@@ -542,6 +550,7 @@ func (m *Migrator) handoffUnmappedJobs(ctx context.Context, run uuid.UUID) (bool
 	}
 	return len(jobs) == max(1, m.Batch), nil
 }
+
 func (m *Migrator) CutoverCheck(ctx context.Context, run uuid.UUID) (MigrationReport, error) {
 	r := MigrationReport{RunID: run, Stage: "cutover_check"}
 	if err := m.legacyStopped(ctx); err != nil {
@@ -569,14 +578,14 @@ func (m *Migrator) CutoverCheck(ctx context.Context, run uuid.UUID) (MigrationRe
 		return r, fmt.Errorf("%d migration items are unfinished", missing)
 	}
 	var results int64
-	if err := m.Control.WithContext(ctx).Table("tasks").Where("kind IN ('ai.index','ai.reprocess','search.project') AND result_id IS NOT NULL AND state NOT IN ('succeeded','superseded','rejected','failed')").Count(&results).Error; err != nil {
+	if err := m.Control.WithContext(ctx).Table("tasks").Where("kind IN ('ai.index','ai.reprocess','search.project') AND result_id IS NOT NULL AND state NOT IN ('done','succeeded','superseded','rejected','failed')").Count(&results).Error; err != nil {
 		return r, err
 	}
 	if results > 0 {
 		return r, errors.New("legacy durable results require receipt review before archive")
 	}
 	var live int64
-	if err := m.Control.WithContext(ctx).Table("tasks").Where("kind IN ('ai.index','ai.reprocess','search.project') AND state NOT IN ('succeeded','superseded','rejected','failed','quarantined','needs_attention')").Count(&live).Error; err != nil {
+	if err := m.Control.WithContext(ctx).Table("tasks").Where("kind IN ('ai.index','ai.reprocess','search.project') AND state NOT IN ('done','stopped','succeeded','superseded','rejected','failed','quarantined','needs_attention')").Count(&live).Error; err != nil {
 		return r, err
 	}
 	if live > 0 {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/asynccontrol"
 	"github.com/11bronx11/bx_yunpan/backend/internal/asyncprotocol"
@@ -57,15 +58,21 @@ func expiryBatch(t *testing.T) (*Committer, []asynccontrol.Notice, uuid.UUID) {
 		}
 		notices = append(notices, asynccontrol.Notice{TaskID: task.ID, Version: 1, Shard: task.Shard})
 	}
-	if err := s.PrepareCommands(context.Background(), 10); err != nil {
-		t.Fatal(err)
-	}
 	for i := range notices {
 		var task asynccontrol.Task
 		if err := s.DB.First(&task, "id=?", notices[i].TaskID).Error; err != nil {
 			t.Fatal(err)
 		}
-		notices[i].ResultID = task.ResultID
+		// Retained v1 command checkpoints are supported during handover.
+		if err := s.DB.Transaction(func(tx *gorm.DB) error { return s.ImportState(tx, task, asynccontrol.Computed, []byte(`{}`), "") }); err != nil {
+			t.Fatal(err)
+		}
+		claimed, ok, err := s.Claim(context.Background(), task.Notice())
+		if err != nil || !ok {
+			t.Fatal("command claim", err)
+		}
+		notices[i] = claimed.Notice()
+		notices[i].ResultID = claimed.ResultID
 	}
 	if err := biz.Exec(`CREATE TABLE quota_writes(id bigserial);CREATE FUNCTION count_quota_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO quota_writes DEFAULT VALUES;RETURN NEW;END $$;CREATE TRIGGER count_quota_write AFTER UPDATE ON user_quota_usage FOR EACH ROW EXECUTE FUNCTION count_quota_write()`).Error; err != nil {
 		t.Fatal(err)
@@ -73,9 +80,9 @@ func expiryBatch(t *testing.T) (*Committer, []asynccontrol.Notice, uuid.UUID) {
 	return c, notices, owner
 }
 
-func TestBatchCoalescesQuotaAndDuplicateResults(t *testing.T) {
+func TestIndependentCommitsSettleQuotaAndReplayReceipts(t *testing.T) {
 	c, notices, owner := expiryBatch(t)
-	for _, err := range c.CommitBatch(context.Background(), notices) {
+	for _, err := range commitIndependently(c, notices) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -83,16 +90,16 @@ func TestBatchCoalescesQuotaAndDuplicateResults(t *testing.T) {
 	var occupied, writes int64
 	_ = c.Business.Table("user_quota_usage").Select("occupied_bytes").Where("owner_id=?", owner).Scan(&occupied).Error
 	_ = c.Business.Table("quota_writes").Count(&writes).Error
-	if occupied != 0 || writes != 1 {
-		t.Fatal("release not aggregated", occupied, writes)
+	if occupied != 0 || writes != 2 {
+		t.Fatal("independent releases missing", occupied, writes)
 	}
-	for _, err := range c.CommitBatch(context.Background(), notices) {
+	for _, err := range commitIndependently(c, notices) {
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
 	_ = c.Business.Table("quota_writes").Count(&writes).Error
-	if writes != 1 {
+	if writes != 2 {
 		t.Fatal("duplicate result released quota")
 	}
 }
@@ -141,7 +148,7 @@ func TestLongProviderErrorConvergesAndReleasesOnce(t *testing.T) {
 	}
 }
 
-func TestBatchRollbackFallsBackAndKeepsFailedResultRecoverable(t *testing.T) {
+func TestTransactionRollbackKeepsFailedCheckpointRecoverable(t *testing.T) {
 	c, notices, owner := expiryBatch(t)
 	var task asynccontrol.Task
 	if err := c.Control.DB.First(&task, "id=?", notices[0].TaskID).Error; err != nil {
@@ -151,7 +158,7 @@ func TestBatchRollbackFallsBackAndKeepsFailedResultRecoverable(t *testing.T) {
 	if err := c.Business.Exec(sql).Error; err != nil {
 		t.Fatal(err)
 	}
-	errors := c.CommitBatch(context.Background(), notices)
+	errors := commitIndependently(c, notices)
 	if errors[0] == nil || errors[1] != nil {
 		t.Fatal("batch failure poisoned sibling", errors)
 	}
@@ -162,7 +169,7 @@ func TestBatchRollbackFallsBackAndKeepsFailedResultRecoverable(t *testing.T) {
 	}
 	var failed asynccontrol.Task
 	_ = c.Control.DB.First(&failed, "id=?", task.ID).Error
-	if failed.State != asynccontrol.Computed {
+	if failed.State != asynccontrol.Running {
 		t.Fatal("failed item reported committed")
 	}
 	if err := c.Business.Exec("DROP TRIGGER reject_receipt ON async_commit_receipts").Error; err != nil {
@@ -186,7 +193,7 @@ func TestReceiptConflictIsolatedWithoutPoisoningSibling(t *testing.T) {
 	if err := c.Business.Create(&receipt{SemanticKey: task.SemanticKey, InputDigest: result.InputDigest, ResultDigest: "conflicting-result", ResultID: uuid.New(), Outcome: asynccontrol.Succeeded}).Error; err != nil {
 		t.Fatal(err)
 	}
-	for _, err := range c.CommitBatch(context.Background(), notices) {
+	for _, err := range commitIndependently(c, notices) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -194,14 +201,14 @@ func TestReceiptConflictIsolatedWithoutPoisoningSibling(t *testing.T) {
 	if err := c.Control.DB.First(&task, "id=?", task.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if task.State != asynccontrol.Quarantined {
+	if task.State != asynccontrol.Stopped || task.Outcome != asynccontrol.Quarantined {
 		t.Fatal("permanent receipt conflict not isolated", task.State)
 	}
 	var sibling asynccontrol.Task
 	if err := c.Control.DB.First(&sibling, "id=?", notices[1].TaskID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if sibling.State != asynccontrol.Succeeded {
+	if sibling.State != asynccontrol.Done || sibling.Outcome != asynccontrol.Succeeded {
 		t.Fatal("conflict poisoned sibling")
 	}
 }
@@ -247,7 +254,7 @@ func TestExpiryScanRetainsComputedAndStoppedWork(t *testing.T) {
 	if err := c.Control.DB.First(&task, "id=?", task.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if task.State != asynccontrol.Succeeded {
+	if task.State != asynccontrol.Done || task.Outcome != asynccontrol.Succeeded {
 		t.Fatal("terminal expiry task reopened")
 	}
 	if err := c.Control.DB.Table("quarantines").Where("identity LIKE 'expiry-contradiction:%'").Count(&count).Error; err != nil || count != 1 {
@@ -256,4 +263,12 @@ func TestExpiryScanRetainsComputedAndStoppedWork(t *testing.T) {
 	if err := c.Control.ScanExpiry(ctx, c.Business, uuid.New(), 100); !errors.Is(err, asynccontrol.ErrLost) {
 		t.Fatal("stale scanner accepted", err)
 	}
+}
+
+func commitIndependently(c *Committer, notices []asynccontrol.Notice) []error {
+	errs := make([]error, len(notices))
+	for i, n := range notices {
+		errs[i] = c.Commit(context.Background(), n)
+	}
+	return errs
 }

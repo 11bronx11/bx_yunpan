@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,7 +31,8 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-// Exercise the actual role handlers, relay and periodic runners together.
+// Historical business-ledger protocol regression; current runtime coverage is
+// TestAsyncCoreRealDependencies. Exercises legacy handlers and periodic runners.
 // Every run has its own vhost, user and bucket; no existing queue is purged.
 func TestAsyncUploadAndGCWithTwoMaintenanceScanners(t *testing.T) {
 	dsn, endpoint, rabbit, management := os.Getenv("TEST_POSTGRES_DSN"), os.Getenv("TEST_MINIO_ENDPOINT"), os.Getenv("TEST_RABBITMQ_URL"), os.Getenv("TEST_RABBITMQ_MANAGEMENT_URL")
@@ -220,9 +222,21 @@ func TestAsyncUploadAndGCWithTwoMaintenanceScanners(t *testing.T) {
 	if err := db.First(&stored, "id = ?", user.ID).Error; err != nil || stored.ReservedBytes != 0 || stored.UsedLogicalBytes != 0 {
 		t.Fatalf("quota: %+v %v", stored, err)
 	}
-	var failures int64
-	if err := db.Model(&taskqueue.Failure{}).Count(&failures).Error; err != nil || failures != 0 {
-		t.Fatalf("pipeline failures=%d err=%v", failures, err)
+	var failures []taskqueue.Failure
+	if err := db.Find(&failures).Error; err != nil {
+		t.Fatal(err)
 	}
-	t.Log(fmt.Sprintf("real RabbitMQ/MinIO: upload -> verify -> staging delete -> file delete -> GC; expiry -> abort; maintenance scanners=2, failures=%d", failures))
+	// The retired ledger consumers intentionally reject multipart.sweep, which
+	// only the current GC worker can execute. Do not mistake that explicit
+	// compatibility boundary for failure of this historical upload/GC fixture.
+	for _, failure := range failures {
+		var payload struct {
+			OperationType string `json:"operation_type"`
+		}
+		if json.Unmarshal(failure.Payload, &payload) != nil || payload.OperationType != "multipart.sweep" || failure.LastError != "taskqueue: skip retry" || (failure.TaskType != outbox.TaskUploadOperationRecoverV1 && failure.TaskType != outbox.EventStorageOperationRecover) {
+			t.Fatalf("unexpected legacy pipeline failure: task=%s type=%s error=%s", failure.TaskID, failure.TaskType, failure.LastError)
+		}
+	}
+
+	t.Log(fmt.Sprintf("real RabbitMQ/MinIO: upload -> verify -> staging delete -> file delete -> GC; expiry -> abort; maintenance scanners=2, expected retired sweep rejections=%d", len(failures)))
 }

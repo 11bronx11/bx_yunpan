@@ -83,9 +83,9 @@ func TestEmbeddingComputeRequestFailuresUseCorrectRetryBudget(t *testing.T) {
 			if err := store.DB.First(&saved, "id=?", task.ID).Error; err != nil {
 				t.Fatal(err)
 			}
-			want, message := asynccontrol.Exhausted, "embedding.rejected"
+			want, message := asynccontrol.Stopped, "embedding.rejected"
 			if code == http.StatusTooManyRequests {
-				want, message = asynccontrol.RetryWait, "embedding.unavailable"
+				want, message = asynccontrol.Pending, "embedding.unavailable"
 			}
 			if saved.State != want || saved.Attempts != 1 || saved.LastError != message {
 				t.Fatalf("wrong retry disposition: state=%s attempts=%d error=%s", saved.State, saved.Attempts, saved.LastError)

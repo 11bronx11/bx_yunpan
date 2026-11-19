@@ -22,7 +22,7 @@ func main() {
 		fail(err)
 	}
 	ctx := context.Background()
-	deps, err := dependencies.OpenAsync(ctx, cfg, false)
+	deps, err := dependencies.OpenAsync(ctx, cfg, "async-admin")
 	if err != nil {
 		fail(err)
 	}
@@ -35,11 +35,8 @@ func main() {
 		fail(fmt.Errorf("stop legacy API, relays and workers before setting ASYNC_LEGACY_WRITERS_STOPPED=true"))
 	}
 	s := asynccontrol.New(deps.Control)
-	s.Shards = cfg.Async.Shards
 	s.MaxAttempts = cfg.Async.MaxAttempts
 	s.MaxDispatches = cfg.Async.MaxDispatches
-	s.MaxRecoveries = cfg.Async.MaxRecoveries
-	s.MaxResultSends = cfg.Async.MaxResultSends
 	for k, d := range s.Registry {
 		d.Lifetime = cfg.Async.TaskLifetime
 		s.Registry[k] = d

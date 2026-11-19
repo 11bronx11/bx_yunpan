@@ -30,6 +30,7 @@ func (p *Planner) Observe(tx *gorm.DB, t asynccontrol.Task) error {
 	}
 	return nil
 }
+
 func jobObservers(i aiprotocol.Intent) []aiprotocol.JobObserver {
 	observers := append([]aiprotocol.JobObserver{}, i.Observers...)
 	if i.JobID != uuid.Nil {
@@ -37,6 +38,7 @@ func jobObservers(i aiprotocol.Intent) []aiprotocol.JobObserver {
 	}
 	return observers
 }
+
 func requestObservers(tx *gorm.DB, i aiprotocol.Intent) ([]aiprotocol.JobObserver, error) {
 	if err := dblock.Transaction(tx, "ai-job-observers:"+i.RequestID.String()); err != nil {
 		return nil, err
@@ -56,6 +58,7 @@ func requestObservers(tx *gorm.DB, i aiprotocol.Intent) ([]aiprotocol.JobObserve
 	}
 	return out, nil
 }
+
 func (p *Planner) observeJob(tx *gorm.DB, t asynccontrol.Task, in aiprotocol.Input, observer aiprotocol.JobObserver) error {
 	targets := in.Intent.Targets
 	b, _ := json.Marshal(targets)
@@ -68,6 +71,7 @@ func (p *Planner) observeJob(tx *gorm.DB, t asynccontrol.Task, in aiprotocol.Inp
 	}
 	return tx.Exec(`INSERT INTO ai_job_task_links(job_id,task_id,target,required,requested_identity) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING`, observer.JobID, t.ID, cap, true, t.InputDigest).Error
 }
+
 func (p *Planner) Finish(tx *gorm.DB, s *asynccontrol.Store, t asynccontrol.Task, outcome string) error {
 	if !strings.HasPrefix(t.Kind, "ai.") || t.Kind == "ai.job.finish" {
 		return nil
@@ -87,6 +91,7 @@ func (p *Planner) Finish(tx *gorm.DB, s *asynccontrol.Store, t asynccontrol.Task
 	}
 	return nil
 }
+
 func (p *Planner) finishJob(tx *gorm.DB, s *asynccontrol.Store, t asynccontrol.Task, in aiprotocol.Input, observer aiprotocol.JobObserver) error {
 	var agg struct {
 		RequestedTargets json.RawMessage
@@ -106,7 +111,7 @@ func (p *Planner) finishJob(tx *gorm.DB, s *asynccontrol.Store, t asynccontrol.T
 		Target, State string
 		ResultBody    json.RawMessage
 	}
-	if err := tx.Raw(`SELECT l.target,t.state,r.body AS result_body FROM ai_job_task_links l JOIN tasks t ON t.id=l.task_id LEFT JOIN results r ON r.id=t.result_id WHERE l.job_id=?`, observer.JobID).Scan(&rows).Error; err != nil {
+	if err := tx.Raw(`SELECT l.target,CASE WHEN t.state IN ('done','stopped') THEN t.outcome ELSE t.state END AS state,r.body AS result_body FROM ai_job_task_links l JOIN tasks t ON t.id=l.task_id LEFT JOIN results r ON r.id=t.result_id WHERE l.job_id=?`, observer.JobID).Scan(&rows).Error; err != nil {
 		return err
 	}
 	states := map[string]string{}

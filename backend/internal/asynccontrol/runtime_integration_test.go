@@ -2,12 +2,16 @@ package asynccontrol
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,7 +27,7 @@ func testBroker(t *testing.T) *Broker {
 	if url == "" {
 		t.Skip("TEST_RABBITMQ_URL required")
 	}
-	b := NewBroker(url, 32, "bx.async.test."+uuid.NewString())
+	b := NewBroker(url, "bx.async.test."+uuid.NewString())
 	t.Cleanup(func() {
 		b.Close()
 		conn, err := amqp.Dial(url)
@@ -43,13 +47,6 @@ func testBroker(t *testing.T) *Broker {
 				t.Error(err)
 			}
 		}
-		for i := 0; i < 32; i++ {
-			for _, target := range []string{EffectCore, EffectAI} {
-				if _, err := ch.QueueDelete(b.ResultQueueFor(target, i), false, false, false); err != nil {
-					t.Error(err)
-				}
-			}
-		}
 		if _, err := ch.QueueDelete(b.Prefix+".dead", false, false, false); err != nil {
 			t.Error(err)
 		}
@@ -63,59 +60,57 @@ func testBroker(t *testing.T) *Broker {
 	return b
 }
 
-func TestTwoCommittersDistributeAndTakeOverResultShards(t *testing.T) {
+func TestTwoWorkersDuplicateDeliveryAndReceiptReplay(t *testing.T) {
 	s := New(testdb.Control(t))
-	s.Lease = 3 * time.Second
 	b := testBroker(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	s.Lease = 3 * time.Second
+	s.RetryBase = time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	aCtx, stopA := context.WithCancel(ctx)
-	defer stopA()
-	bCtx, stopB := context.WithCancel(ctx)
-	defer stopB()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	doneA, doneB := make(chan error, 1), make(chan error, 1)
-	consumed := make(chan int, 2)
-	go func() {
-		doneA <- s.RunCommitters(aCtx, b, "a", func(_ context.Context, n Notice) error { consumed <- n.Shard; return nil }, logger)
-	}()
-	go func() {
-		doneB <- s.RunCommitters(bCtx, b, "b", func(_ context.Context, n Notice) error { consumed <- n.Shard; return nil }, logger)
-	}()
-	wait := func(wantA, wantB int) {
-		t.Helper()
-		for ctx.Err() == nil {
-			var a, b int64
-			e1 := s.DB.Table("module_leases").Where("name LIKE 'committer:%' AND holder='a' AND lease_until>clock_timestamp()").Count(&a).Error
-			e2 := s.DB.Table("module_leases").Where("name LIKE 'committer:%' AND holder='b' AND lease_until>clock_timestamp()").Count(&b).Error
-			if e1 != nil || e2 != nil {
-				t.Fatal(e1, e2)
-			}
-			if a == int64(wantA) && b == int64(wantB) {
-				return
-			}
-			Pause(ctx, 50*time.Millisecond)
-		}
-		t.Fatal("committer shard allocation timed out")
-	}
-	wait(16, 16)
-	stopA()
-	<-doneA
-	wait(0, 32)
-	id := uuid.New()
-	if err := b.Publish(ctx, b.ResultQueue(0), Notice{TaskID: uuid.New(), ResultID: &id, Version: 1, Shard: 0, SemanticKey: "takeover-probe", InputDigest: "probe", ShardKey: "probe", LayoutVersion: 1}); err != nil {
+	task, err := s.Ensure(ctx, spec("worker-duplicate"), "source")
+	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case shard := <-consumed:
-		if shard != 0 {
-			t.Fatal(shard)
-		}
-	case <-ctx.Done():
-		t.Fatal("surviving committer did not consume")
+	var computes, applies atomic.Int32
+	compute := func(context.Context, Task) (json.RawMessage, error) {
+		computes.Add(1)
+		return json.RawMessage(`{"upload_id":"stable"}`), nil
 	}
-	stopB()
-	<-doneB
+	apply := func(context.Context, Task, Result) (string, *time.Time, error) {
+		if applies.Add(1) == 1 {
+			return "", nil, fmt.Errorf("report outage after effect")
+		}
+		return Succeeded, nil, nil
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.RunWorker(ctx, b, "upload", 1, compute, func(error) bool { return false }, log, apply)
+		}()
+	}
+	defer func() { cancel(); wg.Wait() }()
+	done := make(chan error, 1)
+	go func() { done <- s.RunScheduler(ctx, b, "publisher", log) }()
+	defer func() { cancel(); <-done }()
+	// A duplicate message can race publisher confirmation or another worker.
+	if err := b.Publish(ctx, b.WorkQueue("upload"), task.Notice()); err != nil {
+		t.Fatal(err)
+	}
+	for ctx.Err() == nil {
+		var cur Task
+		s.DB.First(&cur, "id=?", task.ID)
+		if cur.State == Done {
+			if cur.Outcome != Succeeded || computes.Load() != 1 || applies.Load() != 2 {
+				t.Fatal("checkpoint/commit retry changed identity", cur, computes.Load(), applies.Load())
+			}
+			return
+		}
+		Pause(ctx, 10*time.Millisecond)
+	}
+	t.Fatal("workers did not finish")
 }
 
 func TestHealthSeparatesLiveFromDependencyReadiness(t *testing.T) {
@@ -128,7 +123,7 @@ func TestHealthSeparatesLiveFromDependencyReadiness(t *testing.T) {
 	}
 	addr := listener.Addr().String()
 	listener.Close()
-	stop, err := s.Monitor(context.Background(), addr, "health-test", biz, b, slog.Default())
+	stop, err := s.Monitor(context.Background(), addr, "control:health-test", biz, b, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -44,22 +45,24 @@ func (s *Store) Monitor(ctx context.Context, addr, holder string, business *gorm
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		bounded, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()
-		var groups []struct {
-			Queue, State                                  string
-			Count                                         int64
-			Age                                           float64
-			Attempts, Recoveries, Dispatches, ResultSends int64
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		fmt.Fprintf(w, "bx_async_commit_calls_total %d\nbx_async_commit_seconds_sum %g\nbx_async_receipt_hits_total %d\n", s.CommitCalls.Load(), float64(s.CommitNanos.Load())/float64(time.Second), s.ReceiptHits.Load())
+		if holder != "async-control" && !strings.HasPrefix(holder, "control:") {
+			return
 		}
-		if err := s.DB.WithContext(bounded).Raw(`SELECT queue,state,count(*) AS count,EXTRACT(EPOCH FROM clock_timestamp()-min(updated_at)) AS age,sum(attempts) AS attempts,sum(recoveries) AS recoveries,sum(dispatches) AS dispatches,sum(result_sends) AS result_sends FROM tasks GROUP BY queue,state`).Scan(&groups).Error; err != nil {
+		var groups []struct {
+			Queue, State      string
+			Count             int64
+			Age               float64
+			Attempts, Commits int64
+		}
+		if err := s.DB.WithContext(bounded).Raw(`SELECT queue,state,count(*) AS count,EXTRACT(EPOCH FROM clock_timestamp()-min(updated_at)) AS age,sum(attempts) AS attempts,sum(commit_attempts) AS commits FROM tasks WHERE protocol_version=2 GROUP BY queue,state`).Scan(&groups).Error; err != nil {
 			http.Error(w, "control unavailable", 503)
 			return
 		}
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		fmt.Fprintf(w, "bx_async_commit_calls_total %d\nbx_async_commit_seconds_sum %g\nbx_async_receipt_hits_total %d\n", s.CommitCalls.Load(), float64(s.CommitNanos.Load())/float64(time.Second), s.ReceiptHits.Load())
 		for _, g := range groups {
 			labels := fmt.Sprintf("queue=%s,state=%s", strconv.Quote(g.Queue), strconv.Quote(g.State))
-			fmt.Fprintf(w, "bx_async_tasks{%s} %d\nbx_async_oldest_age_seconds{%s} %g\n", labels, g.Count, labels, g.Age)
-			fmt.Fprintf(w, "bx_async_execution_starts{%s} %d\nbx_async_lease_recoveries{%s} %d\nbx_async_dispatches{%s} %d\nbx_async_result_sends{%s} %d\n", labels, g.Attempts, labels, g.Recoveries, labels, g.Dispatches, labels, g.ResultSends)
+			fmt.Fprintf(w, "bx_async_tasks{%s} %d\nbx_async_oldest_age_seconds{%s} %g\nbx_async_execution_starts{%s} %d\nbx_async_commit_attempts{%s} %d\n", labels, g.Count, labels, g.Age, labels, g.Attempts, labels, g.Commits)
 		}
 		var modules []struct {
 			Name, Holder string

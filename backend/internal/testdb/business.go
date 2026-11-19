@@ -41,6 +41,7 @@ func database(t *testing.T, envKey, migrations string) *gorm.DB {
 	}
 	q := u.Query()
 	q.Set("search_path", schema+",public")
+	q.Set("options", "-c bx.coordination_protocol=v2")
 	u.RawQuery = q.Encode()
 	db, err := gorm.Open(postgres.Open(u.String()), &gorm.Config{TranslateError: true, Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {

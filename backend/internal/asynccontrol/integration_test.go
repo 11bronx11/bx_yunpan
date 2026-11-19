@@ -2,7 +2,6 @@ package asynccontrol
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -44,7 +43,7 @@ func testStore(t *testing.T) (*Store, *gorm.DB) {
 	for _, d := range []*gorm.DB{db, biz} {
 		sql, _ := d.DB()
 		sql.SetMaxOpenConns(1)
-		if err := d.Exec(`SET search_path TO "` + schema + `"`).Error; err != nil {
+		if err := d.Exec(`SET search_path TO "` + schema + `"; SET bx.coordination_protocol='v2'`).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -85,35 +84,32 @@ func dispatch(t *testing.T, s *Store, task Task) Task {
 	if err != nil || !ok {
 		t.Fatal("reserve", ok, err)
 	}
-	c, ok, err := s.Claim(context.Background(), Notice{TaskID: r.ID, DispatchGeneration: r.DispatchGeneration, Version: 1})
+	c, ok, err := s.Claim(context.Background(), r.Notice())
 	if err != nil || !ok {
 		t.Fatal("claim", ok, err)
 	}
 	return c
 }
 
-func TestPermanentlyPausedLegacyQueueDoesNotBlockDispatch(t *testing.T) {
+func TestRetiredQueueBudgetDoesNotGateV2(t *testing.T) {
 	s, _ := testStore(t)
 	ctx := context.Background()
-	legacy := spec("retired-ai")
-	legacy.Kind = "ai.index"
-	if _, err := s.Ensure(ctx, legacy, "legacy-event"); err != nil {
+	if err := s.DB.Exec("UPDATE queue_budgets SET paused_until='infinity',inflight_limit=1").Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DB.Exec("UPDATE queue_budgets SET paused_until='infinity' WHERE queue IN ('ai','search')").Error; err != nil {
-		t.Fatal(err)
-	}
-	for _, queue := range []string{"ai", "search"} {
-		if _, ok, err := s.Reserve(ctx, queue); err != nil || ok {
-			t.Fatalf("permanently paused %s: reserved=%v error=%v", queue, ok, err)
+	for _, key := range []string{"a", "b", "c"} {
+		if _, err := s.Ensure(ctx, spec(key), key); err != nil {
+			t.Fatal(err)
 		}
 	}
-	current, err := s.Ensure(ctx, spec("current-upload"), "current-event")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, ok, err := s.Reserve(ctx, current.Queue); err != nil || !ok || got.ID != current.ID {
-		t.Fatalf("current queue: task=%s reserved=%v error=%v", got.ID, ok, err)
+	for range 3 {
+		task, ok, err := s.Reserve(ctx, "upload")
+		if err != nil || !ok {
+			t.Fatal("retired global budget gated work", err)
+		}
+		if err := s.Published(ctx, task, nil); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -129,7 +125,7 @@ func TestLeaseResultsAndDurableBudget(t *testing.T) {
 		t.Fatal("identity", err)
 	}
 	first := dispatch(t, s, task)
-	if _, ok, err := s.Claim(ctx, Notice{TaskID: first.ID, DispatchGeneration: first.DispatchGeneration, Version: 1}); err != nil || ok {
+	if _, ok, err := s.Claim(ctx, first.Notice()); err != nil || ok {
 		t.Fatal("duplicate claimed", err)
 	}
 	if err := s.DB.Exec("UPDATE tasks SET lease_until=clock_timestamp()-interval '1 second' WHERE id=?", first.ID).Error; err != nil {
@@ -158,11 +154,8 @@ func TestLeaseResultsAndDurableBudget(t *testing.T) {
 	if err != nil || got.ResultDigest != r.ResultDigest {
 		t.Fatal(err)
 	}
-	if loaded.State != Computed {
+	if loaded.State != Running {
 		t.Fatal("premature success")
-	}
-	if _, ok, err := s.NextResult(ctx); err != nil || !ok {
-		t.Fatal("durable publication", err)
 	}
 	if err := s.Report(ctx, loaded, got, Succeeded); err != nil {
 		t.Fatal(err)
@@ -178,48 +171,41 @@ func TestLeaseResultsAndDurableBudget(t *testing.T) {
 func TestNoticeIdentityAndGenerationFenceExecutionAndResults(t *testing.T) {
 	s, _ := testStore(t)
 	ctx := context.Background()
-	if _, err := s.Ensure(ctx, spec("wire-identity"), "event"); err != nil {
+	task, err := s.Ensure(ctx, spec("wire-identity"), "event")
+	if err != nil {
 		t.Fatal(err)
 	}
-	reserved, ok, err := s.Reserve(ctx, "upload")
-	if err != nil || !ok {
-		t.Fatal("reserve", ok, err)
-	}
-	mutations := map[string]func(*Notice){
-		"semantic operation": func(n *Notice) { n.SemanticKey += ":other" },
-		"input":              func(n *Notice) { n.InputDigest = "different" },
-		"commit domain":      func(n *Notice) { n.ShardKey = "owner:other" },
-		"layout":             func(n *Notice) { n.LayoutVersion++ },
-		"shard":              func(n *Notice) { n.Shard = (n.Shard + 1) % s.Shards },
-		"execution":          func(n *Notice) { n.Generation++ },
-	}
-	for name, mutate := range mutations {
-		n := reserved.Notice()
+	for _, mutate := range []func(*Notice){func(n *Notice) { n.SemanticKey += "other" }, func(n *Notice) { n.InputDigest = "other" }, func(n *Notice) { n.EffectTarget = EffectAI }, func(n *Notice) { n.Version = 1 }} {
+		n := task.Notice()
 		mutate(&n)
-		if _, ok, err := s.Claim(ctx, n); err != nil || ok {
-			t.Fatalf("%s claimed another identity: %v %v", name, ok, err)
+		if _, ok, err := s.Claim(ctx, n); err == nil || ok {
+			t.Fatal("invalid identity accepted", err)
 		}
 	}
-	claimed, ok, err := s.Claim(ctx, reserved.Notice())
-	if err != nil || !ok || claimed.Attempts != 1 || claimed.Generation != reserved.Generation+1 {
-		t.Fatal("valid notice did not preserve the single execution budget", ok, err)
-	}
-	if _, err := s.SaveResult(ctx, claimed, []byte(`{"upload_id":"current"}`)); err != nil {
+	claimed := dispatch(t, s, task)
+	r, err := s.SaveResult(ctx, claimed, []byte(`{"upload_id":"current"}`))
+	if err != nil {
 		t.Fatal(err)
 	}
-	computed, ok, err := s.NextResult(ctx)
-	if err != nil || !ok {
-		t.Fatal("persistent result", ok, err)
+	if err := s.DB.Exec("UPDATE tasks SET lease_until=clock_timestamp()-interval '1 second' WHERE id=?", task.ID).Error; err != nil {
+		t.Fatal(err)
 	}
-	for name, mutate := range mutations {
-		n := computed.Notice()
-		mutate(&n)
-		if _, _, err := s.LoadResult(ctx, n); !errors.Is(err, ErrConflict) {
-			t.Fatalf("%s result notice accepted: %v", name, err)
-		}
+	if err := s.Recover(ctx, 10); err != nil {
+		t.Fatal(err)
 	}
-	if _, r, err := s.LoadResult(ctx, computed.Notice()); err != nil || r.Generation != claimed.Generation {
-		t.Fatal("valid result identity or generation lost", err)
+	time.Sleep(2 * time.Millisecond)
+	recovered := dispatch(t, s, task)
+	if recovered.Generation != claimed.Generation || recovered.Attempts != 1 || recovered.ResultID == nil || *recovered.ResultID != r.ID {
+		t.Fatal("checkpoint recomputed")
+	}
+	if err := s.AcceptedResult(ctx, claimed, r); err != ErrLost {
+		t.Fatal("old checkpoint publisher admitted", err)
+	}
+	if err := s.AcceptedResult(ctx, recovered, r); err != nil {
+		t.Fatal("current checkpoint rejected", err)
+	}
+	if _, err := s.SaveResult(ctx, claimed, []byte(`{"upload_id":"late"}`)); err != ErrLost {
+		t.Fatal("late result accepted", err)
 	}
 }
 
@@ -233,25 +219,21 @@ func TestFinalCrashedAttemptConverges(t *testing.T) {
 		t.Fatal(err)
 	}
 	task = dispatch(t, s, task)
-	_ = s.DB.Exec("UPDATE tasks SET lease_until=clock_timestamp()-interval '1 second' WHERE id=?", task.ID).Error
-	if err := s.Recover(ctx, 10); err != nil {
+	if err := s.DB.Exec("UPDATE tasks SET lease_until=clock_timestamp()-interval '1 second' WHERE id=?", task.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DB.First(&task, "id=?", task.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if task.State != Converging || task.Attempts != 12 || task.ResultID == nil {
-		t.Fatalf("lost convergence: %+v", task)
-	}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if err := s.Recover(ctx, 10); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if err := s.DB.First(&task, "id=?", task.ID).Error; err != nil {
+		t.Fatal(err)
+	}
 	var count int64
-	_ = s.DB.Model(&Result{}).Where("task_id=?", task.ID).Count(&count).Error
-	if count != 1 {
-		t.Fatal("recreated convergence")
+	s.DB.Model(&Task{}).Where("parent_id=? AND kind='failure.converge'", task.ID).Count(&count)
+	if task.State != Stopped || task.Attempts != 12 || task.ResultID != nil || count != 1 {
+		t.Fatal("missing bounded failure command", task.State, task.Attempts, count)
 	}
 }
 
@@ -368,103 +350,66 @@ func TestRelaySafeWatermarkAndAtomicTakeover(t *testing.T) {
 	}
 }
 
-func TestConflictIsolationFairnessAndGlobalBudgets(t *testing.T) {
+func TestConflictIsolationAndIndependentDeliveryClaims(t *testing.T) {
 	s, _ := testStore(t)
 	ctx := context.Background()
-	original, err := s.Ensure(ctx, spec("conflict"), "one")
+	task, err := s.Ensure(ctx, spec("conflict"), "one")
 	if err != nil {
 		t.Fatal(err)
 	}
-	conflicting := spec("conflict")
-	conflicting.Input = []byte(`{"changed":true}`)
-	if _, err := s.Ensure(ctx, conflicting, "two"); err != ErrConflict {
+	other := spec("conflict")
+	other.Input = []byte(`{"changed":true}`)
+	if _, err := s.Ensure(ctx, other, "two"); err != ErrConflict {
 		t.Fatal("conflict accepted", err)
 	}
-	var isolated int64
-	if err := s.DB.Table("quarantines").Where("task_id=?", original.ID).Count(&isolated).Error; err != nil || isolated != 1 {
-		t.Fatal("isolation not durable", err, isolated)
+	var count int64
+	s.DB.Table("quarantines").Where("task_id=?", task.ID).Count(&count)
+	if count != 1 {
+		t.Fatal("conflict lost")
 	}
-	if err := s.DB.Exec("UPDATE queue_budgets SET owner_limit=1,inflight_limit=2 WHERE queue='upload'").Error; err != nil {
-		t.Fatal(err)
-	}
-	for _, key := range []string{"a1", "a2", "b1"} {
-		sp := spec(key)
-		sp.OwnerKey = "owner:a"
-		if key == "b1" {
-			sp.OwnerKey = "owner:b"
-		}
-		if _, err := s.Ensure(ctx, sp, key); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Exclude the identity-conflict example from this scheduling scenario.
-	_ = s.DB.Model(&Task{}).Where("id=?", original.ID).Update("state", Quarantined).Error
-	first, ok, err := s.Reserve(ctx, "upload")
+	reserved, ok, err := s.Reserve(ctx, "upload")
 	if err != nil || !ok {
 		t.Fatal(err)
-	}
-	second, ok, err := s.Reserve(ctx, "upload")
-	if err != nil || !ok || first.OwnerKey == second.OwnerKey {
-		t.Fatal("owner starved", first.OwnerKey, second.OwnerKey, err)
 	}
 	if _, ok, err := s.Reserve(ctx, "upload"); err != nil || ok {
-		t.Fatal("global inflight budget exceeded", err)
+		t.Fatal("same live publisher claim reserved twice", err)
 	}
-	_ = s.DB.Exec("UPDATE write_budget SET concurrent_limit=1,available_tokens=128").Error
-	permit, ok, err := s.WritePermit(ctx, 0)
+	running, ok, err := s.Claim(ctx, reserved.Notice())
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
-	if _, ok, err := s.WritePermit(ctx, 1); err != nil || ok {
-		t.Fatal("second instance multiplied write budget", err)
+	if err := s.Published(ctx, reserved, nil); err != nil {
+		t.Fatal(err)
 	}
-	_ = s.DB.Exec("DELETE FROM write_permits WHERE token=?", permit).Error
-	if _, ok, err := s.WritePermit(ctx, 1); err != nil || !ok {
-		t.Fatal("permit not reusable", err)
+	var current Task
+	s.DB.First(&current, "id=?", running.ID)
+	if current.State != Running || current.Token == nil || *current.Token != *running.Token {
+		t.Fatal("publisher rolled consumer backwards")
 	}
 }
 
-func TestPriorityMinimumShareAndFencedScheduler(t *testing.T) {
+func TestConfirmedQueueWaitDoesNotRepublish(t *testing.T) {
 	s, _ := testStore(t)
 	ctx := context.Background()
-	_ = s.DB.Exec("UPDATE queue_budgets SET owner_limit=100,inflight_limit=100 WHERE queue='upload'").Error
-	var low Task
-	for i := 0; i < 8; i++ {
-		sp := spec(fmt.Sprintf("priority-%d", i))
-		sp.OwnerKey = "one"
-		task, err := s.Ensure(ctx, sp, "priority")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if i == 7 {
-			low = task
-			_ = s.DB.Model(&Task{}).Where("id=?", task.ID).Update("priority", 2).Error
-		}
+	task, err := s.Ensure(ctx, spec("queue-wait"), "source")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for i := 0; i < 5; i++ {
-		task, ok, err := s.Reserve(ctx, "upload")
-		if err != nil || !ok {
-			t.Fatal(err)
-		}
-		if i == 4 && task.ID != low.ID {
-			t.Fatal("low priority work starved")
-		}
-	}
-	token, ok, err := s.AcquireModule(ctx, "scheduler", "old")
+	delivery, ok, err := s.Reserve(ctx, "upload")
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
-	_ = s.DB.Exec("UPDATE module_leases SET lease_until=clock_timestamp()-interval '1 second' WHERE name='scheduler'").Error
-	if _, ok, err := s.AcquireModule(ctx, "scheduler", "new"); err != nil || !ok {
+	if err := s.Published(ctx, delivery, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.Reserve(ctx, "upload", token); err != ErrLost {
-		t.Fatal("stale scheduler advanced", err)
+	if err := s.DB.Exec("UPDATE task_deliveries SET not_before=clock_timestamp()-interval '1 hour' WHERE task_id=?", task.ID).Error; err != nil {
+		t.Fatal(err)
 	}
-	var active int64
-	_ = s.DB.Model(&Task{}).Where("state='dispatched'").Count(&active).Error
-	if active != 5 {
-		t.Fatal("fencing did not roll back reservation", active)
+	if err := s.Recover(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.Reserve(ctx, "upload"); err != nil || ok {
+		t.Fatal("confirmed queue wait republished", err)
 	}
 }
 
@@ -486,7 +431,7 @@ func TestStoppedRedoAndResultRetention(t *testing.T) {
 	}
 	var old Task
 	_ = s.DB.First(&old, "id=?", task.ID).Error
-	if old.Attempts != 12 || old.State != Quarantined {
+	if old.Attempts != 12 || old.State != Stopped || old.Outcome != Quarantined {
 		t.Fatal("old stop erased")
 	}
 	claimed := dispatch(t, s, redo)
@@ -535,7 +480,7 @@ func TestStoppedRedoAndResultRetention(t *testing.T) {
 		t.Fatal("terminal task input not archived")
 	}
 	duplicate, err = s.Ensure(ctx, Spec{Kind: pending.Kind, SemanticKey: pending.SemanticKey, ShardKey: pending.ShardKey, OwnerKey: pending.OwnerKey, ResourceKey: pending.ResourceKey, Input: spec("redo").Input}, "replay")
-	if err != nil || duplicate.State != Succeeded || duplicate.Attempts != pending.Attempts {
+	if err != nil || duplicate.Conclusion() != Succeeded || duplicate.Attempts != pending.Attempts {
 		t.Fatal("archive erased semantic barrier", err)
 	}
 }

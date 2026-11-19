@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func Pause(ctx context.Context, d time.Duration) bool {
@@ -95,101 +96,72 @@ func (r *Relay) Run(ctx context.Context, holder string, minPoll, maxPoll time.Du
 	}, logger)
 }
 
+// RunScheduler is a due-delivery publisher and lease reaper; RabbitMQ owns
+// queue distribution. Concurrent publishers fence individual delivery claims.
 func (s *Store) RunScheduler(ctx context.Context, b *Broker, holder string, logger *slog.Logger) error {
-	return s.RunModule(ctx, "scheduler", holder, func(live context.Context, token uuid.UUID) error {
-		for live.Err() == nil {
-			if err := s.RenewModule(live, "scheduler", token); err != nil {
-				return err
-			}
-			if err := s.Recover(live, 100); err != nil {
-				return err
-			}
-			if err := s.PrepareCommands(live, 100); err != nil {
-				return err
-			}
-			if err := b.Ready(live); err != nil {
-				logger.Warn("async dispatch paused; RabbitMQ unavailable")
-				if !Pause(live, 2*time.Second) {
+	for ctx.Err() == nil {
+		if err := s.Recover(ctx, 100); err != nil {
+			return err
+		}
+		for _, queue := range WorkQueues() {
+			for range 8 {
+				t, ok, err := s.Reserve(ctx, queue)
+				if err != nil {
+					return err
+				}
+				if !ok {
 					break
 				}
-				continue
-			}
-			for _, queue := range WorkQueues() {
-				for range 8 {
-					if err := s.RenewModule(live, "scheduler", token); err != nil {
-						return err
-					}
-					t, ok, err := s.Reserve(live, queue, token)
-					if err != nil {
-						return err
-					}
-					if !ok {
-						break
-					}
-					if err := b.Publish(live, b.WorkQueue(queue), t.Notice()); err != nil {
-						return err
-					}
+				publishErr := b.Publish(ctx, b.WorkQueue(queue), t.Notice())
+				persist, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				err = s.Published(persist, t, publishErr)
+				cancel()
+				if err != nil {
+					return err
 				}
-			}
-			if !Pause(live, 100*time.Millisecond) {
-				break
+				if publishErr != nil {
+					logger.Warn("async publication deferred", "queue", queue, "error", publishErr)
+					break
+				}
 			}
 		}
-		return live.Err()
-	}, logger)
-}
-
-func (s *Store) RunResults(ctx context.Context, b *Broker, holder string, logger *slog.Logger) error {
-	return s.RunModule(ctx, "results", holder, func(live context.Context, token uuid.UUID) error {
-		for live.Err() == nil {
-			if err := b.Ready(live); err != nil {
-				if !Pause(live, 2*time.Second) {
-					break
-				}
-				continue
-			}
-			if err := s.RenewModule(live, "results", token); err != nil {
-				return err
-			}
-			t, ok, err := s.NextResult(live)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				if !Pause(live, 100*time.Millisecond) {
-					break
-				}
-				continue
-			}
-			if err := b.Publish(live, b.ResultQueueFor(t.EffectTarget, t.Shard), t.Notice()); err != nil {
-				return err
-			}
+		if !Pause(ctx, 100*time.Millisecond) {
+			break
 		}
-		return live.Err()
-	}, logger)
+	}
+	return ctx.Err()
 }
 
-func (s *Store) RunWorker(ctx context.Context, b *Broker, queue string, concurrency int, compute func(context.Context, Task) (json.RawMessage, error), permanent func(error) bool, logger *slog.Logger) error {
+// Apply owns a domain-local transaction and returns only a durable decision.
+// Control acknowledgement always follows that transaction in this runtime.
+type Apply func(context.Context, Task, Result) (string, *time.Time, error)
+
+func (s *Store) RunWorker(ctx context.Context, b *Broker, queue string, concurrency int, compute func(context.Context, Task) (json.RawMessage, error), permanent func(error) bool, logger *slog.Logger, apply ...Apply) error {
 	delay := time.Second
 	for ctx.Err() == nil {
 		err := b.ConsumeOnce(ctx, b.WorkQueue(queue), concurrency, func(parent context.Context, d Delivery) error {
 			if !d.Notice.validWire() {
-				if err := s.QuarantineMessage(parent, d.Raw, "invalid work notice"); err != nil {
+				if err := s.QuarantineMessage(parent, d.Raw, "invalid v2 work notice"); err != nil {
 					return err
 				}
 				return d.Ack()
 			}
 			t, ok, err := s.Claim(parent, d.Notice)
+			if errors.Is(err, ErrConflict) || errors.Is(err, ErrInvalid) {
+				if err := s.QuarantineMessage(parent, d.Raw, err.Error()); err != nil {
+					return err
+				}
+				return d.Ack()
+			}
 			if err != nil {
 				return err
 			}
 			if !ok {
 				return d.Ack()
 			}
-			traced, span := BeginTrace(parent, t, "compute")
+			traced, span := BeginTrace(parent, t, "execute")
 			defer span.End()
 			live, cancel := context.WithTimeout(traced, time.Duration(t.TimeoutMS)*time.Millisecond)
-			defer cancel()
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
@@ -207,21 +179,20 @@ func (s *Store) RunWorker(ctx context.Context, b *Broker, queue string, concurre
 					}
 				}
 			}()
-			body, runErr := safeCompute(live, t, compute)
-			persist, c := context.WithTimeout(context.WithoutCancel(parent), 5*time.Second)
-			if runErr == nil {
-				_, err = s.SaveResult(persist, t, body)
-			} else {
-				err = s.Fail(persist, t, runErr, permanent(runErr))
-			}
-			c()
+			// t is not mutated while the renewer reads it; Renew only needs its token
+			// and generation, which stay fixed across checkpoint acceptance.
+			current := t
+			runErr := s.execute(live, &current, compute, apply)
 			cancel()
 			<-done
-			if err != nil && !errors.Is(err, ErrLost) {
-				return err
-			}
 			if runErr != nil {
-				logger.Warn("async computation failed", "task_id", t.ID, "semantic_key", t.SemanticKey, "generation", t.Generation, "attempt", t.Attempts, "error", runErr)
+				persist, c := context.WithTimeout(context.WithoutCancel(parent), 5*time.Second)
+				err = s.Fail(persist, current, runErr, permanent(runErr))
+				c()
+				if err != nil && !errors.Is(err, ErrLost) {
+					return err
+				}
+				logger.Warn("async task deferred or stopped", "task_id", t.ID, "phase", current.Phase, "error", runErr)
 			}
 			return d.Ack()
 		})
@@ -235,6 +206,47 @@ func (s *Store) RunWorker(ctx context.Context, b *Broker, queue string, concurre
 		delay = min(delay*2, 10*time.Second)
 	}
 	return ctx.Err()
+}
+
+func (s *Store) execute(ctx context.Context, t *Task, compute func(context.Context, Task) (json.RawMessage, error), apply []Apply) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("async execution panic: %v", p)
+		}
+	}()
+	var r Result
+	if t.ResultID != nil {
+		r, err = s.checkpoint(ctx, *t)
+	} else if Command(t.Kind) {
+		r = CommandResult(*t)
+	} else {
+		var body json.RawMessage
+		body, err = safeCompute(ctx, *t, compute)
+		if err == nil {
+			r, err = s.SaveResult(ctx, *t, body)
+		}
+		if err == nil {
+			err = s.BeginCommit(ctx, t, r)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	outcome := Succeeded
+	var due *time.Time
+	if t.EffectTarget != EffectNone {
+		if len(apply) != 1 || apply[0] == nil {
+			return ErrInvalid
+		}
+		outcome, due, err = apply[0](ctx, *t, r)
+		if err != nil {
+			return err
+		}
+	}
+	if due != nil {
+		return s.Reschedule(ctx, *t, r, *due)
+	}
+	return s.Report(ctx, *t, r, outcome)
 }
 
 func safeCompute(ctx context.Context, t Task, compute func(context.Context, Task) (json.RawMessage, error)) (body json.RawMessage, err error) {
@@ -257,26 +269,10 @@ func (s *Store) QuarantineMessage(ctx context.Context, body []byte, reason strin
 
 func (s *Store) RunDeadLetters(ctx context.Context, b *Broker, logger *slog.Logger) error {
 	for ctx.Err() == nil {
-		err := b.ConsumeOnce(ctx, b.Prefix+".dead", 1, func(ctx context.Context, d Delivery) error {
-			if err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-				details, _ := json.Marshal(map[string]any{"notice": d.Notice, "body": d.Raw[:min(len(d.Raw), 1<<20)]})
-				identity := fmt.Sprintf("transport:%s:%d:%v", d.Notice.TaskID, d.Notice.DispatchGeneration, d.Notice.ResultID)
-				if err := s.quarantine(tx, identity, &d.Notice.TaskID, "RabbitMQ delivery protection exhausted", details); err != nil {
-					return err
-				}
-				if d.Notice.Version != 1 {
-					return nil
-				}
-				if d.Notice.ResultID != nil {
-					return tx.Model(&Task{}).Where("id=? AND result_id=? AND state IN ?", d.Notice.TaskID, *d.Notice.ResultID, []string{Computed, Converging}).Updates(map[string]any{"state": NeedsAttention, "last_error": "result transport delivery protection exhausted", "stopped_at": gorm.Expr("clock_timestamp()")}).Error
-				}
-				// A current active execution may still succeed. Prevent redispatch
-				// after it ends; normal recovery performs any required convergence.
-				return tx.Model(&Task{}).Where("id=? AND dispatch_generation=? AND state IN ?", d.Notice.TaskID, d.Notice.DispatchGeneration, []string{Ready, RetryWait, Dispatched, Running}).Updates(map[string]any{"max_dispatches": gorm.Expr("LEAST(max_dispatches,dispatches)"), "last_error": "work transport delivery protection exhausted"}).Error
-			}); err != nil {
+		err := b.ConsumeOnce(ctx, b.Prefix+".dead", 1, func(c context.Context, d Delivery) error {
+			if err := s.HandleDead(c, d.Notice, d.Raw); err != nil {
 				return err
 			}
-			logger.Error("async transport stopped", "task_id", d.Notice.TaskID)
 			return d.Ack()
 		})
 		if ctx.Err() != nil {
@@ -288,4 +284,28 @@ func (s *Store) RunDeadLetters(ctx context.Context, b *Broker, logger *slog.Logg
 		}
 	}
 	return ctx.Err()
+}
+
+func (s *Store) HandleDead(ctx context.Context, n Notice, raw []byte) error {
+	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := s.QuarantineMessage(ctx, raw, "transport exhausted"); err != nil {
+			return err
+		}
+		var t Task
+		q := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id=?", n.TaskID).Find(&t)
+		if q.Error != nil {
+			return q.Error
+		}
+		if q.RowsAffected == 0 || !n.validWire() || !n.matches(t) || n.DispatchGeneration != t.DispatchGeneration || Terminal(t.State) || t.State == Running {
+			return nil
+		}
+		var now time.Time
+		if err := tx.Raw("SELECT clock_timestamp()").Scan(&now).Error; err != nil {
+			return err
+		}
+		if t.Dispatches >= t.MaxDispatches {
+			return s.stop(tx, &t, "dead transport exhausted", now)
+		}
+		return s.retry(tx, &t, now.Add(s.RetryBase), "dead notification recovered")
+	})
 }

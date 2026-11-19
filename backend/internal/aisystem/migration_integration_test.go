@@ -238,15 +238,22 @@ func TestUnmappedLegacyJobGetsDurableCoreConclusion(t *testing.T) {
 	if _, err := m.CutoverCheck(ctx, run); err == nil {
 		t.Fatal("archive accepted a processing historical job")
 	}
-	if err := store.PrepareCommands(ctx, 10); err != nil {
-		t.Fatal(err)
-	}
 	var task asynccontrol.Task
 	if err := store.DB.Where("kind='ai.job.finish'").Take(&task).Error; err != nil {
 		t.Fatal(err)
 	}
+	claimed, ok, claimErr := store.Claim(ctx, task.Notice())
+	if claimErr != nil || !ok {
+		t.Fatal("command claim", claimErr)
+	}
+	task = claimed
 	committer := &asyncjobs.Committer{Business: biz, Control: store}
-	if err := committer.Commit(ctx, asynccontrol.Notice{Version: 1, TaskID: task.ID, Shard: task.Shard, ResultID: task.ResultID}); err != nil {
+	result := asynccontrol.CommandResult(task)
+	outcome, due, err := committer.Apply(ctx, task, result)
+	if err != nil || due != nil {
+		t.Fatal("job command apply", err, due)
+	}
+	if err := store.Report(ctx, task, result, outcome); err != nil {
 		t.Fatal(err)
 	}
 	if err := biz.Where("id=?", job.ID).Take(&job).Error; err != nil || job.Status != "needs_attention" {

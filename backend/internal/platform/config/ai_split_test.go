@@ -32,6 +32,7 @@ func TestCapabilityFlagMatrixAndRoleModelRequirements(t *testing.T) {
 				t.Fatal("query model requirement does not follow enabled capabilities", err)
 			}
 			cfg.Role = "ai-content-worker"
+			cfg.Async = loadAsync()
 			cfg.Async.ControlDSN = "postgres://fixture/control"
 			cfg.TaskQueue.URL = "amqp://fixture"
 			if err := cfg.validateAISplit(); err != nil {

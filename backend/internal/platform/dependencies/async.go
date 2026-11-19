@@ -24,7 +24,7 @@ func (a *AsyncSet) Close() {
 	}
 }
 
-func OpenAsync(ctx context.Context, cfg config.Config, write bool) (*AsyncSet, error) {
+func OpenAsync(ctx context.Context, cfg config.Config, role string) (*AsyncSet, error) {
 	a := &AsyncSet{}
 	open := func(dsn string, limit, idle int) (*gorm.DB, error) {
 		c := cfg
@@ -43,17 +43,17 @@ func OpenAsync(ctx context.Context, cfg config.Config, write bool) (*AsyncSet, e
 	}
 	fail := func(err error) (*AsyncSet, error) { a.Close(); return nil, err }
 	var err error
-	if a.Control, err = open(cfg.Async.ControlDSN, cfg.Async.ControlMaxOpen, cfg.Async.ControlMaxIdle); err != nil {
+	if a.Control, err = open(ControlDSN(cfg.Async.ControlDSN), cfg.Async.ControlMaxOpen, cfg.Async.ControlMaxIdle); err != nil {
 		return fail(err)
 	}
-	if a.Critical, err = open(cfg.Async.ControlDSN, cfg.Async.CriticalMaxOpen, 1); err != nil {
+	if a.Critical, err = open(ControlDSN(cfg.Async.ControlDSN), cfg.Async.CriticalMaxOpen, 1); err != nil {
 		return fail(err)
 	}
 	readDSN, err := readOnlyDSN(cfg.Async.BusinessReadDSN)
 	if err != nil {
 		return fail(err)
 	}
-	if a.Read, err = open(readDSN, max(2, cfg.Postgres.MaxOpenConns/2), 2); err != nil {
+	if a.Read, err = open(readDSN, min(cfg.Postgres.MaxOpenConns, max(2, cfg.Async.Concurrency)), 2); err != nil {
 		return fail(err)
 	}
 	var writable bool
@@ -76,8 +76,8 @@ func OpenAsync(ctx context.Context, cfg config.Config, write bool) (*AsyncSet, e
 	if controlIdentity == businessIdentity {
 		return fail(errors.New("business and control pools resolve to the same database"))
 	}
-	if write {
-		if a.Business, err = open(cfg.Postgres.PrimaryDSN, cfg.Postgres.MaxOpenConns, cfg.Postgres.MaxIdleConns); err != nil {
+	if role == "upload-worker" || role == "object-worker" || role == "media-worker" || role == "gc-worker" {
+		if a.Business, err = open(cfg.Postgres.PrimaryDSN, min(cfg.Postgres.MaxOpenConns, max(2, cfg.Async.Concurrency+1)), cfg.Postgres.MaxIdleConns); err != nil {
 			return fail(err)
 		}
 	}
@@ -101,4 +101,20 @@ func readOnlyDSN(dsn string) (string, error) {
 		return "", errors.New("readonly DSN required")
 	}
 	return dsn + " default_transaction_read_only=on statement_timeout=5000 connect_timeout=5", nil
+}
+
+// ControlDSN tags every pooled connection, including reconnects, for the
+// database-side writer fence installed by control migration 5.
+func ControlDSN(dsn string) string {
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		u, err := url.Parse(dsn)
+		if err != nil {
+			return dsn
+		}
+		q := u.Query()
+		q.Set("options", strings.TrimSpace(q.Get("options")+" -c bx.coordination_protocol=v2"))
+		u.RawQuery = q.Encode()
+		return u.String()
+	}
+	return dsn + " options='-c bx.coordination_protocol=v2'"
 }

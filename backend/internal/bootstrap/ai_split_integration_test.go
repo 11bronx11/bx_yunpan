@@ -62,6 +62,7 @@ func TestAISplitRealDependencies(t *testing.T) {
 		}
 		q := u.Query()
 		q.Set("search_path", schema+",public")
+		q.Set("options", "-c bx.coordination_protocol=v2")
 		u.RawQuery = q.Encode()
 		return u.String()
 	}
@@ -291,11 +292,11 @@ func TestAISplitRealDependencies(t *testing.T) {
 	}
 	defer func() { cancel(); wg.Wait() }()
 	start("parser-svc", RunParserSvc)
-	for _, r := range []string{"core-internal", "ai-query", "ai-committer", "ai-content-worker", "ai-embedding-worker", "ai-summary-worker", "ai-text-projector", "ai-vector-projector"} {
+	for _, r := range []string{"core-internal", "ai-query", "ai-content-worker", "ai-embedding-worker", "ai-summary-worker", "ai-text-projector", "ai-vector-projector"} {
 		role := r
 		start(role, func(c context.Context, v config.Config, l *slog.Logger) error { return RunAISplit(c, v, l, role) })
 	}
-	for _, r := range []string{"async-control", "committer", "upload-worker", "object-worker", "media-worker", "gc-worker"} {
+	for _, r := range []string{"async-control", "upload-worker", "object-worker", "media-worker", "gc-worker"} {
 		role := r
 		start(role, func(c context.Context, v config.Config, l *slog.Logger) error { return RunAsync(c, v, l, role) })
 	}

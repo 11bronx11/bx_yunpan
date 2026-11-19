@@ -40,7 +40,7 @@ func databases(t *testing.T) (*gorm.DB, *asynccontrol.Store) {
 		if err := db.Exec("CREATE SCHEMA " + schema).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := db.Exec("SET search_path TO " + schema + ", public").Error; err != nil {
+		if err := db.Exec("SET search_path TO " + schema + ", public; SET bx.coordination_protocol='v2'").Error; err != nil {
 			t.Fatal(err)
 		}
 		paths, _ := filepath.Glob("../../" + dir + "/*.up.sql")
@@ -67,9 +67,11 @@ func databases(t *testing.T) (*gorm.DB, *asynccontrol.Store) {
 	store.AfterTerminal = p.Finish
 	return db, store
 }
+
 func testInput() aiprotocol.Input {
 	return aiprotocol.Input{TargetEpoch: 1, Intent: aiprotocol.Intent{Version: 2, RequestedAt: time.Now().Unix(), RequestID: uuid.New(), ObjectID: uuid.New(), ContentGeneration: 1, ContentHash: strings.Repeat("a", 64), Size: 10, MediaType: "text/plain", ProfileID: "default", ProfileRevision: "v1", Seqs: aiprotocol.Seqs{Source: 1, Text: 1, Vector: 1, Summary: 1}, Targets: []string{"source", "text", "vectors", "summary"}}, Profile: aiprotocol.Profile{ID: "default", Revision: "v1", Parser: "parser-v1", Chunker: rag.ParentChildVersion, EmbeddingProvider: "fake", EmbeddingModel: "fake", EmbeddingRevision: "v1", SummaryProvider: "fake", SummaryModel: "fake", SummaryRevision: "v1", Prompt: "v1", Dimension: 1024, EnableVectors: true, EnableSummary: true}}
 }
+
 func claim(t *testing.T, s *asynccontrol.Store, kind string, in aiprotocol.Input) asynccontrol.Task {
 	t.Helper()
 	ctx := context.Background()
@@ -91,6 +93,7 @@ func claim(t *testing.T, s *asynccontrol.Store, kind string, in aiprotocol.Input
 	}
 	return task
 }
+
 func stage(t *testing.T, db *gorm.DB, s *asynccontrol.Store, task asynccontrol.Task, in aiprotocol.Input, data any, id uuid.UUID, rows int64) (asynccontrol.Result, aiprotocol.Output) {
 	t.Helper()
 	b, _ := json.Marshal(data)
@@ -110,6 +113,7 @@ func stage(t *testing.T, db *gorm.DB, s *asynccontrol.Store, task asynccontrol.T
 	}
 	return r, out
 }
+
 func publish(t *testing.T, p *Publisher, task asynccontrol.Task, r asynccontrol.Result) {
 	t.Helper()
 	outcome, err := p.Publish(context.Background(), task, r)
@@ -123,6 +127,7 @@ func publish(t *testing.T, p *Publisher, task asynccontrol.Task, r asynccontrol.
 		t.Fatal(err)
 	}
 }
+
 func seedObject(t *testing.T, db *gorm.DB, in aiprotocol.Input) {
 	t.Helper()
 	i := in.Intent
@@ -130,6 +135,7 @@ func seedObject(t *testing.T, db *gorm.DB, in aiprotocol.Input) {
 		t.Fatal(err)
 	}
 }
+
 func TestAcceptedPublishReceiptAndAtomicContinuations(t *testing.T) {
 	db, s := databases(t)
 	ctx := context.Background()
@@ -146,7 +152,7 @@ func TestAcceptedPublishReceiptAndAtomicContinuations(t *testing.T) {
 	}
 	var state string
 	_ = s.DB.Table("tasks").Select("state").Where("id=?", task.ID).Scan(&state)
-	if state != asynccontrol.Computed {
+	if state != asynccontrol.Running {
 		t.Fatal("AI effect prematurely succeeded", state)
 	}
 	var children int64
@@ -201,6 +207,7 @@ func TestAcceptedPublishReceiptAndAtomicContinuations(t *testing.T) {
 		t.Fatal("capability independence")
 	}
 }
+
 func TestSupersededStagingAndTombstoneNeverBecomeVisible(t *testing.T) {
 	db, s := databases(t)
 	ctx := context.Background()

@@ -35,8 +35,7 @@ func TestEventRetentionRequiresAcceptedPosition(t *testing.T) {
 	if err := s.DB.Exec("INSERT INTO relay_positions(source,last_xid,last_seq) VALUES('business-primary',?::xid8,?)", rows[0].XID, rows[0].Seq).Error; err != nil {
 		t.Fatal(err)
 	}
-	c := &Committer{Business: biz, Control: s}
-	if err := c.MaintainEvents(ctx, 10, 7*24*time.Hour); err != nil {
+	if err := MaintainEvents(ctx, biz, s, 10, 7*24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	var ids []uuid.UUID

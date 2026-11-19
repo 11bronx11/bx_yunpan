@@ -2,21 +2,21 @@ groups:
   - name: high-concurrency
     rules:
       - alert: YunpanAutomaticWorkStopped
-        expr: bx_async_tasks{state=~"needs_attention|quarantined"} > 0
+        expr: bx_async_tasks{state="stopped"} > 0
         for: 1m
         labels:
           severity: warning
         annotations:
           summary: Automatic work stopped after retry exhaustion and needs manual repair
       - alert: YunpanDurableBacklogStalled
-        expr: bx_async_relay_oldest_sample_seconds > 300 or bx_async_oldest_age_seconds{state=~"computed|convergence_pending"} > 600
+        expr: bx_async_relay_oldest_sample_seconds > 300 or bx_async_oldest_age_seconds{state=~"pending|running"} > 600
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: Durable work is not draining within the initial recovery budget
       - alert: YunpanBacklogObservationFailed
-        expr: up{job="bx-yunpan-workers",service=~"async-control|committer|upload-worker|object-worker|media-worker|gc-worker"} == 0
+        expr: up{job="bx-yunpan-workers",service=~"async-control|upload-worker|object-worker|media-worker|gc-worker"} == 0
         for: 1m
         labels:
           severity: warning

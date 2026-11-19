@@ -30,7 +30,7 @@ def main():
             forbidden = ["ASYNC_CONTROL_DSN", "RABBITMQ_URL", "AI_QUERY_DSN", "AI_COMPUTE_DSN", "AI_COMMIT_DSN", "AI_MIGRATION_DSN"]
         elif role.startswith("ai-"):
             forbidden = ["POSTGRES_DSN", "POSTGRES_PRIMARY_DSN", "POSTGRES_READONLY_DSN", "AI_MIGRATION_DSN"]
-            if role == "ai-query": forbidden += ["ASYNC_CONTROL_DSN", "RABBITMQ_URL"]
+            if role == "ai-query": forbidden += ["ASYNC_CONTROL_DSN", "RABBITMQ_URL", "AI_COMMIT_DSN", "AI_COMPUTE_DSN"]
         elif role == "parser-svc":
             forbidden = [k for k in nonempty if "DSN" in k or k == "RABBITMQ_URL"]
         if forbidden:
@@ -69,7 +69,8 @@ def main():
         "compute receipt DELETE": "DELETE FROM ai_commit_receipts WHERE false",
         "compute DDL": "CREATE TABLE public.ai_deep_privilege_probe(id int)",
     }.items(): sql("ai-postgres", "yunpan_ai_compute", statement, False, "A03", label)
-    sql("ai-postgres", "yunpan_ai_commit", "SELECT * FROM ai_commit_receipts LIMIT 0; UPDATE ai_objects SET desired_source_seq=desired_source_seq WHERE false", True, "A03", "committer publication privileges")
+    sql("ai-postgres", "yunpan_ai_commit", "SELECT * FROM ai_commit_receipts LIMIT 0; UPDATE ai_objects SET desired_source_seq=desired_source_seq WHERE false", True, "A03", "background worker publication privileges")
+    sql("ai-postgres", "yunpan_ai_commit", insert, True, "A03", "background worker staging privileges")
     core = roles["core-internal"]
     from urllib.parse import urlparse
     core_env = dict(x.split("=", 1) for x in core["Config"]["Env"] if "=" in x)

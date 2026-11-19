@@ -241,6 +241,9 @@ func TestProjectionRealBackendsRetryPublicationAndDelete(t *testing.T) {
 			if err := store.DB.Exec("UPDATE tasks SET not_before=clock_timestamp()-interval '1 second' WHERE id=?", task.ID).Error; err != nil {
 				t.Fatal(err)
 			}
+			if err := store.DB.Exec("UPDATE task_deliveries SET not_before=clock_timestamp()-interval '1 second' WHERE task_id=?", task.ID).Error; err != nil {
+				t.Fatal(err)
+			}
 			retry := claim(t, store, kind, in)
 			if retry.Generation <= task.Generation {
 				t.Fatal("retry did not fence the failed execution")

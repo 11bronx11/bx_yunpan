@@ -21,6 +21,7 @@ import socket
 import subprocess
 import time
 import traceback
+import uuid
 from urllib.error import HTTPError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
@@ -167,8 +168,7 @@ def main():
                POSTGRES_MAX_OPEN_CONNS="3", POSTGRES_MAX_IDLE_CONNS="1",
                ASYNC_CONTROL_MAX_OPEN_CONNS="3", ASYNC_CONTROL_MAX_IDLE_CONNS="1", ASYNC_CONTROL_CRITICAL_CONNS="1",
                ASYNC_LEASE="3s", ASYNC_POLL_MIN="100ms", ASYNC_POLL_MAX="300ms", ASYNC_RETRY_BASE="100ms", ASYNC_RETRY_CAP="1s",
-               OBJECT_GC_DELAY="1s", ASYNC_GC_SCAN_INTERVAL="2s", ASYNC_WRITE_CONCURRENCY="2", ASYNC_WRITE_RATE="32",
-               ASYNC_RESULT_HIGH="16", ASYNC_QUEUE_INFLIGHT="4", ASYNC_OWNER_INFLIGHT="2", GOMAXPROCS="2",
+               OBJECT_GC_DELAY="1s", ASYNC_GC_SCAN_INTERVAL="2s", GOMAXPROCS="2",
                ASYNC_LEGACY_WRITERS_STOPPED="true", LOG_LEVEL="info", APP_ENV="development")
     checks.write_json(output / "private-env.json", {k: v for k, v in env.items() if k in set(env) - set(os.environ) or k in ("GOMAXPROCS",)})
     checks.write_json(output / "inventory.json", {"business": business, "control": control, "bucket": bucket,
@@ -200,15 +200,12 @@ def main():
     def bsql(query):
         return sql(biz, query)
 
-    def shards():
-        return csql("SELECT holder,count(*) FROM module_leases WHERE name LIKE 'committer:%' AND lease_until>clock_timestamp() GROUP BY holder ORDER BY holder;")
-
     try:
         for label, args_ in [("business-up", ["up"]), ("business-up-again", ["up"]),
                              ("control-up", ["control", "up"]), ("control-up-again", ["control", "up"])]:
             command(label, [str(binaries / "migrate"), *args_])
-        assert bsql("SELECT version,dirty FROM schema_migrations") == "34|f"
-        assert csql("SELECT version,dirty FROM schema_migrations") == "2|f"
+        assert bsql("SELECT version,dirty FROM schema_migrations") == "36|f"
+        assert csql("SELECT version,dirty FROM schema_migrations") == "5|f"
         bsql(f'GRANT CONNECT ON DATABASE "{business}" TO "{reader}"; GRANT USAGE ON SCHEMA public TO "{reader}"; GRANT SELECT ON ALL TABLES IN SCHEMA public TO "{reader}"; ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO "{reader}";')
         command("empty-import", [str(binaries / "async-import")])
         passed("MG-01-empty-and-idempotent-dual-migrations")
@@ -256,7 +253,7 @@ http {{
         assert admitted["status"] == "initializing"
         assert int(bsql(f"SELECT count(*) FROM outbox_events WHERE aggregate_id='{admitted['id']}'")) > 0
         passed("SMK-02-API-admission-with-background-unavailable")
-        for role in ["async-control", "committer"]:
+        for role in ["async-control"]:
             for i in range(2):
                 start(role, role + "-" + str(i))
         for role in ["upload-worker", "object-worker", "media-worker", "gc-worker"]:
@@ -264,37 +261,33 @@ http {{
         finished = owner.finish(admitted, payload)
         owner.download(finished["completed_entry_id"], payload)
         passed("SMK-02-independent-roles-upload-and-proxy-download", sha256=hashlib.sha256(payload).hexdigest())
-        wait("two shard owners", lambda: len(shards().splitlines()) == 2 and all(x.endswith("|16") for x in shards().splitlines()))
-        passed("SH-two-processes-16-shards-each", ownership=shards())
         data = os.urandom(20 * 1024 * 1024 + 333)
         multipart = owner.finish(owner.create(root, "three-parts.bin", data)["upload"], data, parts=3)
         owner.download(multipart["completed_entry_id"], data)
         passed("UP-01-three-parts-reversed-confirmation-and-download", bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
-        wait("prior results drained", lambda: csql("SELECT count(*) FROM tasks WHERE state IN ('running','computed')") == "0")
+        wait("prior results drained", lambda: csql("SELECT count(*) FROM tasks WHERE state='running'") == "0")
         send("upload-worker", signal.SIGSTOP)
-        pending_data = b"persisted result through a killed committer " + os.urandom(100)
+        pending_data = b"persisted checkpoint through a killed worker " + os.urandom(100)
         pending = owner.create(root, "kill-window.bin", pending_data)["upload"]
-        wait("event accepted before pausing committers", lambda: csql(f"SELECT count(*) FROM tasks WHERE resource_key='session:{pending['id']}' AND kind='multipart.create' AND state='dispatched'") == "1")
-        send("committer-0", signal.SIGSTOP)
-        send("committer-1", signal.SIGTERM)
-        processes["committer-1"].wait(timeout=15)
+        task_filter = f"resource_key='session:{pending['id']}' AND kind='multipart.create'"
+        wait("event accepted before resuming worker", lambda: csql(f"SELECT count(*) FROM tasks WHERE {task_filter} AND state='pending'") == "1")
+        semantic_key = csql(f"SELECT semantic_key FROM tasks WHERE {task_filter}")
+        # Test-only transaction barrier in this script's private business DB.
+        bsql(f"CREATE FUNCTION validation_receipt_barrier() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.semantic_key='{semantic_key}' THEN PERFORM pg_sleep(30); END IF; RETURN NEW; END $$; CREATE TRIGGER validation_receipt_barrier BEFORE INSERT ON async_commit_receipts FOR EACH ROW EXECUTE FUNCTION validation_receipt_barrier()")
         send("upload-worker", signal.SIGCONT)
-        task_query = f"SELECT id,generation,attempts FROM tasks WHERE resource_key='session:{pending['id']}' AND kind='multipart.create' AND state='computed'"
-        before = wait("persisted computed result", lambda: csql(task_query))
-        record("computed-barrier", task=before)
-        send("committer-0", signal.SIGKILL)
-        processes["committer-0"].wait(timeout=5)
-        start("committer", "committer-1")
-        wait("survivor owns every shard", lambda: shards() == "committer-1|32")
+        task_query = f"SELECT id,generation,attempts FROM tasks WHERE {task_filter} AND result_id IS NOT NULL"
+        before = wait("persisted accepted checkpoint", lambda: csql(task_query))
+        wait("worker inside domain transaction", lambda: bsql("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event='PgSleep'") == "1")
+        send("upload-worker", signal.SIGKILL)
+        processes["upload-worker"].wait(timeout=5)
+        bsql("DROP TRIGGER validation_receipt_barrier ON async_commit_receipts; DROP FUNCTION validation_receipt_barrier()")
+        start("upload-worker", "upload-worker")
         recovered = owner.finish(pending, pending_data)
         owner.download(recovered["completed_entry_id"], pending_data)
         task_id, generation, attempts = before.split("|")
         assert csql(f"SELECT generation,attempts FROM tasks WHERE id='{task_id}'") == generation + "|" + attempts
-        semantic_key = csql(f"SELECT semantic_key FROM tasks WHERE id='{task_id}'")
         assert bsql(f"SELECT count(*) FROM async_commit_receipts WHERE semantic_key='{semantic_key}'") == "1"
-        passed("FI-03-SIGKILL-and-SH-takeover-computed-without-recompute", task_id=task_id, generation=generation, attempts=attempts, ownership=shards())
-        start("committer", "committer-0")
-        wait("committer rejoins", lambda: len(shards().splitlines()) == 2 and all(x.endswith("|16") for x in shards().splitlines()))
+        passed("FI-03-SIGKILL-worker-checkpoint-recovery-without-recompute", identity=before)
         relay_owner = csql("SELECT holder FROM module_leases WHERE name='relay' AND lease_until>clock_timestamp()")
         assert relay_owner in ("async-control-0", "async-control-1"), relay_owner
         send(relay_owner, signal.SIGKILL)
@@ -354,8 +347,8 @@ http {{
             assert json.loads((output / "browser-complete.json").read_text())["status"] == "PASS"
         # Allow result reports and immediate cleanups to settle; delayed expiry
         # and safety-window cleanup tasks are intentionally not forced due.
-        wait("immediate work drained", lambda: csql("SELECT count(*) FROM tasks WHERE state IN ('running','dispatched','computed','convergence_pending') OR (state IN ('ready','retry_wait') AND not_before<=clock_timestamp())") == "0")
-        assert csql("SELECT count(*) FROM tasks WHERE state IN ('needs_attention','quarantined','exhausted','convergence_pending')") == "0"
+        wait("immediate work drained", lambda: csql("SELECT count(*) FROM tasks WHERE state='running' OR (state='pending' AND not_before<=clock_timestamp())") == "0")
+        assert csql("SELECT count(*) FROM tasks WHERE state='stopped'") == "0"
         snapshot = bsql("""BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SELECT 'quota_mismatches',count(*) FROM user_quota_usage q WHERE q.occupied_bytes<0 OR q.occupied_bytes <> COALESCE((SELECT sum(o.size_bytes) FROM file_entries f JOIN file_objects o ON o.id=f.object_id WHERE f.owner_id=q.owner_id AND f.deleted_at IS NULL),0)+COALESCE((SELECT sum(s.reserved_bytes) FROM upload_sessions s WHERE s.user_id=q.owner_id),0);
 SELECT 'reference_mismatches',count(*) FROM file_objects o WHERE o.reference_count <> (SELECT count(*) FROM file_entries f WHERE f.object_id=o.id AND f.deleted_at IS NULL);
@@ -364,18 +357,21 @@ COMMIT;""")
         (output / "business-reconcile.txt").write_text(snapshot + "\n")
         assert "quota_mismatches|0" in snapshot and "reference_mismatches|0" in snapshot and "bad_completed_sessions|0" in snapshot, snapshot
         passed("INV-06-07-08-single-snapshot-reconciliation", snapshot=snapshot)
-        tasks = json.loads(csql("SELECT COALESCE(json_agg(x),'[]'::json) FROM (SELECT t.semantic_key,t.state,t.input_digest,t.result_id,r.result_digest FROM tasks t LEFT JOIN results r ON r.id=t.result_id) x"))
+        tasks = json.loads(csql("SELECT COALESCE(json_agg(x),'[]'::json) FROM (SELECT t.id,t.kind,t.effect_target,t.semantic_key,t.state,t.outcome,t.input_digest,t.result_id,COALESCE(r.result_digest,t.input_digest) AS result_digest FROM tasks t LEFT JOIN results r ON r.id=t.result_id) x"))
         receipts = json.loads(bsql("SELECT COALESCE(json_agg(x),'[]'::json) FROM (SELECT semantic_key,input_digest,result_digest,result_id,outcome FROM async_commit_receipts) x"))
+        for task in tasks:
+            if task["kind"] in {"upload.expire", "object.authorize_delete", "failure.converge", "ai.job.finish"} and task["result_id"] is None:
+                task["result_id"] = str(uuid.uuid5(uuid.UUID(task["id"]), "command-v2"))
         by_task, by_receipt = {t["semantic_key"]: t for t in tasks}, {r["semantic_key"]: r for r in receipts}
         for receipt in receipts:
             task = by_task[receipt["semantic_key"]]
             assert all(task[key] == receipt[key] for key in ("input_digest", "result_digest", "result_id"))
-            assert task["state"] == receipt["outcome"]
-        terminal = {"succeeded", "superseded", "rejected", "failed"}
-        assert all(t["semantic_key"] in by_receipt for t in tasks if t["state"] in terminal)
+            assert task["state"] == "done" and task["outcome"] == receipt["outcome"]
+        terminal = {"done"}
+        assert all(t["semantic_key"] in by_receipt for t in tasks if t["state"] in terminal and t["effect_target"] == "core")
         checks.write_json(output / "quiescent-cross-db.json", {"tasks": tasks, "receipts": receipts, "mismatches": 0})
         passed("INV-05-quiescent-result-receipt-reconciliation", receipts=len(receipts), mismatches=0)
-        checks.write_json(output / "control-summary.json", {"states": csql("SELECT kind,state,count(*),max(attempts) FROM tasks GROUP BY kind,state ORDER BY kind,state"), "quarantine": csql("SELECT count(*) FROM quarantines"), "shards": shards()})
+        checks.write_json(output / "control-summary.json", {"states": csql("SELECT kind,state,count(*),max(attempts) FROM tasks GROUP BY kind,state ORDER BY kind,state"), "quarantine": csql("SELECT count(*) FROM quarantines"), "protocol": csql("SELECT value FROM control_settings WHERE key='coordination_protocol'")})
         checks.write_json(output / "summary.json", {"status": "PASS", "cases": len(cases), "browser_marker": (output / "browser-complete.json").exists()})
         return 0
     except Exception as error:

@@ -3,10 +3,7 @@ package asynccontrol
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"sync/atomic"
 	"time"
 
@@ -23,20 +20,16 @@ type Store struct {
 	PlanFailure                                               func(Task) ([]Spec, error)
 	CommitCalls, CommitNanos, ReceiptHits                     atomic.Uint64
 	MaxAttempts, MaxDispatches, MaxRecoveries, MaxResultSends int
-	BatchRows, BatchBytes                                     int
-	BatchWait                                                 time.Duration
-	BatchCommit                                               func(context.Context, []Notice) []error
 	Critical                                                  *gorm.DB
 	DB                                                        *gorm.DB
 	Registry                                                  Registry
-	Shards                                                    int
 	Lease                                                     time.Duration
 	RetryBase, RetryCap                                       time.Duration
 	CommitWindow                                              time.Duration
 }
 
 func New(db *gorm.DB) *Store {
-	return &Store{MaxAttempts: 12, MaxDispatches: 20, MaxRecoveries: 12, MaxResultSends: 20, BatchRows: 32, BatchBytes: 1 << 20, BatchWait: 5 * time.Millisecond, DB: db, Registry: CoreRegistry(), Shards: 32, Lease: 30 * time.Second, RetryBase: 5 * time.Second, RetryCap: 5 * time.Minute, CommitWindow: 24 * time.Hour}
+	return &Store{MaxAttempts: 12, MaxDispatches: 20, MaxRecoveries: 12, MaxResultSends: 20, DB: db, Registry: CoreRegistry(), Lease: 30 * time.Second, RetryBase: 5 * time.Second, RetryCap: 5 * time.Minute, CommitWindow: 24 * time.Hour}
 }
 
 func (s *Store) Ensure(ctx context.Context, spec Spec, source string) (Task, error) {
@@ -75,7 +68,10 @@ func (s *Store) ensure(tx *gorm.DB, spec Spec, source string) (Task, error) {
 	if len(trace) == 0 {
 		trace = json.RawMessage(`{}`)
 	}
-	t := Task{EffectTarget: d.Target(), ID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("bx/async/v1/"+spec.SemanticKey)), SemanticKey: spec.SemanticKey, Kind: spec.Kind, ContractVersion: 1, InputDigest: digest, Input: input, Queue: d.Queue, OwnerKey: spec.OwnerKey, ResourceKey: spec.ResourceKey, ShardKey: spec.ShardKey, LayoutVersion: 1, Shard: Shard(spec.ShardKey, s.Shards), Priority: d.Priority, State: Ready, Version: 1, NotBefore: due, Deadline: maxTime(due, now).Add(d.Lifetime), Attempts: spec.Attempts, Dispatches: spec.Dispatches, Recoveries: spec.Recoveries, MaxAttempts: s.MaxAttempts, MaxDispatches: s.MaxDispatches, MaxRecoveries: s.MaxRecoveries, MaxResultSends: s.MaxResultSends, TimeoutMS: d.Timeout.Milliseconds(), ParentID: spec.ParentID, Trace: []byte(trace), CreatedAt: now, UpdatedAt: now}
+	t := Task{ProtocolVersion: 2, Phase: "compute", MaxCommitAttempts: s.MaxAttempts, EffectTarget: d.Target(), ID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("bx/async/v1/"+spec.SemanticKey)), SemanticKey: spec.SemanticKey, Kind: spec.Kind, ContractVersion: 1, InputDigest: digest, Input: input, Queue: d.Queue, OwnerKey: spec.OwnerKey, ResourceKey: spec.ResourceKey, ShardKey: spec.ShardKey, LayoutVersion: 0, Shard: 0, Priority: d.Priority, State: Pending, Version: 1, NotBefore: due, Deadline: maxTime(due, now).Add(d.Lifetime), Attempts: spec.Attempts, Dispatches: spec.Dispatches, Recoveries: spec.Recoveries, MaxAttempts: s.MaxAttempts, MaxDispatches: s.MaxDispatches, MaxRecoveries: s.MaxRecoveries, MaxResultSends: s.MaxResultSends, TimeoutMS: d.Timeout.Milliseconds(), ParentID: spec.ParentID, Trace: []byte(trace), CreatedAt: now, UpdatedAt: now}
+	if Command(t.Kind) {
+		t.Phase = "command"
+	}
 	if !spec.Deadline.IsZero() && spec.Deadline.Before(t.Deadline) {
 		t.Deadline = spec.Deadline
 	}
@@ -88,6 +84,14 @@ func (s *Store) ensure(tx *gorm.DB, spec Spec, source string) (Task, error) {
 	if spec.MaxRecoveries > 0 {
 		t.MaxRecoveries = min(t.MaxRecoveries, spec.MaxRecoveries)
 	}
+	if Command(t.Kind) {
+		t.MaxCommitAttempts = max(1, t.MaxAttempts-t.Attempts)
+		if t.Attempts >= t.MaxAttempts {
+			t.Phase = "reconcile"
+			reconcileDeadline := now.Add(s.Lease)
+			t.CommitDeadline = &reconcileDeadline
+		}
+	}
 	res := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "semantic_key"}}, DoNothing: true}).Create(&t)
 	if res.Error != nil {
 		return t, res.Error
@@ -98,6 +102,11 @@ func (s *Store) ensure(tx *gorm.DB, spec Spec, source string) (Task, error) {
 		}
 		if t.InputDigest != digest || t.Kind != spec.Kind || t.ShardKey != spec.ShardKey {
 			return t, s.quarantine(tx, "input:"+spec.SemanticKey, &t.ID, "same semantic identity with different input", spec.Input)
+		}
+	}
+	if res.RowsAffected == 1 {
+		if err := s.delivery(tx, &t, due); err != nil {
+			return t, err
 		}
 	}
 	if source != "" {
@@ -175,215 +184,11 @@ func owned(q *gorm.DB) error {
 	return nil
 }
 
-func (s *Store) Claim(ctx context.Context, n Notice) (Task, bool, error) {
-	var t Task
-	claimed := false
-	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&t, "id = ?", n.TaskID).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if n.Version != 1 || t.DispatchGeneration != n.DispatchGeneration || t.State != Dispatched {
-			return nil
-		}
-		if n.InputDigest != "" && !n.matches(t) {
-			return nil
-		}
-		var now time.Time
-		if err := tx.Raw("SELECT clock_timestamp()").Scan(&now).Error; err != nil {
-			return err
-		}
-		if !now.Before(t.Deadline) || t.Attempts >= t.MaxAttempts {
-			return nil
-		}
-		token := uuid.New()
-		lease := now.Add(min(s.Lease, time.Duration(t.TimeoutMS)*time.Millisecond))
-		t.Token = &token
-		t.LeaseUntil = &lease
-		t.Generation++
-		t.Attempts++
-		t.State = Running
-		t.StartedAt = &now
-		t.Version++
-		q := tx.Model(&Task{}).Where("id=? AND state=? AND dispatch_generation=?", t.ID, Dispatched, n.DispatchGeneration).Updates(map[string]any{"state": Running, "generation": t.Generation, "attempts": t.Attempts, "token": token, "lease_until": lease, "started_at": now, "version": t.Version, "updated_at": now})
-		if err := owned(q); err != nil {
-			return err
-		}
-		if err := tx.Exec("INSERT INTO executions(task_id,generation,token) VALUES(?,?,?)", t.ID, t.Generation, token).Error; err != nil {
-			return err
-		}
-		claimed = true
-		return nil
-	})
-	return t, claimed, err
-}
-
 func (s *Store) critical() *gorm.DB {
 	if s.Critical != nil {
 		return s.Critical
 	}
 	return s.DB
-}
-
-func (s *Store) Renew(ctx context.Context, t Task) error {
-	ctx, cancel := context.WithTimeout(ctx, s.Lease/6)
-	defer cancel()
-	if t.Token == nil {
-		return ErrLost
-	}
-	return owned(s.critical().WithContext(ctx).Exec(`UPDATE tasks SET lease_until=LEAST(deadline,started_at+(timeout_ms*interval '1 millisecond'),clock_timestamp()+(?*interval '1 millisecond')),updated_at=clock_timestamp()
- WHERE id=? AND generation=? AND token=? AND state='running' AND lease_until>clock_timestamp() AND started_at+(timeout_ms*interval '1 millisecond')>clock_timestamp() AND deadline>clock_timestamp()`, s.Lease.Milliseconds(), t.ID, t.Generation, *t.Token))
-}
-
-func (s *Store) SaveResult(ctx context.Context, t Task, body json.RawMessage) (Result, error) {
-	digest, b, err := Digest(body)
-	if err != nil || len(b) > 1<<20 {
-		return Result{}, ErrInvalid
-	}
-	r := Result{ID: uuid.NewSHA1(t.ID, []byte(fmt.Sprint(t.Generation))), TaskID: t.ID, Generation: t.Generation, InputDigest: t.InputDigest, ResultDigest: digest, Body: b, EffectTarget: t.EffectTarget}
-	err = s.critical().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if t.Token == nil {
-			return ErrLost
-		}
-		state := Computed
-		if d, ok := s.Registry[t.Kind]; ok && d.Target() == EffectNone {
-			state = Succeeded
-			r.Outcome = Succeeded
-			now := time.Now().UTC()
-			r.CommittedAt = &now
-		}
-		q := tx.Model(&Task{}).Where("id=? AND state=? AND generation=? AND token=? AND lease_until>clock_timestamp()", t.ID, Running, t.Generation, *t.Token).Updates(map[string]any{"state": state, "result_id": r.ID, "token": nil, "lease_until": nil, "not_before": gorm.Expr("clock_timestamp()"), "commit_deadline": gorm.Expr("clock_timestamp()+(?*interval '1 millisecond')", s.CommitWindow.Milliseconds()), "version": gorm.Expr("version+1"), "updated_at": gorm.Expr("clock_timestamp()")})
-		if err := owned(q); err != nil {
-			return err
-		}
-		if err := tx.Create(&r).Error; err != nil {
-			return err
-		}
-		if err := s.freezeContinuations(tx, t, r); err != nil {
-			return err
-		}
-		if state == Succeeded {
-			if err := s.releaseContinuations(tx, t, r, Succeeded); err != nil {
-				return err
-			}
-		}
-		return tx.Exec("UPDATE executions SET finished_at=clock_timestamp(),outcome='computed' WHERE task_id=? AND generation=?", t.ID, t.Generation).Error
-	})
-	return r, err
-}
-
-func (s *Store) Fail(ctx context.Context, t Task, cause error, permanent bool) error {
-	if t.Token == nil || cause == nil {
-		return ErrInvalid
-	}
-	return s.critical().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		state := RetryWait
-		if permanent || t.Attempts >= t.MaxAttempts {
-			state = Exhausted
-		}
-		q := tx.Model(&Task{}).Where("id=? AND state=? AND generation=? AND token=? AND lease_until>clock_timestamp()", t.ID, Running, t.Generation, *t.Token).Updates(map[string]any{"state": state, "token": nil, "lease_until": nil, "last_error": cause.Error(), "not_before": gorm.Expr("clock_timestamp()+(?*interval '1 millisecond')", Backoff(t.Attempts, s.RetryBase, s.RetryCap, rand.Float64()*2-1).Milliseconds()), "version": gorm.Expr("version+1"), "updated_at": gorm.Expr("clock_timestamp()")})
-		if err := owned(q); err != nil {
-			return err
-		}
-		return tx.Exec("UPDATE executions SET finished_at=clock_timestamp(),outcome=?,error=? WHERE task_id=? AND generation=?", state, cause.Error(), t.ID, t.Generation).Error
-	})
-}
-
-func (s *Store) LoadResult(ctx context.Context, n Notice) (Task, Result, error) {
-	var t Task
-	var r Result
-	if n.Version != 1 || n.ResultID == nil {
-		return t, r, ErrInvalid
-	}
-	if err := s.DB.WithContext(ctx).First(&t, "id=?", n.TaskID).Error; err != nil {
-		return t, r, err
-	}
-	if t.ResultID == nil || *t.ResultID != *n.ResultID {
-		return t, r, ErrObsolete
-	}
-	if t.Shard != n.Shard {
-		return t, r, ErrConflict
-	}
-	if n.InputDigest != "" && !n.matches(t) {
-		return t, r, ErrConflict
-	}
-	if err := s.DB.WithContext(ctx).First(&r, "id=? AND task_id=? AND input_digest=?", *n.ResultID, t.ID, t.InputDigest).Error; err != nil {
-		return t, r, err
-	}
-	if r.Generation != t.Generation || r.EffectTarget != t.EffectTarget {
-		return t, r, ErrConflict
-	}
-	if Terminal(t.State) && t.State != NeedsAttention && r.CommittedAt != nil {
-		return t, r, nil
-	}
-	digest, _, err := Digest(r.Body)
-	if err != nil || digest != r.ResultDigest {
-		return t, r, ErrConflict
-	}
-	return t, r, nil
-}
-
-// IsolateResult persists a permanent protocol/receipt conflict before the
-// caller ACKs. Successful effects and their receipts are never overwritten.
-func (s *Store) IsolateResult(ctx context.Context, n Notice, reason string) error {
-	body, _ := json.Marshal(n)
-	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := s.quarantine(tx, fmt.Sprintf("result:%s:%v", n.TaskID, n.ResultID), nil, reason, body); err != nil {
-			return err
-		}
-		if n.ResultID == nil {
-			return nil
-		}
-		return tx.Model(&Task{}).Where("id=? AND result_id=? AND shard=? AND state IN ?", n.TaskID, *n.ResultID, n.Shard, []string{Computed, Converging}).Updates(map[string]any{"state": Quarantined, "last_error": reason, "stopped_at": gorm.Expr("clock_timestamp()"), "updated_at": gorm.Expr("clock_timestamp()")}).Error
-	})
-}
-
-// Report only accepts a durable result identity verified by the trusted
-// committer after committing a business receipt. Worker lease expiry is irrelevant.
-func (s *Store) Report(ctx context.Context, t Task, r Result, outcome string) error {
-	if outcome != Succeeded && outcome != Superseded && outcome != Rejected && outcome != Failed {
-		return ErrInvalid
-	}
-	return s.critical().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var current Task
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, "id=?", t.ID).Error; err != nil {
-			return err
-		}
-		if current.ResultID == nil || *current.ResultID != r.ID || current.InputDigest != r.InputDigest || current.EffectTarget != r.EffectTarget || current.Generation != r.Generation {
-			return ErrConflict
-		}
-		if Terminal(current.State) && current.State != NeedsAttention {
-			if current.State == outcome {
-				return nil
-			}
-			return ErrConflict
-		}
-		if current.State != Computed && current.State != Converging && current.State != NeedsAttention {
-			return ErrLost
-		}
-		if err := tx.Model(&Result{}).Where("id=? AND result_digest=?", r.ID, r.ResultDigest).Updates(map[string]any{"outcome": outcome, "committed_at": gorm.Expr("clock_timestamp()")}).Error; err != nil {
-			return err
-		}
-		if err := s.releaseContinuations(tx, current, r, outcome); err != nil {
-			return err
-		}
-		if err := tx.Model(&Task{}).Where("id=?", t.ID).Updates(map[string]any{"state": outcome, "version": gorm.Expr("version+1"), "stopped_at": gorm.Expr("clock_timestamp()"), "updated_at": gorm.Expr("clock_timestamp()")}).Error; err != nil {
-			return err
-		}
-		if s.AfterTerminal != nil {
-			return s.AfterTerminal(tx, s, current, outcome)
-		}
-		return nil
-	})
-}
-
-// Reschedule retains semantic identity, all consumed budgets and historical
-// results. Only the verified scheduling precondition can move the due time.
-func (s *Store) Reschedule(ctx context.Context, t Task, r Result, due time.Time) error {
-	return owned(s.DB.WithContext(ctx).Model(&Task{}).Where("id=? AND result_id=? AND state=?", t.ID, r.ID, Computed).Updates(map[string]any{"state": Ready, "not_before": due, "deadline": gorm.Expr("GREATEST(deadline,?::timestamptz)", due.Add(s.Registry[t.Kind].Lifetime)), "result_id": nil, "generation": gorm.Expr("generation+1"), "commit_deadline": nil, "version": gorm.Expr("version+1"), "updated_at": gorm.Expr("clock_timestamp()")}))
 }
 
 // ImportState may only seed a never-executed task; rerunning the import cannot
@@ -393,7 +198,7 @@ func (s *Store) ImportState(tx *gorm.DB, t Task, state string, body json.RawMess
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, "id=?", t.ID).Error; err != nil {
 		return err
 	}
-	if current.Generation != 0 || current.State != Ready {
+	if current.Generation != 0 || current.State != Pending {
 		return nil
 	}
 	if len(body) > 0 {
@@ -405,7 +210,25 @@ func (s *Store) ImportState(tx *gorm.DB, t Task, state string, body json.RawMess
 			return err
 		}
 	}
-	return tx.Model(&Task{}).Where("id=?", t.ID).Updates(map[string]any{"state": state, "last_error": reason, "updated_at": gorm.Expr("clock_timestamp()")}).Error
+	if state == Exhausted {
+		var now time.Time
+		if err := tx.Raw("SELECT clock_timestamp()").Scan(&now).Error; err != nil {
+			return err
+		}
+		return s.stop(tx, &current, reason, now)
+	}
+	outcome := ""
+	switch state {
+	case Computed, Converging:
+		state = Pending
+	case Succeeded, Superseded, Rejected, Failed:
+		outcome = state
+		state = Done
+	case Exhausted, Quarantined, NeedsAttention:
+		outcome = state
+		state = Stopped
+	}
+	return tx.Model(&Task{}).Where("id=?", t.ID).Updates(map[string]any{"state": state, "outcome": outcome, "last_error": reason, "updated_at": gorm.Expr("clock_timestamp()")}).Error
 }
 
 // Redo creates one audited child for a stopped operation. Retrying the operator
@@ -437,7 +260,7 @@ func (s *Store) RedoPlanned(ctx context.Context, id uuid.UUID, reason string, pl
 		if q.RowsAffected > 0 {
 			return nil
 		}
-		if old.State != NeedsAttention && old.State != Quarantined && old.State != Failed && old.State != Rejected {
+		if old.State != Stopped && old.State != Failed && old.State != Rejected && old.State != Quarantined && old.State != NeedsAttention {
 			return ErrInvalid
 		}
 		if len(reason) < 8 || len(reason) > 1024 || plan == nil {
@@ -453,7 +276,7 @@ func (s *Store) RedoPlanned(ctx context.Context, id uuid.UUID, reason string, pl
 		if err != nil {
 			return err
 		}
-		return tx.Model(&Task{}).Where("id=?", id).Updates(map[string]any{"state": Quarantined, "last_error": "explicit redo: " + next.ID.String() + "; " + reason}).Error
+		return tx.Model(&Task{}).Where("id=?", id).Updates(map[string]any{"state": Stopped, "outcome": Quarantined, "last_error": "explicit redo: " + next.ID.String() + "; " + reason}).Error
 	})
 	return next, err
 }

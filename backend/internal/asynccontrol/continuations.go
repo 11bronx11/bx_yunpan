@@ -28,7 +28,7 @@ func (d Definition) Target() string {
 }
 
 func WorkQueues() []string {
-	return []string{"upload", "object", "media", "gc", "ai", "search", "ai-content", "ai-embedding", "ai-summary", "ai-project-text", "ai-project-vector", "ai-maintenance"}
+	return []string{"upload", "object", "media", "gc", "core-command", "ai-content", "ai-embedding", "ai-summary", "ai-project-text", "ai-project-vector", "ai-maintenance"}
 }
 
 type Continuation struct {

@@ -28,7 +28,7 @@ func Register(r asynccontrol.Registry) {
 	for kind, queue := range map[string]string{"ai.intent.apply": "ai-content", "ai.source.prepare": "ai-content", "ai.text.build": "ai-content", "ai.embedding.generate": "ai-embedding", "ai.summary.generate": "ai-summary", "ai.project.text": "ai-project-text", "ai.project.vector": "ai-project-vector", "ai.object.tombstone": "ai-content", "ai.capability.finish": "ai-content", "ai.artifact.gc": "ai-maintenance"} {
 		r[kind] = asynccontrol.Definition{Kind: kind, Queue: queue, Timeout: 30 * time.Minute, Lifetime: 24 * time.Hour, EffectTarget: asynccontrol.EffectAI, Priority: 2}
 	}
-	r["ai.job.finish"] = asynccontrol.Definition{Kind: "ai.job.finish", Queue: "commit", Timeout: time.Minute, Lifetime: 24 * time.Hour, EffectTarget: asynccontrol.EffectCore, Priority: 1}
+	r["ai.job.finish"] = asynccontrol.Definition{Kind: "ai.job.finish", Queue: "core-command", Timeout: time.Minute, Lifetime: 24 * time.Hour, EffectTarget: asynccontrol.EffectCore, Priority: 1}
 }
 
 func (p *Planner) Intent(in aiprotocol.Intent) (asynccontrol.Spec, error) {

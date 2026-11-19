@@ -1,5 +1,11 @@
 package main
 
-import "github.com/11bronx11/bx_yunpan/backend/internal/bootstrap"
+import (
+	"fmt"
+	"os"
+)
 
-func main() { bootstrap.RunAIRole("ai-committer") }
+func main() {
+	fmt.Fprintln(os.Stderr, "ai-committer is retired; domain workers compute and commit with coordination protocol v2")
+	os.Exit(1)
+}

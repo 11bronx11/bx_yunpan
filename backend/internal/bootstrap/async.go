@@ -35,20 +35,14 @@ func asyncStore(deps *dependencies.AsyncSet, cfg config.Config) *asynccontrol.St
 	s.Critical = deps.Critical
 	s.MaxAttempts = cfg.Async.MaxAttempts
 	s.MaxDispatches = cfg.Async.MaxDispatches
-	s.MaxRecoveries = cfg.Async.MaxRecoveries
-	s.MaxResultSends = cfg.Async.MaxResultSends
 	for k, d := range s.Registry {
 		d.Lifetime = cfg.Async.TaskLifetime
 		s.Registry[k] = d
 	}
-	s.Shards = cfg.Async.Shards
 	s.Lease = cfg.Async.Lease
 	s.RetryBase = cfg.Async.RetryBase
 	s.RetryCap = cfg.Async.RetryCap
 	s.CommitWindow = cfg.Async.CommitWindow
-	s.BatchRows = cfg.Async.BatchRows
-	s.BatchBytes = cfg.Async.BatchBytes
-	s.BatchWait = cfg.Async.BatchWait
 	aisystem.Register(s.Registry)
 	planner := &aisystem.Planner{ProjectionBackends: cfg.Search.WriteBackends, TextEpoch: cfg.AITextEpoch(), VectorEpoch: cfg.AIVectorEpoch(), TargetNamespace: cfg.AISplit.ProjectionNamespace, TargetEpoch: cfg.AIProjectionEpoch(), Profile: cfg.AIProfile()}
 	s.PlanContinuations = planner.Continuations
@@ -59,7 +53,7 @@ func asyncStore(deps *dependencies.AsyncSet, cfg config.Config) *asynccontrol.St
 }
 
 // RunAsync wires only the dependencies required by one explicit role. Core
-// compute roles cannot obtain a business write connection from this assembly.
+// workers use separate read and domain-write pools; control stays read-only.
 func RunAsync(ctx context.Context, cfg config.Config, logger *slog.Logger, role string) error {
 	ctx = outbox.WithAIProfile(ctx, cfg.AISplit.ProfileID, cfg.AISplit.ProfileRevision)
 	shutdown, err := tracing.Setup(ctx, cfg.Tracing, "bx-"+role)
@@ -67,18 +61,18 @@ func RunAsync(ctx context.Context, cfg config.Config, logger *slog.Logger, role 
 		return err
 	}
 	defer shutdown(context.WithoutCancel(ctx))
-	deps, err := dependencies.OpenAsync(ctx, cfg, role == "committer")
+	deps, err := dependencies.OpenAsync(ctx, cfg, role)
 	if err != nil {
 		return err
 	}
 	defer deps.Close()
 	s := asyncStore(deps, cfg)
-	if err := s.CheckLayout(ctx); err != nil {
+	if err := s.CheckProtocol(ctx); err != nil {
 		return err
 	}
-	broker := asynccontrol.NewBroker(cfg.TaskQueue.URL, s.Shards, cfg.Async.BrokerPrefix)
+	broker := asynccontrol.NewBroker(cfg.TaskQueue.URL, cfg.Async.BrokerPrefix)
 	defer broker.Close()
-	closeMonitor, err := s.Monitor(ctx, cfg.Worker.MetricsAddr, cfg.App.InstanceID, deps.Read, broker, logger)
+	closeMonitor, err := s.Monitor(ctx, cfg.Worker.MetricsAddr, map[bool]string{true: "control:", false: "worker:"}[role == "async-control"]+cfg.App.InstanceID, deps.Read, broker, logger)
 	if err != nil {
 		return err
 	}
@@ -86,9 +80,6 @@ func RunAsync(ctx context.Context, cfg config.Config, logger *slog.Logger, role 
 	switch role {
 	case "async-control":
 		if err := asyncjobs.CheckImport(ctx, deps.Read, s); err != nil {
-			return err
-		}
-		if err := s.DB.WithContext(ctx).Exec("UPDATE queue_budgets SET inflight_limit=?,owner_limit=?,result_high=?", cfg.Async.QueueLimit, cfg.Async.OwnerLimit, cfg.Async.ResultHigh).Error; err != nil {
 			return err
 		}
 		processingKey, err := serviceauth.Private(cfg.AISplit.ProcessingSigningSeed)
@@ -102,7 +93,6 @@ func RunAsync(ctx context.Context, cfg config.Config, logger *slog.Logger, role 
 				return relay.Run(c, cfg.App.InstanceID, cfg.Async.PollMin, cfg.Async.PollMax, logger)
 			},
 			func(c context.Context) error { return s.RunScheduler(c, broker, cfg.App.InstanceID, logger) },
-			func(c context.Context) error { return s.RunResults(c, broker, cfg.App.InstanceID, logger) },
 			func(c context.Context) error { return s.RunDeadLetters(c, broker, logger) },
 			func(c context.Context) error {
 				return s.RunModule(c, "maintenance", cfg.App.InstanceID, func(live context.Context, _ uuid.UUID) error {
@@ -121,38 +111,23 @@ func RunAsync(ctx context.Context, cfg config.Config, logger *slog.Logger, role 
 				}, logger)
 			},
 		)
-	case "committer":
-		if err := s.DB.WithContext(ctx).Exec("UPDATE write_budget SET concurrent_limit=?,rate_per_second=? WHERE singleton", cfg.Async.WriteConcurrency, cfg.Async.WriteRate).Error; err != nil {
-			return err
-		}
-		objects := objectstore.NewService(deps.Business)
-		quota := identity.NewService(deps.Business, nil, nil, cfg.Identity.DefaultQuotaBytes)
-		uploads := upload.NewService(deps.Business, nil, nil, cfg.Storage.Bucket, drive.NewService(deps.Business), objects, quota, cfg.Upload)
-		committer := &asyncjobs.Committer{Business: deps.Business, Control: s, Upload: uploads, Objects: objects, Media: media.NewService(deps.Business, objects, nil, nil, cfg.Storage.Bucket, cfg.Storage.ReadURLTTL), GCDelay: cfg.Outbox.GCDelay, Auxiliary: commitAuxiliary}
-		s.BatchCommit = committer.CommitBatch
-		return runAsyncGroup(ctx, func(live context.Context) error {
-			return s.RunCommitters(live, broker, cfg.App.InstanceID, committer.Commit, logger)
-		}, func(live context.Context) error {
-			return s.RunModule(live, "business-event-retention", cfg.App.InstanceID, func(owned context.Context, _ uuid.UUID) error {
-				for owned.Err() == nil {
-					bounded, cancel := context.WithTimeout(owned, 5*time.Second)
-					err := committer.MaintainEvents(bounded, 100, cfg.Async.DetailRetention)
-					cancel()
-					if err != nil {
-						return err
-					}
-					if !asynccontrol.Pause(owned, time.Minute) {
-						break
-					}
-				}
-				return owned.Err()
-			}, logger)
-		})
 	case "upload-worker", "object-worker", "media-worker", "gc-worker":
 		storage, err := minio.New(cfg.Storage.Endpoint, &minio.Options{Creds: credentials.NewStaticV4(cfg.Storage.AccessKey, cfg.Storage.SecretKey, ""), Secure: cfg.Storage.Secure, Region: cfg.Storage.Region})
 		if err != nil {
 			return err
 		}
+		if role == "gc-worker" {
+			lifecycleCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			err := asyncjobs.EnsureLifecycle(lifecycleCtx, storage, cfg.Storage.Bucket, cfg.Async.StagingDays, cfg.Upload.SessionTTL+cfg.Async.TaskLifetime+cfg.Async.CommitWindow+cfg.Async.OutputSafety)
+			cancel()
+			if err != nil {
+				return err
+			}
+		}
+		objects := objectstore.NewService(deps.Business)
+		quota := identity.NewService(deps.Business, nil, nil, cfg.Identity.DefaultQuotaBytes)
+		uploads := upload.NewService(deps.Business, nil, nil, cfg.Storage.Bucket, drive.NewService(deps.Business), objects, quota, cfg.Upload)
+		applier := &asyncjobs.Committer{Business: deps.Business, Control: s, Upload: uploads, Objects: objects, Media: media.NewService(deps.Business, objects, nil, nil, cfg.Storage.Bucket, cfg.Storage.ReadURLTTL), GCDelay: cfg.Outbox.GCDelay, Auxiliary: commitAuxiliary}
 		computer := &asyncjobs.Computer{Control: s, Read: deps.Read, Storage: storage}
 		queue := map[string]string{"upload-worker": "upload", "object-worker": "object", "media-worker": "media", "gc-worker": "gc"}[role]
 		compute := func(c context.Context, t asynccontrol.Task) (json.RawMessage, error) {
@@ -163,12 +138,29 @@ func RunAsync(ctx context.Context, cfg config.Config, logger *slog.Logger, role 
 			return json.Marshal(out)
 		}
 		worker := func(c context.Context) error {
-			return s.RunWorker(c, broker, queue, cfg.Async.Concurrency, compute, func(err error) bool { return errors.Is(err, asynccontrol.ErrInvalid) }, logger)
+			return s.RunWorker(c, broker, queue, cfg.Async.Concurrency, compute, func(err error) bool { return errors.Is(err, asynccontrol.ErrInvalid) }, logger, applier.Apply)
 		}
 		if role != "gc-worker" {
 			return worker(ctx)
 		}
 		return runAsyncGroup(ctx, worker, func(c context.Context) error {
+			return s.RunWorker(c, broker, "core-command", 1, nil, func(err error) bool { return errors.Is(err, asynccontrol.ErrInvalid) }, logger, applier.Apply)
+		}, func(c context.Context) error {
+			return s.RunModule(c, "business-event-retention", cfg.App.InstanceID, func(live context.Context, _ uuid.UUID) error {
+				for live.Err() == nil {
+					bounded, cancel := context.WithTimeout(live, 5*time.Second)
+					err := asyncjobs.MaintainEvents(bounded, deps.Business, s, 100, cfg.Async.DetailRetention)
+					cancel()
+					if err != nil {
+						return err
+					}
+					if !asynccontrol.Pause(live, time.Minute) {
+						break
+					}
+				}
+				return live.Err()
+			}, logger)
+		}, func(c context.Context) error {
 			return s.RunModule(c, "expiry-scan", cfg.App.InstanceID, func(live context.Context, token uuid.UUID) error {
 				for live.Err() == nil {
 					bounded, cancel := context.WithTimeout(live, 5*time.Second)

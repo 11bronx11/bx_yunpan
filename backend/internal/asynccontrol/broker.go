@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -12,12 +11,11 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-// The v1 topology is intentionally disjoint from all legacy work/TTL queues.
+// The v2 topology is intentionally disjoint from all legacy work/TTL queues.
 // RabbitMQ transports notifications; it owns no business retry timer.
 type Broker struct {
 	URL      string
 	Prefix   string
-	Shards   int
 	Timeout  time.Duration
 	gate     chan struct{}
 	conn     *amqp.Connection
@@ -29,23 +27,14 @@ type Broker struct {
 	closed   chan struct{}
 }
 
-func NewBroker(url string, shards int, prefix ...string) *Broker {
-	p := "bx.async.v1"
+func NewBroker(url string, prefix ...string) *Broker {
+	p := "bx.async.v2"
 	if len(prefix) > 0 && prefix[0] != "" {
 		p = prefix[0]
 	}
-	return &Broker{URL: url, Prefix: p, Shards: shards, Timeout: 5 * time.Second, gate: make(chan struct{}, 1), closed: make(chan struct{})}
+	return &Broker{URL: url, Prefix: p, Timeout: 5 * time.Second, gate: make(chan struct{}, 1), closed: make(chan struct{})}
 }
 func (b *Broker) WorkQueue(queue string) string { return b.Prefix + ".work." + queue }
-func (b *Broker) ResultQueue(shard int) string  { return fmt.Sprintf("%s.result.%02d", b.Prefix, shard) }
-
-func (b *Broker) ResultQueueFor(target string, shard int) string {
-	if target == EffectAI {
-		return fmt.Sprintf("%s.result.ai.%02d", b.Prefix, shard)
-	}
-	return b.ResultQueue(shard)
-}
-
 func (b *Broker) dial(ctx context.Context) (*amqp.Connection, net.Conn, error) {
 	var socket net.Conn
 	conn, err := amqp.DialConfig(b.URL, amqp.Config{Heartbeat: 10 * time.Second, Locale: "en_US", Dial: func(network, address string) (net.Conn, error) {
@@ -79,28 +68,19 @@ func (b *Broker) declare(ch *amqp.Channel) error {
 	if err := ch.QueueBind(dead, dead, b.Prefix, false, nil); err != nil {
 		return err
 	}
-	declare := func(name string, sac bool) error {
+	declare := func(name string) error {
 		args := amqp.Table{"x-queue-type": "quorum", "x-delivery-limit": int32(20), "x-dead-letter-exchange": b.Prefix, "x-dead-letter-routing-key": dead, "x-dead-letter-strategy": "at-least-once", "x-overflow": "reject-publish", "x-max-length": int64(10000)}
-		if sac {
-			args["x-single-active-consumer"] = true
-		}
 		if _, err := ch.QueueDeclare(name, true, false, false, false, args); err != nil {
 			return err
 		}
 		return ch.QueueBind(name, name, b.Prefix, false, nil)
 	}
 	for _, q := range WorkQueues() {
-		if err := declare(b.WorkQueue(q), false); err != nil {
+		if err := declare(b.WorkQueue(q)); err != nil {
 			return err
 		}
 	}
-	for shard := 0; shard < b.Shards; shard++ {
-		for _, target := range []string{EffectCore, EffectAI} {
-			if err := declare(b.ResultQueueFor(target, shard), true); err != nil {
-				return err
-			}
-		}
-	}
+
 	return nil
 }
 
@@ -286,86 +266,4 @@ func (b *Broker) ConsumeOnce(ctx context.Context, queue string, concurrency int,
 	_ = socket.Close()
 	wg.Wait()
 	return err
-}
-
-// ConsumeBatchesOnce bounds broker prefetch, rows, bytes and collection time.
-// The handler confirms individual results after their corresponding commit.
-func (b *Broker) ConsumeBatchesOnce(ctx context.Context, queue string, rows, bytes int, wait time.Duration, handler func(context.Context, []Delivery) error) error {
-	conn, socket, err := b.dial(ctx)
-	if err != nil {
-		return err
-	}
-	defer socket.Close()
-	stop := context.AfterFunc(ctx, func() { _ = socket.Close() })
-	defer stop()
-	ch, err := conn.Channel()
-	if err != nil {
-		return err
-	}
-	if err = b.declare(ch); err != nil {
-		return err
-	}
-	if err = ch.Qos(rows, 0, false); err != nil {
-		return err
-	}
-	stream, err := ch.Consume(queue, "", false, false, false, false, nil)
-	if err != nil {
-		return err
-	}
-	var pending *amqp.Delivery
-	for ctx.Err() == nil {
-		var first amqp.Delivery
-		if pending != nil {
-			first = *pending
-			pending = nil
-		} else {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case m, ok := <-stream:
-				if !ok {
-					return errors.New("result stream closed")
-				}
-				first = m
-			}
-		}
-		messages := []amqp.Delivery{first}
-		total := len(first.Body)
-		timer := time.NewTimer(wait)
-	collect:
-		for len(messages) < rows && total < bytes {
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return ctx.Err()
-			case <-timer.C:
-				break collect
-			case m, ok := <-stream:
-				if !ok {
-					timer.Stop()
-					return errors.New("result stream closed")
-				}
-				if total+len(m.Body) > bytes {
-					pending = &m
-					break collect
-				}
-				messages = append(messages, m)
-				total += len(m.Body)
-			}
-		}
-		timer.Stop()
-		batch := make([]Delivery, 0, len(messages))
-		for _, m := range messages {
-			m := m
-			d := Delivery{Raw: m.Body, ack: func() error { return m.Ack(false) }}
-			if len(m.Body) <= 1<<20 {
-				_ = json.Unmarshal(m.Body, &d.Notice)
-			}
-			batch = append(batch, d)
-		}
-		if err := handler(ctx, batch); err != nil {
-			return err
-		}
-	}
-	return ctx.Err()
 }

@@ -1,26 +1,11 @@
 package main
 
 import (
-	"context"
-	"log/slog"
+	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
-
-	"github.com/11bronx11/bx_yunpan/backend/internal/bootstrap"
-	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 )
 
 func main() {
-	cfg, err := config.LoadForRole("committer")
-	if err != nil {
-		slog.Error("load config", "error", err)
-		os.Exit(1)
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	if err := bootstrap.RunAsync(ctx, cfg, slog.Default(), "committer"); err != nil && ctx.Err() == nil {
-		slog.Error("async process stopped", "error", err)
-		os.Exit(1)
-	}
+	fmt.Fprintln(os.Stderr, "committer is retired; domain workers compute and commit with coordination protocol v2")
+	os.Exit(1)
 }

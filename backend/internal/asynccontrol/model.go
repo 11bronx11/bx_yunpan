@@ -18,13 +18,17 @@ import (
 )
 
 var (
-	ErrObsolete = errors.New("obsolete async result notice")
-	ErrLost     = errors.New("async control lease or generation lost")
-	ErrConflict = errors.New("async semantic identity input conflict")
-	ErrInvalid  = errors.New("invalid async contract")
+	ErrObsolete       = errors.New("obsolete async result notice")
+	ErrReceiptMissing = errors.New("domain receipt is missing; manual reconciliation required")
+	ErrLost           = errors.New("async control lease or generation lost")
+	ErrConflict       = errors.New("async semantic identity input conflict")
+	ErrInvalid        = errors.New("invalid async contract")
 )
 
 const (
+	Pending        = "pending"
+	Done           = "done"
+	Stopped        = "stopped"
 	Ready          = "ready"
 	Dispatched     = "dispatched"
 	Running        = "running"
@@ -42,7 +46,7 @@ const (
 
 func Terminal(state string) bool {
 	switch state {
-	case Succeeded, Superseded, Rejected, Failed, Quarantined, NeedsAttention:
+	case Done, Stopped, Succeeded, Superseded, Rejected, Failed, Quarantined, NeedsAttention:
 		return true
 	}
 	return false
@@ -75,7 +79,7 @@ func CoreRegistry() Registry {
 		add(kind, "gc", 10*time.Minute, 2, false)
 	}
 	for _, kind := range []string{"upload.expire", "object.authorize_delete", "failure.converge"} {
-		add(kind, "commit", time.Minute, 0, false)
+		add(kind, "core-command", time.Minute, 0, false)
 	}
 	r["ai.index"] = Definition{Kind: "ai.index", Queue: "ai", Timeout: 30 * time.Minute, Lifetime: 24 * time.Hour, Priority: 2}
 	r["ai.reprocess"] = Definition{Kind: "ai.reprocess", Queue: "ai", Timeout: 30 * time.Minute, Lifetime: 24 * time.Hour, EffectTarget: EffectCore, Converge: true, Priority: 1}
@@ -84,7 +88,11 @@ func CoreRegistry() Registry {
 }
 
 type Task struct {
-	ID                                                                                                       uuid.UUID `gorm:"type:uuid;primaryKey"`
+	ProtocolVersion                                                                                          int
+	Outcome, Phase                                                                                           string
+	CommitAttempts, MaxCommitAttempts                                                                        int
+	DeliveryToken                                                                                            *uuid.UUID `gorm:"-"`
+	ID                                                                                                       uuid.UUID  `gorm:"type:uuid;primaryKey"`
 	EffectTarget                                                                                             string
 	SemanticKey, Kind                                                                                        string
 	ContractVersion                                                                                          int
@@ -137,30 +145,31 @@ type Spec struct {
 	Attempts, Dispatches, Recoveries int
 }
 type Notice struct {
+	ContractVersion    int             `json:"contract_version,omitempty"`
 	EffectTarget       string          `json:"effect_target,omitempty"`
 	SemanticKey        string          `json:"semantic_key,omitempty"`
 	InputDigest        string          `json:"input_digest,omitempty"`
 	ShardKey           string          `json:"shard_key,omitempty"`
 	LayoutVersion      int             `json:"layout_version,omitempty"`
-	Generation         int64           `json:"generation"`
+	Generation         int64           `json:"generation,omitempty"`
 	Trace              json.RawMessage `json:"trace,omitempty"`
 	TaskID             uuid.UUID       `json:"task_id"`
 	DispatchGeneration int64           `json:"dispatch_generation"`
 	ResultID           *uuid.UUID      `json:"result_id,omitempty"`
 	Version            int             `json:"version"`
-	Shard              int             `json:"shard"`
+	Shard              int             `json:"shard,omitempty"`
 }
 
 func (t Task) Notice() Notice {
-	return Notice{EffectTarget: t.EffectTarget, TaskID: t.ID, DispatchGeneration: t.DispatchGeneration, ResultID: t.ResultID, Version: 1, Shard: t.Shard, SemanticKey: t.SemanticKey, InputDigest: t.InputDigest, ShardKey: t.ShardKey, LayoutVersion: t.LayoutVersion, Generation: t.Generation, Trace: json.RawMessage(t.Trace)}
+	return Notice{ContractVersion: t.ContractVersion, EffectTarget: t.EffectTarget, TaskID: t.ID, DispatchGeneration: t.DispatchGeneration, Version: 2, SemanticKey: t.SemanticKey, InputDigest: t.InputDigest, Trace: json.RawMessage(t.Trace)}
 }
 
 func (n Notice) validWire() bool {
-	return n.Version == 1 && n.TaskID != uuid.Nil && n.LayoutVersion == 1 && n.SemanticKey != "" && n.InputDigest != "" && n.ShardKey != ""
+	return n.Version == 2 && n.ContractVersion == 1 && n.TaskID != uuid.Nil && n.SemanticKey != "" && n.InputDigest != "" && n.DispatchGeneration > 0
 }
 
 func (n Notice) matches(t Task) bool {
-	return (n.EffectTarget == "" && t.EffectTarget != EffectAI || n.EffectTarget == t.EffectTarget) && n.SemanticKey == t.SemanticKey && n.InputDigest == t.InputDigest && n.ShardKey == t.ShardKey && n.LayoutVersion == t.LayoutVersion && n.Shard == t.Shard && n.Generation == t.Generation
+	return n.EffectTarget == t.EffectTarget && n.SemanticKey == t.SemanticKey && n.InputDigest == t.InputDigest
 }
 
 func Digest(input []byte) (string, []byte, error) {
@@ -218,4 +227,20 @@ func (r Registry) Validate(s Spec) (Definition, error) {
 		return d, fmt.Errorf("%w: %s", ErrInvalid, s.Kind)
 	}
 	return d, nil
+}
+
+// Conclusion keeps domain outcomes distinct from the four lifecycle states.
+func (t Task) Conclusion() string {
+	if t.Outcome != "" {
+		return t.Outcome
+	}
+	return t.State
+}
+
+func Command(kind string) bool {
+	switch kind {
+	case "upload.expire", "object.authorize_delete", "failure.converge", "ai.job.finish":
+		return true
+	}
+	return false
 }

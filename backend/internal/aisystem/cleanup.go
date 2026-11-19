@@ -73,7 +73,7 @@ func (p *Publisher) collectableArtifactBatch(ctx context.Context, i aiprotocol.I
 		if res.RowsAffected != 1 || task.ResourceKey != fmt.Sprintf("object:%s:%d", i.ObjectID, i.ContentGeneration) || task.Pending {
 			continue
 		}
-		if task.Generation > a.Generation || task.State == "succeeded" || task.State == "superseded" || task.State == "rejected" || task.State == "failed" {
+		if task.Generation > a.Generation || task.State == "done" || task.State == "stopped" || task.State == "succeeded" || task.State == "superseded" || task.State == "rejected" || task.State == "failed" {
 			out = append(out, a.ArtifactID)
 		}
 	}
@@ -81,11 +81,12 @@ func (p *Publisher) collectableArtifactBatch(ctx context.Context, i aiprotocol.I
 	// Finish cross-store inspection before opening the local transaction. The
 	// retirement grace exceeds the maximum processing authorization lifetime;
 	// accepted results are retained until their receipt has been acknowledged.
-	if err := p.Control.DB.WithContext(ctx).Raw(`SELECT count(*) FROM tasks t WHERE t.resource_key=? AND t.kind<>'ai.artifact.gc' AND (t.state NOT IN ('succeeded','superseded','rejected','failed','quarantined','needs_attention') OR EXISTS(SELECT 1 FROM results r WHERE r.task_id=t.id AND r.committed_at IS NULL))`, fmt.Sprintf("object:%s:%d", i.ObjectID, i.ContentGeneration)).Scan(&pending).Error; err != nil {
+	if err := p.Control.DB.WithContext(ctx).Raw(`SELECT count(*) FROM tasks t WHERE t.resource_key=? AND t.kind<>'ai.artifact.gc' AND (t.state NOT IN ('done','stopped','succeeded','superseded','rejected','failed','quarantined','needs_attention') OR EXISTS(SELECT 1 FROM results r WHERE r.task_id=t.id AND r.committed_at IS NULL))`, fmt.Sprintf("object:%s:%d", i.ObjectID, i.ContentGeneration)).Scan(&pending).Error; err != nil {
 		return nil, false, next, err
 	}
 	return out, pending == 0, next, nil
 }
+
 func (p *Publisher) cleanArtifacts(tx *gorm.DB, i aiprotocol.Intent, ids []uuid.UUID, versionsSafe bool) (bool, error) {
 	if len(ids) > 0 {
 		keep := []uuid.UUID{}
@@ -253,6 +254,7 @@ func (p *Projector) deleteProjectionTarget(ctx context.Context, backend string, 
 	}
 	return nil
 }
+
 func publishDelete(tx *gorm.DB, in aiprotocol.Input, a Artifact) error {
 	d, err := decode[cleanupData](a.Data)
 	if err != nil {

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/aiprotocol"
@@ -40,70 +39,47 @@ type receipt struct {
 }
 
 func (receipt) TableName() string { return "async_commit_receipts" }
-func (c *Committer) Commit(ctx context.Context, n asynccontrol.Notice) error {
+
+// Apply commits one domain effect and its receipt in one short transaction.
+// It owns neither MQ acknowledgement nor control completion.
+func (c *Committer) Apply(ctx context.Context, t asynccontrol.Task, r asynccontrol.Result) (string, *time.Time, error) {
+	if err := c.Control.AcceptedResult(ctx, t, r); err != nil {
+		return "", nil, err
+	}
 	started := time.Now()
 	defer func() { c.Control.CommitCalls.Add(1); c.Control.CommitNanos.Add(uint64(time.Since(started))) }()
-	t, r, err := c.Control.LoadResult(ctx, n)
-	if errors.Is(err, asynccontrol.ErrObsolete) {
-		return nil
-	}
-	if err != nil {
-		if errors.Is(err, asynccontrol.ErrInvalid) || errors.Is(err, asynccontrol.ErrConflict) || errors.Is(err, gorm.ErrRecordNotFound) {
-			return c.Control.IsolateResult(ctx, n, err.Error())
-		}
-		return err
-	}
-	if asynccontrol.Terminal(t.State) && t.State != asynccontrol.NeedsAttention {
-		return nil
-	}
-	ctx, span := asynccontrol.BeginTrace(ctx, t, "commit")
-	defer span.End()
 	var in asyncprotocol.Input
 	var out asyncprotocol.Output
-	if json.Unmarshal(t.Input, &in) != nil || json.Unmarshal(r.Body, &out) != nil {
-		return c.Control.IsolateResult(ctx, n, "invalid result payload")
+	if json.Unmarshal(t.Input, &in) != nil || (t.ResultID != nil && json.Unmarshal(r.Body, &out) != nil) {
+		return "", nil, asynccontrol.ErrInvalid
+	}
+	if t.Kind == "failure.converge" {
+		out.Convergence = true
+		out.Error = "upload.async_exhausted"
 	}
 	var decision asyncprotocol.Decision
 	apply := func(out asyncprotocol.Output) error {
-		var last error
-		for attempt := 0; attempt < 3; attempt++ {
-			bounded, cancel := context.WithTimeout(ownerepoch.Background(ctx), c.timeout())
-			last = c.Business.WithContext(bounded).Transaction(func(tx *gorm.DB) error {
-				if err := tx.Exec("SET LOCAL lock_timeout='2s'; SET LOCAL statement_timeout='10s'").Error; err != nil {
-					return err
-				}
-				var err error
-				decision, err = c.commitTx(tx, t, r, in, out)
+		bounded, cancel := context.WithTimeout(ownerepoch.Background(ctx), c.timeout())
+		defer cancel()
+		return c.Business.WithContext(bounded).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Exec("SET LOCAL lock_timeout='2s'; SET LOCAL statement_timeout='10s'").Error; err != nil {
 				return err
-			})
-			cancel()
-			if !transient(last) {
-				return last
 			}
-		}
-		return last
+			var err error
+			decision, err = c.commitTx(tx, t, r, in, out)
+			return err
+		})
 	}
-	err = apply(out)
+	err := apply(out)
 	if errors.Is(err, upload.ErrNameConflict) || errors.Is(err, upload.ErrNotFound) || errors.Is(err, drive.ErrConflict) || errors.Is(err, drive.ErrNotFound) || errors.Is(err, gorm.ErrDuplicatedKey) {
 		out.Convergence = true
 		out.Error = "upload.commit_precondition_failed"
 		err = apply(out)
 	}
-	if err != nil {
-		if errors.Is(err, asynccontrol.ErrConflict) || errors.Is(err, asynccontrol.ErrInvalid) || errors.Is(err, upload.ErrInvalidInput) || errors.Is(err, media.ErrInvalidResult) || errors.Is(err, gorm.ErrRecordNotFound) {
-			return c.Control.IsolateResult(ctx, n, err.Error())
-		}
-		return err
+	if err == nil && decision.RescheduleAt == nil && c.AfterCommit != nil {
+		err = c.AfterCommit()
 	}
-	if decision.RescheduleAt != nil {
-		return c.Control.Reschedule(ctx, t, r, *decision.RescheduleAt)
-	}
-	if c.AfterCommit != nil {
-		if err := c.AfterCommit(); err != nil {
-			return err
-		}
-	}
-	return c.Control.Report(ctx, t, r, decision.Outcome)
+	return decision.Outcome, decision.RescheduleAt, err
 }
 
 func (c *Committer) timeout() time.Duration {
@@ -113,12 +89,7 @@ func (c *Committer) timeout() time.Duration {
 	return 10 * time.Second
 }
 
-func transient(err error) bool {
-	var pg *pgconn.PgError
-	return errors.As(err, &pg) && (pg.Code == "40P01" || pg.Code == "40001" || pg.Code == "55P03")
-}
-
-// commitTx is shared by single-result fallback and compatible owner batches.
+// commitTx serializes one semantic effect and validates its immutable receipt.
 func (c *Committer) commitTx(tx *gorm.DB, t asynccontrol.Task, r asynccontrol.Result, in asyncprotocol.Input, out asyncprotocol.Output) (decision asyncprotocol.Decision, err error) {
 	if err := dblock.Transaction(tx, "async:commit:"+t.SemanticKey); err != nil {
 		return decision, err
@@ -135,6 +106,9 @@ func (c *Committer) commitTx(tx *gorm.DB, t asynccontrol.Task, r asynccontrol.Re
 		decision.Outcome = existing.Outcome
 		c.Control.ReceiptHits.Add(1)
 		return decision, nil
+	}
+	if t.Phase == "reconcile" {
+		return decision, asynccontrol.ErrReceiptMissing
 	}
 	if in.SessionID != uuid.Nil {
 		decision, err = c.Upload.CommitAsync(tx, t.Kind, in, out)

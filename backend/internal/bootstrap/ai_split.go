@@ -193,12 +193,16 @@ func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, rol
 		}
 		return serveInternal(ctx, cfg, logger, "ai-query-v2", cfg.AISplit.QueryAddr, cfg.AISplit.QueryAdvertise, cfg.AISplit.QueryToken, "/yunpan.ai.v2.AIQueryService/", func(s *grpc.Server) { pbv2.RegisterAIQueryServiceServer(s, svc) })
 	}
-	ctrl, ctrlSQL, err := dependencies.OpenRoleDB(ctx, cfg, cfg.Async.ControlDSN, false)
+	controlCfg := cfg
+	controlCfg.Postgres.MaxOpenConns = cfg.Async.ControlMaxOpen
+	ctrl, ctrlSQL, err := dependencies.OpenRoleDB(ctx, controlCfg, dependencies.ControlDSN(cfg.Async.ControlDSN), false)
 	if err != nil {
 		return err
 	}
 	defer ctrlSQL.Close()
-	critical, criticalSQL, err := dependencies.OpenRoleDB(ctx, cfg, cfg.Async.ControlDSN, false)
+	criticalCfg := cfg
+	criticalCfg.Postgres.MaxOpenConns = cfg.Async.CriticalMaxOpen
+	critical, criticalSQL, err := dependencies.OpenRoleDB(ctx, criticalCfg, dependencies.ControlDSN(cfg.Async.ControlDSN), false)
 	if err != nil {
 		return err
 	}
@@ -210,19 +214,15 @@ func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, rol
 	store.PlanFailure = planner.Failure
 	store.Observe = planner.Observe
 	store.AfterTerminal = planner.Finish
-	broker := asynccontrol.NewBroker(cfg.TaskQueue.URL, store.Shards, cfg.Async.BrokerPrefix)
+	broker := asynccontrol.NewBroker(cfg.TaskQueue.URL, cfg.Async.BrokerPrefix)
 	defer broker.Close()
 	stopMonitor, err := splitMonitor(ctx, cfg, db, broker, logger)
 	if err != nil {
 		return err
 	}
 	defer stopMonitor()
-	if err := store.CheckLayout(ctx); err != nil {
+	if err := store.CheckProtocol(ctx); err != nil {
 		return err
-	}
-	if role == "ai-committer" {
-		publisher := &aisystem.Publisher{DB: db, Control: store}
-		return store.RunCommittersFor(ctx, broker, asynccontrol.EffectAI, cfg.App.InstanceID, publisher.Commit, logger)
 	}
 	parserTarget := cfg.Parser.Target
 	parserOptions := splitClientOptions(cfg, "parser", clientMetrics)
@@ -252,8 +252,13 @@ func RunAISplit(ctx context.Context, cfg config.Config, logger *slog.Logger, rol
 	if queue == "" {
 		return fmt.Errorf("unknown AI role %s", role)
 	}
+	publisher := &aisystem.Publisher{DB: db, Control: store}
+	apply := func(c context.Context, t asynccontrol.Task, r asynccontrol.Result) (string, *time.Time, error) {
+		outcome, err := publisher.Publish(c, t, r)
+		return outcome, nil, err
+	}
 	worker := func(c context.Context, q string, n int) error {
-		return store.RunWorker(c, broker, q, n, computer.Compute, aisystem.IsPermanentComputeError, logger)
+		return store.RunWorker(c, broker, q, n, computer.Compute, aisystem.IsPermanentComputeError, logger, apply)
 	}
 	if role == "ai-content-worker" {
 		return runAsyncGroup(ctx, func(c context.Context) error { return worker(c, queue, cfg.Async.Concurrency) }, func(c context.Context) error { return worker(c, "ai-maintenance", 1) })
@@ -331,7 +336,7 @@ func splitMonitor(ctx context.Context, cfg config.Config, db *gorm.DB, broker *a
 			_, _ = expfmt.MetricFamilyToText(w, family)
 		}
 		fmt.Fprintf(w, "bx_ai_role_up{role=%q} 1\n", cfg.Role)
-		if cfg.Role != "core-internal" {
+		if cfg.Role == "ai-query" {
 			var rows []struct {
 				Capability, LatestBuildState string
 				Count                        int64

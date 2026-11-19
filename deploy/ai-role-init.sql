@@ -14,8 +14,8 @@ GRANT SELECT ON ai_published_objects,ai_published_sources,ai_published_blocks,ai
 GRANT INSERT ON ai_artifact_manifests TO yunpan_ai_compute;
 GRANT SELECT ON ai_summary_checkpoints TO yunpan_ai_compute;
 GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO yunpan_ai_commit;
--- Query cannot read staging even by guessing an artifact UUID. Compute cannot
--- update an object/pointer/receipt or modify any published content row.
+-- Query stays restricted. Background v2 workers use the existing commit role
+-- for staging and domain-local publication; the old compute role is retired.
 REVOKE ALL ON ai_artifact_manifests FROM yunpan_ai_query;
 REVOKE ALL ON ai_summary_checkpoints FROM yunpan_ai_query;
 REVOKE UPDATE,DELETE ON ai_artifact_manifests FROM yunpan_ai_compute;

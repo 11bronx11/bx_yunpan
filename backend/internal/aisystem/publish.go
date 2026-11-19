@@ -3,7 +3,6 @@ package aisystem
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -23,27 +22,13 @@ type Publisher struct {
 	Control *asynccontrol.Store
 }
 
-func (p *Publisher) Commit(ctx context.Context, n asynccontrol.Notice) error {
-	t, r, err := p.Control.LoadResult(ctx, n)
-	if errors.Is(err, asynccontrol.ErrObsolete) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if t.EffectTarget != asynccontrol.EffectAI || r.EffectTarget != asynccontrol.EffectAI {
-		return asynccontrol.ErrConflict
-	}
-	ctx, span := asynccontrol.BeginTrace(ctx, t, "commit")
-	defer span.End()
-	outcome, err := p.Publish(ctx, t, r)
-	if err != nil {
-		return err
-	}
-	return p.Control.Report(ctx, t, r, outcome)
-}
-
 func (p *Publisher) Publish(ctx context.Context, t asynccontrol.Task, r asynccontrol.Result) (resultOutcome string, publishErr error) {
+	if p.Control == nil {
+		return "", asynccontrol.ErrInvalid
+	}
+	if err := p.Control.AcceptedResult(ctx, t, r); err != nil {
+		return "", err
+	}
 	ctx, finishTrace := stageTrace(ctx, "ai.publish")
 	defer func() { finishTrace(publishErr) }()
 	outcome := ""
@@ -77,6 +62,9 @@ func (p *Publisher) Publish(ctx context.Context, t asynccontrol.Task, r asynccon
 			outcome = prior.Outcome
 			slog.InfoContext(ctx, "AI publish receipt reused", "task_id", t.ID, "result_id", r.ID, "request_id", in.Intent.RequestID, "object_id", out.ObjectID, "content_generation", out.ContentGeneration, "version_id", out.OutputID)
 			return nil
+		}
+		if t.Phase == "reconcile" {
+			return asynccontrol.ErrReceiptMissing
 		}
 		var artifact Artifact
 		if err := tx.Where("artifact_id=?", out.ArtifactID).Take(&artifact).Error; err != nil {

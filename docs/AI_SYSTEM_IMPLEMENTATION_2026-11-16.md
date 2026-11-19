@@ -1,6 +1,6 @@
 # AI 独立系统实现与验证记录
 
-日期：2026-11-16。施工基准为根目录 `AI_SYSTEM_SPLIT_CONSTRUCTION_2026-11-16.md`；该施工书保留为需求快照，本文记录实际代码、执行证据和运行边界。原有异步系统说明仍见 `ASYNC_SYSTEM_IMPLEMENTATION_2026-11-16.md`。
+更新：2026-11-19；原基线日期 2026-11-16。当前协调链路以 `ASYNC_COORDINATION_SIMPLIFICATION_PLAN_2026-11-19.md` 为准，最新验证/部署边界见 [协调裁剪交付报告](ASYNC_COORDINATION_IMPLEMENTATION_2026-11-19.md)。施工基准为根目录 `AI_SYSTEM_SPLIT_CONSTRUCTION_2026-11-16.md`；该施工书保留为需求快照，本文记录实际代码、执行证据和运行边界。原有异步系统说明仍见 `ASYNC_SYSTEM_IMPLEMENTATION_2026-11-16.md`。
 
 ## 1. 实际实现
 
@@ -11,12 +11,12 @@
 | `api` | 业务库、HTTP、AI v2 client；文件名搜索由 core 自己处理 |
 | `core-internal` | 业务只读账号；文件/目录/scope/证据回验；任务对象短期读取授权 |
 | `async-control` | 业务只读、控制库、MQ；冻结任务、调度、恢复及后继释放 |
-| `committer` | 控制库、业务写账号；核心业务效果与 AI 用户作业收尾 |
+| 核心领域 worker / gc-worker | 业务写池；领域事务，GC 的 core-command 消费者终结 AI 用户作业 |
 | `ai-query` | AI 发布视图只读、core RPC、按需模型；无控制库/MQ |
-| `ai-content-worker` | parser、core RPC、AI staging；独立 source/text 任务及维护队列 |
-| `ai-embedding-worker` | 已发布子文本、embedding、staging |
-| `ai-summary-worker` | 已发布规范源块、chat、staging |
-| `ai-committer` | 已接纳控制结果、AI 发布账号、receipt、CAS 与墓碑 |
+| `ai-content-worker` | parser、core RPC、AI staging/发布；独立 source/text 任务及维护队列 |
+| `ai-embedding-worker` | 已发布子文本、embedding、staging/发布 |
+| `ai-summary-worker` | 已发布规范源块、chat、staging/发布 |
+| AI worker / projector 的 Publish 调用 | 控制接纳后在本进程校验并发布、写 receipt、回报控制库 |
 | `ai-text-projector` | AI 发布视图、staging、ES；不调用 Qdrant |
 | `ai-vector-projector` | AI 发布视图、staging、Qdrant；不调用 ES |
 | `parser-svc` | Go gRPC + Python 子进程；无 PG/MQ |
@@ -25,11 +25,11 @@
 
 ### 控制接纳与发布
 
-`effect_target` 区分 none/core/AI。AI 结果通知使用独立的 `*.result.ai.NN` 分片，与 core committer 分开消费。worker 只写不可变 staging manifest；控制库接纳后，AI committer 校验 task/generation/input/artifact hash、行数、字节数、输出引用，再在 AI 本地事务发布版本和 receipt。跨库回报丢失时命中同一 receipt，避免二次切 active。
+`effect_target` 区分 none/core/AI。v2 不再声明结果队列或启动独立 ai-committer；worker 写不可变 staging manifest，控制接纳 checkpoint 后保留当前 token，由同一 worker 校验 task/generation/input/artifact hash、行数、字节数、输出引用，再在 AI 本地事务发布版本和 receipt。跨库回报丢失时命中同一 receipt，避免二次切 active。
 
-后继在结果接纳时冻结，父结果确认和后继 ensure 在控制库同一事务完成。superseded 结果抑制后继；computed 结果只补发。source/text/vector/summary 分别维护 desired seq 和 active pointer；旧失败快照不能覆盖新成功，旧 source/vector 不能跨越当前依赖版本。墓碑保留同世代不可复活语义。
+后继在结果接纳时冻结，父结果确认和后继 ensure 在控制库同一事务完成。superseded 结果抑制后继；已接纳结果从普通工作通知恢复提交，不再调用模型重算。source/text/vector/summary 分别维护 desired seq 和 active pointer；旧失败快照不能覆盖新成功，旧 source/vector 不能跨越当前依赖版本。墓碑保留同世代不可复活语义。
 
-用户作业由控制库关联任务并汇总，通过 core `ai.job.finish` 提交业务结论；AI 不修改业务作业表。迁移接入旧作业时追加 durable observer，不修改已冻结的输入和预算。无法映射的 processing 旧作业获得 `needs_attention` 结论。
+用户作业由控制库关联任务并汇总，通过 gc-worker 的 core-command `ai.job.finish` 提交业务结论；AI 不修改业务作业表。迁移接入旧作业时追加 durable observer，不修改已冻结的输入和预算。无法映射的 processing 旧作业获得 `needs_attention` 结论。
 
 ### 独立能力与检索
 
@@ -69,13 +69,13 @@ AI staging、退休版本和未接纳的外部物理输出按宽限窗口维护�
 | lane | 当前版本 | 内容 |
 |---|---|---|
 | business | 36 | 035 请求/意图/作业，036 切换证明；没有自动移动旧表 |
-| control | 4 | 003 AI target/后继/作业关联，004 durable job observers |
+| control | 5 | 003 AI target/后继/作业关联，004 durable job observers，005 worker 提交协议/交接/fence |
 | AI | 7 | 独立内容与版本、staging、receipt、投影、manifest、清理事实和发布视图 |
 | archive | 1 | 显式移动旧 7 表及保存外部 FK 定义；独立 down 恢复 |
 
-AI 三种在线账号分别为 `AI_QUERY_DSN`、`AI_COMPUTE_DSN`、`AI_COMMIT_DSN`。`AI_MIGRATION_DSN` 只给一次性工具；缺失不会回退业务库。query 只读发布视图、不能读 staging，compute 只能插 staging，committer 可发布。`ai-role-init.sql` 初始化这些账号。服务 bearer token 与用户/任务 grant 分开；grant 用 Ed25519、audience 和到期时间约束。TLS/mTLS 配置已接入，实际 smoke 使用内部网络服务 token，没有宣称验证 TLS 证书部署。
+AI query 使用 `AI_QUERY_DSN`；后台 worker/projector 使用既有 `AI_COMMIT_DSN` 写 staging 并发布，`AI_COMPUTE_DSN` 保留为历史账号。`AI_MIGRATION_DSN` 只给一次性工具；缺失不会回退业务库。query 只读发布视图、不能读 staging，后台账号可执行 AI 本地领域提交；旧 compute 账号权限保留，不再供默认在线角色使用。`ai-role-init.sql` 初始化这些账号。服务 bearer token 与用户/任务 grant 分开；grant 用 Ed25519、audience 和到期时间约束。TLS/mTLS 配置已接入，实际 smoke 使用内部网络服务 token，没有宣称验证 TLS 证书部署。
 
-`AI_ENABLED`、`AI_VECTORS_ENABLED`、`AI_SUMMARY_ENABLED`、`AI_ASK_ENABLED` 分开控制。embedding revision 和 summary model/revision/prompt 分开版本化。新增键已同步两个 env 模板和 Compose；277 个模板键一致。`init-env.sh` 只补缺项并保留已有配置/密钥。AI 角色不获得业务 DSN/迁移凭据；核心 API 不获得控制库/MQ/AI DB 凭据。
+`AI_ENABLED`、`AI_VECTORS_ENABLED`、`AI_SUMMARY_ENABLED`、`AI_ASK_ENABLED` 分开控制。embedding revision 和 summary model/revision/prompt 分开版本化。新增键已同步两个 env 模板和 Compose；267 个模板键一致（2026-11-19）。`init-env.sh` 只补缺项并保留已有配置/密钥。AI 角色不获得业务 DSN/迁移凭据；核心 API 不获得控制库/MQ/AI DB 凭据。
 
 ### 新安装
 
@@ -92,7 +92,9 @@ AI 三种在线账号分别为 `AI_QUERY_DSN`、`AI_COMPUTE_DSN`、`AI_COMMIT_DS
 
 ### 保留数据升级
 
-停止旧 AI/search 写者后运行 AI 专用交接，不重跑核心 async-import：
+以下 AI 历史格式交接仅适用于尚未完成 11-16 AI 拆分的数据。已有独立 AI 系统的本次 v1→v2 协调升级只执行 async-handover，不重跑本段 prepare/archive 或核心 async-import。
+
+停止旧 AI/search 写者后，按需运行 AI 专用交接：
 
 ```bash
 AI_LEGACY_WRITERS_STOPPED=true ./deploy/ai-upgrade.sh prepare
@@ -124,7 +126,9 @@ AI_LEGACY_WRITERS_STOPPED=true ./deploy/ai-upgrade.sh archive RUN_UUID
 
 首次从旧核心异步系统迁移才执行核心 async-import；本轮 AI 工具不代替它。宿主机地址和 metrics 18083–18100 从同一 `.env` 派生，避免与容器争用端口。
 
-## 3. 已执行的验证
+## 3. 11-16 历史验证记录
+
+本节保留旧协议的原执行证据，不代表 v2 结果队列/committer 仍在线；本轮实测见 2026-11-19 报告。
 
 证据目录：`artifacts/ai-split-20261116/`（git 忽略；含凭据的测试 env 文件为 0600，不要提交或打印）。
 
@@ -162,7 +166,9 @@ MQ 使用测试实例和每次独立 vhost；MinIO 使用测试实例和独立 b
 
 保留迁移夹具有 3 个历史对象：1 个登记并重建父子文本、1 个保留旧停止结论、1 个记录不支持；1 份旧 summary 在 archive up/down 后保持原文。旧工作继承 attempts=3、dispatches=4、recoveries=2 和原 deadline。作业 attachment 和无法映射旧作业的 durable 结论另有用例。以上均为专用 fixture；没有批量搬迁现有业务库的历史文件，也没有对现有业务库归档。
 
-## 4. 运行状态与边界
+## 4. 11-16 历史运行状态与边界
+
+本节为当时部署快照。本轮没有更新这些旧容器，不能作为 2026-11-19 当前运行状态。
 
 当前代码与契约已在工作区实现；现有业务栈未升级。独立 Compose 项目 `bx-ai-split-smoke-20261116` 已启动新角色，Web 为 `http://127.0.0.1:27480`，配置位于证据目录下 `compose-smoke/deploy/.env`。该专用配置与现有 `deploy/.env`、业务数据卷分开。
 

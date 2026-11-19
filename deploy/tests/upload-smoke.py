@@ -84,7 +84,7 @@ def main():
         reader = urlsplit(reader_dsn).username
         if not reader or not reader.replace("_", "").isalnum(): raise ValueError("invalid dedicated reader")
         sql(biz, f'GRANT CONNECT ON DATABASE "{business}" TO "{reader}"; GRANT USAGE ON SCHEMA public TO "{reader}"; GRANT SELECT ON ALL TABLES IN SCHEMA public TO "{reader}";')
-        for role in ["api", "async-control", "committer", "upload-worker", "object-worker"]:
+        for role in ["api", "async-control", "upload-worker", "object-worker"]:
             local = dict(env, SERVICE_INSTANCE_ID="upload-smoke-" + role, WORKER_METRICS_ADDR=f"127.0.0.1:{core.port()}", HTTP_ADDR=f"127.0.0.1:{api_port}")
             with (out / (role + ".log")).open("w") as log:
                 processes.append(subprocess.Popen([str(binaries / role)], cwd=core.checks.ROOT / "backend", env=local, stdout=log, stderr=subprocess.STDOUT, start_new_session=True))

@@ -16,16 +16,16 @@ import (
 )
 
 func runAsyncAux(ctx context.Context, cfg config.Config, queue string, logger *slog.Logger, aux func(context.Context, asynccontrol.Task, asyncprotocol.Input) error) error {
-	deps, err := dependencies.OpenAsync(ctx, cfg, false)
+	deps, err := dependencies.OpenAsync(ctx, cfg, "async-control")
 	if err != nil {
 		return err
 	}
 	defer deps.Close()
 	s := asyncStore(deps, cfg)
-	if err := s.CheckLayout(ctx); err != nil {
+	if err := s.CheckProtocol(ctx); err != nil {
 		return err
 	}
-	broker := asynccontrol.NewBroker(cfg.TaskQueue.URL, s.Shards, cfg.Async.BrokerPrefix)
+	broker := asynccontrol.NewBroker(cfg.TaskQueue.URL, cfg.Async.BrokerPrefix)
 	defer broker.Close()
 	computer := &asyncjobs.Computer{Control: s, Read: deps.Read, Auxiliary: aux}
 	return s.RunWorker(ctx, broker, queue, cfg.Async.Concurrency, func(ctx context.Context, t asynccontrol.Task) (json.RawMessage, error) {

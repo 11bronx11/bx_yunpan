@@ -19,7 +19,7 @@ scrape_configs:
   - job_name: bx-yunpan-workers
     metrics_path: /metrics
     dns_sd_configs:
-      - names: ["async-control", "committer", "object-worker", "media-worker", "gc-worker", "upload-worker", "search-indexer"]
+      - names: ["async-control", "object-worker", "media-worker", "gc-worker", "upload-worker", "search-indexer"]
         type: A
         port: 8083
     relabel_configs:

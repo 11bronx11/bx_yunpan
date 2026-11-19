@@ -102,11 +102,17 @@ func TestAICrashProcessHelper(t *testing.T) {
 	}
 	pool, _ := db.DB()
 	defer pool.Close()
-	publisher := Publisher{DB: db}
+	controlDB, err := gorm.Open(postgres.Open(os.Getenv("AI_DEEP_CRASH_CONTROL_DSN")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal("child control unavailable")
+	}
+	controlPool, _ := controlDB.DB()
+	defer controlPool.Close()
+	publisher := Publisher{DB: db, Control: asynccontrol.New(controlDB)}
 	if _, err := publisher.Publish(context.Background(), payload.Task, payload.Result); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(fixture+".published", []byte("published"), 0600); err != nil {
+	if err := os.WriteFile(fixture+".published", []byte("published"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// The parent kills us at this exact post-commit/pre-Report barrier.
@@ -150,7 +156,7 @@ func TestAICommitterSIGKILLWindows(t *testing.T) {
 			}
 			path := filepath.Join(t.TempDir(), "payload.json")
 			b, _ := json.Marshal(crashPayload{task, result})
-			if err := os.WriteFile(path, b, 0600); err != nil {
+			if err := os.WriteFile(path, b, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			executable, err := os.Executable()
@@ -160,7 +166,7 @@ func TestAICommitterSIGKILLWindows(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			child := exec.CommandContext(ctx, executable, "-test.run=^TestAICrashProcessHelper$", "-test.v")
-			child.Env = append(os.Environ(), "AI_DEEP_CRASH_FIXTURE="+path, "AI_DEEP_CRASH_DSN="+scopedAIConnection(t, db))
+			child.Env = append(os.Environ(), "AI_DEEP_CRASH_FIXTURE="+path, "AI_DEEP_CRASH_DSN="+scopedAIConnection(t, db), "AI_DEEP_CRASH_CONTROL_DSN="+scopedControlConnection(t, store))
 			var childOutput strings.Builder
 			child.Stdout = &childOutput
 			child.Stderr = &childOutput

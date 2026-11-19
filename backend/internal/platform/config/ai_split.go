@@ -62,7 +62,7 @@ func (c Config) validateAISplit() error {
 		}
 		return nil
 	}
-	dsn := a.ComputeDSN
+	dsn := a.CommitDSN
 	if c.Role == "ai-query" {
 		dsn = a.QueryDSN
 	}
@@ -108,6 +108,12 @@ func (c Config) validateAISplit() error {
 	}
 	if (c.Role == "ai-text-projector" || c.Role == "ai-vector-projector") && c.Search.WriteTimeout <= 0 {
 		return errors.New("AI projection write timeout must be positive")
+	}
+	if err := c.Async.validateRuntime(); err != nil {
+		return err
+	}
+	if c.Async.BrokerPrefix == c.Async.LegacyBrokerPrefix {
+		return errors.New("AI worker needs a distinct v2 broker prefix")
 	}
 	if c.Async.ControlDSN == "" || c.TaskQueue.URL == "" {
 		return errors.New("AI asynchronous roles require control PG and RabbitMQ")

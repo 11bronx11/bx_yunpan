@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -104,7 +105,7 @@ func ackBroker(t *testing.T) *asynccontrol.Broker {
 	if base == "" {
 		t.Skip("dedicated test broker required")
 	}
-	b := asynccontrol.NewBroker(base, 32, "bx.ai.ack."+uuid.NewString())
+	b := asynccontrol.NewBroker(base, "bx.ai.ack."+uuid.NewString())
 	b.Timeout = 20 * time.Second
 	t.Cleanup(func() {
 		b.Close()
@@ -123,13 +124,6 @@ func ackBroker(t *testing.T) *asynccontrol.Broker {
 		for _, q := range asynccontrol.WorkQueues() {
 			if _, err := ch.QueueDelete(b.WorkQueue(q), false, false, false); err != nil {
 				t.Error(err)
-			}
-		}
-		for n := 0; n < 32; n++ {
-			for _, target := range []string{asynccontrol.EffectAI, asynccontrol.EffectCore} {
-				if _, err := ch.QueueDelete(b.ResultQueueFor(target, n), false, false, false); err != nil {
-					t.Error(err)
-				}
 			}
 		}
 		if _, err := ch.QueueDelete(b.Prefix+".dead", false, false, false); err != nil {
@@ -157,6 +151,7 @@ func scopedControlConnection(t *testing.T, s *asynccontrol.Store) string {
 	}
 	q := u.Query()
 	q.Set("search_path", schema+",public")
+	q.Set("options", "-c bx.coordination_protocol=v2")
 	u.RawQuery = q.Encode()
 	return u.String()
 }
@@ -193,25 +188,33 @@ func TestAIAckProcessHelper(t *testing.T) {
 	s.PlanFailure = planner.Failure
 	s.Observe = planner.Observe
 	s.AfterTerminal = planner.Finish
-	b := asynccontrol.NewBroker(os.Getenv("AI_DEEP_ACK_BROKER"), 32, f.Prefix)
+	b := asynccontrol.NewBroker(os.Getenv("AI_DEEP_ACK_BROKER"), f.Prefix)
 	b.Timeout = 20 * time.Second
 	defer b.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	p := &Publisher{DB: open("AI_DEEP_AI_DSN"), Control: s}
+	apply := func(c context.Context, t asynccontrol.Task, r asynccontrol.Result) (string, *time.Time, error) {
+		o, e := p.Publish(c, t, r)
+		return o, nil, e
+	}
 	if f.Mode == "worker" {
 		err = s.RunWorker(ctx, b, f.Queue, 1, func(context.Context, asynccontrol.Task) (json.RawMessage, error) {
-			file, err := os.OpenFile(path+".calls", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+			file, err := os.OpenFile(path+".calls", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 			if err != nil {
 				return nil, err
 			}
 			_, err = file.WriteString("compute\n")
 			_ = file.Close()
 			return f.Body, err
-		}, func(error) bool { return false }, log)
+		}, func(error) bool { return false }, log, apply)
 	} else {
 		p := &Publisher{DB: open("AI_DEEP_AI_DSN"), Control: s}
-		err = s.RunCommittersFor(ctx, b, asynccontrol.EffectAI, "ack-child", p.Commit, log)
+		_ = p
+		err = s.RunWorker(ctx, b, f.Queue, 1, func(context.Context, asynccontrol.Task) (json.RawMessage, error) {
+			return nil, fmt.Errorf("checkpoint must not compute")
+		}, func(error) bool { return true }, log, apply)
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -259,16 +262,28 @@ func TestAIProductionLoopsSIGKILLBeforeACK(t *testing.T) {
 			} else {
 				task = claim(t, s, "ai.source.prepare", in)
 				result, _ = stage(t, db, s, task, in, sourceData{Parsed: ai.ParseResult{Sections: []rag.Section{{Text: "report then ACK", Kind: "text"}}}, Coverage: "complete"}, uuid.New(), 1)
+				if err := s.DB.Exec("UPDATE tasks SET lease_until=clock_timestamp()-interval '1 second' WHERE id=?", task.ID).Error; err != nil {
+					t.Fatal(err)
+				}
+				if err := s.Recover(ctx, 10); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.DB.Exec("UPDATE tasks SET not_before=clock_timestamp() WHERE id=?", task.ID).Error; err != nil {
+					t.Fatal(err)
+				}
+				if err := s.DB.First(&task, "id=?", task.ID).Error; err != nil {
+					t.Fatal(err)
+				}
 				n := task.Notice()
 				n.ResultID = &result.ID
-				if err := b.Publish(ctx, b.ResultQueueFor(asynccontrol.EffectAI, task.Shard), n); err != nil {
+				if err := b.Publish(ctx, b.WorkQueue(task.Queue), n); err != nil {
 					t.Fatal(err)
 				}
 			}
 			proxy, reached, stop := ackGate(t, true)
 			path := filepath.Join(t.TempDir(), "ack.json")
 			raw, _ := json.Marshal(ackFixture{mode, b.Prefix, task.Queue, body})
-			if err := os.WriteFile(path, raw, 0600); err != nil {
+			if err := os.WriteFile(path, raw, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			executable, _ := os.Executable()
@@ -303,21 +318,21 @@ func TestAIProductionLoopsSIGKILLBeforeACK(t *testing.T) {
 				t.Fatalf("ACK emitted before durable result: state=%s attempts=%d child=%s", current.State, current.Attempts, output.String())
 			}
 			if mode == "worker" {
-				if current.State != asynccontrol.Computed {
+				if current.State != asynccontrol.Done {
 					t.Fatal(current.State)
 				}
 				raw, err := os.ReadFile(path + ".calls")
 				if err != nil || string(raw) != "compute\n" {
 					t.Fatal("computation count mismatch")
 				}
-			} else if current.State != asynccontrol.Succeeded {
+			} else if current.State != asynccontrol.Done {
 				t.Fatal("ACK emitted before Report", current.State)
 			}
 			// Reconnect through another observed ACK to prove broker redelivery
 			// reached the actual production loop, rather than checking queue depth.
 			proxy2, replayed, close2 := ackGate(t, false)
 			defer close2()
-			replayBroker := asynccontrol.NewBroker(proxy2, 32, b.Prefix)
+			replayBroker := asynccontrol.NewBroker(proxy2, b.Prefix)
 			replayBroker.Timeout = 20 * time.Second
 			defer replayBroker.Close()
 			live, done := context.WithCancel(ctx)
@@ -343,10 +358,16 @@ func TestAIProductionLoopsSIGKILLBeforeACK(t *testing.T) {
 			replayAI := openReplay(scopedAIConnection(t, db))
 			go func() {
 				if mode == "worker" {
-					finished <- replayStore.RunWorker(live, replayBroker, task.Queue, 1, func(context.Context, asynccontrol.Task) (json.RawMessage, error) { recomputes.Add(1); return body, nil }, func(error) bool { return false }, log)
+					finished <- replayStore.RunWorker(live, replayBroker, task.Queue, 1, func(context.Context, asynccontrol.Task) (json.RawMessage, error) { recomputes.Add(1); return body, nil }, func(error) bool { return false }, log, func(c context.Context, t asynccontrol.Task, r asynccontrol.Result) (string, *time.Time, error) {
+						o, e := (&Publisher{DB: replayAI, Control: replayStore}).Publish(c, t, r)
+						return o, nil, e
+					})
 				} else {
 					p := &Publisher{DB: replayAI, Control: replayStore}
-					finished <- replayStore.RunCommittersFor(live, replayBroker, asynccontrol.EffectAI, "ack-replay", p.Commit, log)
+					finished <- replayStore.RunWorker(live, replayBroker, task.Queue, 1, func(context.Context, asynccontrol.Task) (json.RawMessage, error) { recomputes.Add(1); return body, nil }, func(error) bool { return false }, log, func(c context.Context, t asynccontrol.Task, r asynccontrol.Result) (string, *time.Time, error) {
+						o, e := p.Publish(c, t, r)
+						return o, nil, e
+					})
 				}
 			}()
 			select {

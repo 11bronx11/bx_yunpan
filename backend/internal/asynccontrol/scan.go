@@ -69,18 +69,18 @@ func (s *Store) Maintain(ctx context.Context, limit int, retention time.Duration
 		if err := tx.Exec(`DELETE FROM executions WHERE (task_id,generation) IN (
    SELECT e.task_id,e.generation FROM executions e JOIN tasks t ON t.id=e.task_id
    WHERE e.finished_at<clock_timestamp()-(?*interval '1 millisecond')
-   AND t.state IN ('succeeded','superseded','rejected','failed') ORDER BY e.finished_at LIMIT ?
+   AND t.state IN ('done') ORDER BY e.finished_at LIMIT ?
   )`, retention.Milliseconds(), limit).Error; err != nil {
 			return err
 		}
 		if err := tx.Exec(`UPDATE results SET body='{"archived":true}'::jsonb WHERE id IN (
    SELECT r.id FROM results r JOIN tasks t ON t.id=r.task_id WHERE r.committed_at<clock_timestamp()-(?*interval '1 millisecond')
-   AND t.state IN ('succeeded','superseded','rejected','failed') AND r.body<>'{"archived":true}'::jsonb ORDER BY r.committed_at LIMIT ?
+   AND t.state IN ('done') AND r.body<>'{"archived":true}'::jsonb ORDER BY r.committed_at LIMIT ?
   )`, retention.Milliseconds(), limit).Error; err != nil {
 			return err
 		}
 		if err := tx.Exec(`UPDATE tasks SET input='{"archived":true}'::jsonb,trace='{}'::jsonb WHERE id IN (
- SELECT id FROM tasks WHERE state IN ('succeeded','superseded','rejected','failed') AND updated_at<clock_timestamp()-(?*interval '1 millisecond') AND input<>'{"archived":true}'::jsonb ORDER BY updated_at LIMIT ?
+ SELECT id FROM tasks WHERE state IN ('done') AND updated_at<clock_timestamp()-(?*interval '1 millisecond') AND input<>'{"archived":true}'::jsonb ORDER BY updated_at LIMIT ?
  )`, retention.Milliseconds(), limit).Error; err != nil {
 			return err
 		}
@@ -88,18 +88,18 @@ func (s *Store) Maintain(ctx context.Context, limit int, retention time.Duration
 		// links. Never archive input needed by pending, stopped or unreported work.
 		return tx.Exec(`UPDATE event_inbox SET payload='{"archived":true}'::jsonb,plan=jsonb_build_object('archived',true,'subscriptions',COALESCE((SELECT jsonb_agg(jsonb_build_object('task_id',t.id,'kind',t.kind,'input_digest',t.input_digest)) FROM task_sources s JOIN tasks t ON t.id=s.task_id WHERE s.source_key='event:'||event_inbox.id::text),'[]'::jsonb)) WHERE id IN (
  SELECT e.id FROM event_inbox e WHERE e.status='accepted' AND e.created_at<clock_timestamp()-(?*interval '1 millisecond') AND e.payload<>'{"archived":true}'::jsonb
- AND NOT EXISTS(SELECT 1 FROM task_sources s JOIN tasks t ON t.id=s.task_id WHERE s.source_key='event:'||e.id::text AND t.state NOT IN ('succeeded','superseded','rejected','failed')) ORDER BY e.created_at LIMIT ?
+ AND NOT EXISTS(SELECT 1 FROM task_sources s JOIN tasks t ON t.id=s.task_id WHERE s.source_key='event:'||e.id::text AND t.state NOT IN ('done')) ORDER BY e.created_at LIMIT ?
  )`, retention.Milliseconds(), limit).Error
 	})
 }
 
-func (s *Store) CheckLayout(ctx context.Context) error {
-	var shards string
-	if err := s.DB.WithContext(ctx).Table("control_settings").Select("value").Where("key='shards'").Scan(&shards).Error; err != nil {
+func (s *Store) CheckProtocol(ctx context.Context) error {
+	var protocol string
+	if err := s.DB.WithContext(ctx).Table("control_settings").Select("value").Where("key='coordination_protocol'").Scan(&protocol).Error; err != nil {
 		return err
 	}
-	if shards != fmt.Sprint(s.Shards) {
-		return fmt.Errorf("async layout is fixed at %s shards; configured %d", shards, s.Shards)
+	if protocol != "v2" {
+		return fmt.Errorf("coordination handover incomplete (%s); run async-handover with old writers stopped", protocol)
 	}
 	return nil
 }

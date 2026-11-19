@@ -4,9 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
+
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
 	"gorm.io/gorm"
-	"time"
 )
 
 // OpenRoleDB opens exactly one explicitly supplied DSN. It never falls back
@@ -32,8 +33,9 @@ func OpenRoleDB(ctx context.Context, cfg config.Config, dsn string, readonly boo
 	cfg.Postgres.ConnMaxIdleTime = 5 * time.Minute
 	return openPostgres(ctx, cfg)
 }
+
 func OpenAI(ctx context.Context, cfg config.Config, role string) (*gorm.DB, *sql.DB, error) {
-	dsn := cfg.AISplit.ComputeDSN
+	dsn := cfg.AISplit.CommitDSN
 	if role == "ai-query" {
 		dsn = cfg.AISplit.QueryDSN
 	}
@@ -52,8 +54,8 @@ func OpenAI(ctx context.Context, cfg config.Config, role string) (*gorm.DB, *sql
 	if role == "ai-query" && (canWrite || canStage || canReadStage || canReadCheckpoints) {
 		return fail(errors.New("AI query role has excess privileges"))
 	}
-	if role != "ai-query" && role != "ai-committer" && (canWrite || !canStage) {
-		return fail(errors.New("AI compute requires staging-only write privileges"))
+	if role != "ai-query" && (!canWrite || !canStage) {
+		return fail(errors.New("AI background worker requires staging and publication privileges"))
 	}
 	if role == "ai-summary-worker" && !canReadCheckpoints {
 		return fail(errors.New("AI summary compute requires private checkpoint reads"))

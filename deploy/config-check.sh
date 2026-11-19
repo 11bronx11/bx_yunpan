@@ -23,17 +23,20 @@ if 'redis-coordination' in running:env.update(REDIS_COORDINATION_ADDR='redis-coo
 if running & {'ai-text-projector','ai-vector-projector'}:env['SEARCH_INDEX_ENABLED']='true'
 if 'elasticsearch' in running:env.update(SEARCH_WRITE_BACKENDS='es_qdrant',SEARCH_ES_ENDPOINT=env.get('SEARCH_ES_ENDPOINT') or 'http://elasticsearch:9200',SEARCH_QDRANT_ENDPOINT=env.get('SEARCH_QDRANT_ENDPOINT') or 'http://qdrant:6333')
 model=json.loads(subprocess.check_output(base+['config','--format','json'],env=env))
-required={'api','async-control','committer','upload-worker','object-worker','media-worker','gc-worker'}
+if model['services']['async-control']['environment'].get('ASYNC_BROKER_PREFIX')=='bx.async.v1':
+    env['ASYNC_BROKER_PREFIX']='bx.async.v2'
+    model=json.loads(subprocess.check_output(base+['config','--format','json'],env=env))
+required={'api','async-control','upload-worker','object-worker','media-worker','gc-worker'}
 appenv=model['services']['api']['environment']
 if appenv.get('AI_ENABLED','true')=='true':
-    required.update({'core-internal','ai-query','ai-committer','ai-content-worker','ai-embedding-worker','ai-summary-worker'})
+    required.update({'core-internal','ai-query','ai-content-worker','ai-embedding-worker','ai-summary-worker'})
     if appenv.get('PARSER_REMOTE_ENABLED','true')=='true': required.add('parser-svc')
 if appenv.get('AI_ENABLED','true')=='true' and (appenv.get('SEARCH_INDEX_ENABLED')=='true' or 'elasticsearch' in running):
     if appenv.get('SEARCH_ES_ENDPOINT'):required.add('ai-text-projector')
     if appenv.get('SEARCH_QDRANT_ENDPOINT'):required.add('ai-vector-projector')
 errors=[]
 for service in sorted(required-running): errors.append(service+': not running')
-for old in ('worker','outbox-relay','maintenance-worker','aisvc','ai-indexer','search-indexer'):
+for old in ('committer','ai-committer','worker','outbox-relay','maintenance-worker','aisvc','ai-indexer','search-indexer'):
     if old in running:errors.append(old+': legacy alias running beside new core roles')
 for r in containers:
     service=r['Service']

@@ -61,7 +61,7 @@ compose=(docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml" --p
 mapfile -t parser_ids < <("${compose[@]}" ps -q parser-svc)
 aisvc_failures=0
 if [[ "$ai_enabled" == true ]]; then
- for role in core-internal ai-query ai-committer ai-content-worker ai-embedding-worker ai-summary-worker; do
+ for role in core-internal ai-query ai-content-worker ai-embedding-worker ai-summary-worker; do
   mapfile -t role_ids < <("${compose[@]}" ps -q "$role")
   if ((${#role_ids[@]}==0));then echo "$role: no running containers" >&2;aisvc_failures=$((aisvc_failures+1));fi
   for container_id in "${role_ids[@]}";do
@@ -102,7 +102,7 @@ curl -fsS -o /dev/null -w "web -> storage: HTTP %{http_code}\n" "http://${probe_
 "$deploy_dir/config-check.sh"
 
 # Probe the role metrics endpoints when the distributed profile is active.
-for role in async-control committer object-worker media-worker gc-worker upload-worker; do
+for role in async-control object-worker media-worker gc-worker upload-worker; do
   mapfile -t role_ids < <("${compose[@]}" ps -q "$role")
   if ((${#role_ids[@]} == 0)); then echo "$role: no running containers" >&2; api_failures=$((api_failures+1)); fi
   for container_id in "${role_ids[@]}"; do

@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -32,12 +31,7 @@ import (
 
 	"github.com/11bronx11/bx_yunpan/backend/internal/asynccontrol"
 	"github.com/11bronx11/bx_yunpan/backend/internal/asyncjobs"
-	"github.com/11bronx11/bx_yunpan/backend/internal/drive"
-	"github.com/11bronx11/bx_yunpan/backend/internal/identity"
-	"github.com/11bronx11/bx_yunpan/backend/internal/media"
-	"github.com/11bronx11/bx_yunpan/backend/internal/objectstore"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/config"
-	"github.com/11bronx11/bx_yunpan/backend/internal/upload"
 )
 
 // This test uses actual HTTP, both PostgreSQL databases, quorum RabbitMQ
@@ -70,6 +64,7 @@ func TestAsyncCoreRealDependencies(t *testing.T) {
 		}
 		q := u.Query()
 		q.Set("search_path", schema+",public")
+		q.Set("options", "-c bx.coordination_protocol=v2")
 		u.RawQuery = q.Encode()
 		t.Setenv(key, u.String())
 		scoped, err := gorm.Open(postgres.Open(u.String()), &gorm.Config{})
@@ -97,6 +92,7 @@ func TestAsyncCoreRealDependencies(t *testing.T) {
 			}
 			rq := ru.Query()
 			rq.Set("search_path", schema+",public")
+			q.Set("options", "-c bx.coordination_protocol=v2")
 			ru.RawQuery = rq.Encode()
 			t.Setenv("TEST_POSTGRES_READONLY_DSN", ru.String())
 			reader := ru.User.Username()
@@ -287,25 +283,6 @@ func TestAsyncCoreRealDependencies(t *testing.T) {
 		role := role
 		start(role, func(c context.Context, cfg config.Config, l *slog.Logger) error { return RunAsync(c, cfg, l, role) })
 	}
-	// A real committer instance with an injected report failure exercises the
-	// business-commit/control-report window without faking either database.
-	objects := objectstore.NewService(business)
-	quota := identity.NewService(business, nil, nil, cfg.Identity.DefaultQuotaBytes)
-	uploads := upload.NewService(business, nil, nil, cfg.Storage.Bucket, drive.NewService(business), objects, quota, cfg.Upload)
-	var injection sync.Once
-	committer := &asyncjobs.Committer{Business: business, Control: s, Upload: uploads, Objects: objects, Media: media.NewService(business, objects, nil, nil, cfg.Storage.Bucket, time.Minute), GCDelay: cfg.Outbox.GCDelay, Auxiliary: commitAuxiliary, AfterCommit: func() error {
-		var err error
-		injection.Do(func() { err = fmt.Errorf("injected control report outage") })
-		return err
-	}}
-	s.BatchCommit = committer.CommitBatch
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		b := asynccontrol.NewBroker(cfg.TaskQueue.URL, 32, cfg.Async.BrokerPrefix)
-		defer b.Close()
-		_ = s.RunCommitters(ctx, b, "smoke-committer-"+uuid.NewString(), committer.Commit, logs)
-	}()
 	await("multipart initialized", func() bool { return request("GET", "/api/v1/uploads/"+sessionID, nil, 200)["status"] == "created" })
 	signed := request("POST", "/api/v1/uploads/"+sessionID+"/parts/presign", map[string]any{"part_numbers": []int{1}}, 200)["parts"].([]any)[0].(map[string]any)["url"].(string)
 	put, _ := http.NewRequestWithContext(ctx, "PUT", signed, bytes.NewReader(content))
@@ -356,7 +333,7 @@ func TestAsyncCoreRealDependencies(t *testing.T) {
 	if quotaResult["reserved_bytes"] != float64(0) || quotaResult["used_logical_bytes"] != float64(len(content)) {
 		t.Fatal("quota", quotaResult)
 	}
-	t.Log("real multipart -> merge -> verify -> copy -> file/download -> thumbnail -> staging cleanup passed; injected report failure recovered")
+	t.Log("real multipart -> merge -> verify -> copy -> file/download -> thumbnail -> staging cleanup passed")
 	// AI split publication is exercised by TestAISplitRealDependencies.
 	// Reference and quota regression through the public share-import API.
 	ownerToken := token
@@ -405,7 +382,7 @@ func TestAsyncCoreRealDependencies(t *testing.T) {
 		return reserved == 0
 	})
 	// Move durable test timestamps instead of waiting a real 24-hour TTL. First
-	// force an early notification and verify the committer honors a later expiry.
+	// force an early notification and verify the command worker honors a later expiry.
 	expired := request("POST", "/api/v1/uploads", map[string]any{"folder_id": root, "filename": "expiry.bin", "mime_type": "application/octet-stream", "sha256": strings.Repeat("c", 64), "size_bytes": 1}, 201)["upload"].(map[string]any)["id"].(string)
 	expiryKey := "upload.expire:" + expired
 	await("expiry task registered", func() bool {
@@ -413,18 +390,18 @@ func TestAsyncCoreRealDependencies(t *testing.T) {
 		_ = control.Table("tasks").Where("semantic_key=?", expiryKey).Count(&count).Error
 		return count == 1
 	})
-	if err := control.Exec("UPDATE tasks SET not_before=clock_timestamp() WHERE semantic_key=?", expiryKey).Error; err != nil {
+	if err := control.Exec("WITH changed AS (UPDATE tasks SET not_before=clock_timestamp() WHERE semantic_key=? RETURNING id) UPDATE task_deliveries SET not_before=clock_timestamp() WHERE task_id IN (SELECT id FROM changed)", expiryKey).Error; err != nil {
 		t.Fatal(err)
 	}
 	await("early expiry rescheduled", func() bool {
 		var generation int64
-		_ = control.Table("tasks").Select("generation").Where("semantic_key=?", expiryKey).Scan(&generation).Error
+		_ = control.Table("tasks").Select("commit_attempts").Where("semantic_key=?", expiryKey).Scan(&generation).Error
 		return generation > 0
 	})
 	if err := business.Exec("UPDATE upload_sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE id=?", expired).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := control.Exec("UPDATE tasks SET not_before=clock_timestamp() WHERE semantic_key=?", expiryKey).Error; err != nil {
+	if err := control.Exec("WITH changed AS (UPDATE tasks SET not_before=clock_timestamp() WHERE semantic_key=? RETURNING id) UPDATE task_deliveries SET not_before=clock_timestamp() WHERE task_id IN (SELECT id FROM changed)", expiryKey).Error; err != nil {
 		t.Fatal(err)
 	}
 	await("expiry committed", func() bool { return request("GET", "/api/v1/uploads/"+expired, nil, 200)["status"] == "expired" })

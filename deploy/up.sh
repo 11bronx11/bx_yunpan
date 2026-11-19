@@ -14,7 +14,7 @@ parser_replicas=
 usage() {
   cat <<'USAGE'
 Usage: ./deploy/up.sh [--no-build] [--distributed-workers] [--ai-split] [--redis-split] [--search-indexer] [--search-backends] [--observability] [--api-replicas N] [--aisvc-replicas N] [--parser-replicas N]
-Core default: async-control, committer, upload/object/media/gc workers; independent business/control/AI migrations. AI uses explicit roles by default.
+Core default: async-control, upload/object/media/gc workers; independent business/control/AI migrations. AI uses explicit roles by default.
 --ai-split is a compatibility alias; combined AI execution has retired.
 --distributed-workers is retained as an alias for the default explicit roles.
 The script stops old business/async writers before migration and hands off retained AI work without clearing queues or data.
@@ -56,11 +56,11 @@ if [[ ${AI_ENABLED:-true} == true && ${AI_EMBEDDING_DIMENSION:-1024} != 1024 ]];
   echo 'AI_EMBEDDING_DIMENSION must match vector(1024).' >&2; exit 1
 fi
 profiles=(--profile app)
-services=(postgres async-postgres redis rabbitmq minio minio-init migrate migrate-control async-reader-init api web async-control committer upload-worker object-worker media-worker gc-worker)
-targets=(migrate api async-control committer upload-worker object-worker media-worker gc-worker web)
+services=(postgres async-postgres redis rabbitmq minio minio-init migrate migrate-control async-reader-init api web async-control upload-worker object-worker media-worker gc-worker)
+targets=(async-handover migrate api async-control upload-worker object-worker media-worker gc-worker web)
 if [[ ${AI_ENABLED:-true} == true ]]; then
-  targets+=(core-internal ai-query ai-committer ai-content-worker ai-embedding-worker ai-summary-worker ai-text-projector ai-vector-projector ai-migrate)
-  profiles+=(--profile ai-split); services+=(ai-postgres migrate-ai ai-role-init core-internal ai-query ai-committer ai-content-worker ai-embedding-worker ai-summary-worker)
+  targets+=(core-internal ai-query ai-content-worker ai-embedding-worker ai-summary-worker ai-text-projector ai-vector-projector ai-migrate)
+  profiles+=(--profile ai-split); services+=(ai-postgres migrate-ai ai-role-init core-internal ai-query ai-content-worker ai-embedding-worker ai-summary-worker)
   if [[ "$search_indexer" == true || ${SEARCH_INDEX_ENABLED:-false} == true || "$search_backends" == true ]]; then
     if [[ -n ${SEARCH_ES_ENDPOINT:-} || "$search_backends" == true ]]; then services+=(ai-text-projector); fi
     if [[ -n ${SEARCH_QDRANT_ENDPOINT:-} || "$search_backends" == true ]]; then services+=(ai-vector-projector); fi
@@ -84,14 +84,30 @@ compose=(docker compose --env-file "$env_file" -f "$deploy_dir/compose.yaml")
 if [[ "$build" == true ]]; then "$deploy_dir/build.sh" "${targets[@]}"; fi
 # Fence the old execution authority before either migration/import or new
 # producers can run. Containers/queues/volumes are preserved for inspection.
-"${compose[@]}" --profile app --profile distributed --profile legacy-aliases --profile ai --profile ai-split --profile search --profile parser stop api worker outbox-relay maintenance-worker object-worker media-worker upload-worker aisvc ai-query ai-indexer search-indexer parser-svc async-control committer gc-worker core-internal ai-committer ai-content-worker ai-embedding-worker ai-summary-worker ai-text-projector ai-vector-projector
+"${compose[@]}" --profile app --profile distributed --profile legacy-aliases --profile ai --profile ai-split --profile search --profile parser stop api worker outbox-relay maintenance-worker object-worker media-worker upload-worker aisvc ai-query ai-indexer search-indexer parser-svc async-control gc-worker core-internal ai-content-worker ai-embedding-worker ai-summary-worker ai-text-projector ai-vector-projector
+# Removed services may still exist as preserved containers from an old Compose
+# definition. Stop exactly this project's retired writers by their labels.
+coord_project=$("${compose[@]}" config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')
+for coord_role in committer ai-committer; do
+  mapfile -t coord_containers < <(docker ps -q --filter "label=com.docker.compose.project=$coord_project" --filter "label=com.docker.compose.service=$coord_role")
+  if ((${#coord_containers[@]})); then docker stop "${coord_containers[@]}"; fi
+done
 export ASYNC_LEGACY_WRITERS_STOPPED=true
 export AI_LEGACY_WRITERS_STOPPED=true
 # Complete the cutover before launching any new business writer. API itself
 # keeps no dependency on control PG/MQ; this ordering belongs to deployment.
 COMPOSE_PARALLEL_LIMIT=${COMPOSE_PARALLEL_LIMIT:-1} "${compose[@]}" "${profiles[@]}" up -d --no-build migrate migrate-control async-reader-init
 yunpan_wait_one_shots compose migrate migrate-control async-reader-init
-if [[ ${AI_ENABLED:-true} == true ]]; then "$deploy_dir/ai-upgrade.sh" prepare; fi
+# This is the v1 coordination handover, not a repeat of async-import or AI archive.
+# Existing .env values remain untouched. Retired v1 default needs an explicit
+# new-protocol launch value for this invocation.
+if [[ ${ASYNC_BROKER_PREFIX:-bx.async.v1} == bx.async.v1 ]]; then export ASYNC_BROKER_PREFIX=bx.async.v2; fi
+"${compose[@]}" --profile async-admin run --rm --no-deps async-handover transfer
+"${compose[@]}" --profile async-admin run --rm --no-deps async-handover activate
+if [[ ${AI_ENABLED:-true} == true ]]; then
+  "${compose[@]}" --profile ai-split up -d --no-build migrate-ai ai-role-init
+  yunpan_wait_one_shots compose migrate-ai ai-role-init
+fi
 scale=()
 [[ -z "$api_replicas" ]] || scale+=(--scale "api=$api_replicas")
 if [[ -n "$aisvc_replicas" ]]; then
