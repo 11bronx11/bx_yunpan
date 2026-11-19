@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import styled from '@emotion/styled';
-import { Alert, Button, Modal } from 'antd';
+import { Button, Modal } from 'antd';
 import { EyeOutlined, FolderOutlined, InboxOutlined } from '@ant-design/icons';
 import { useGSAP } from '@gsap/react';
 import { gsap } from 'gsap';
@@ -10,22 +10,6 @@ gsap.registerPlugin(useGSAP);
 const PageRoot = styled.main`
   position: relative;
   min-width: 0;
-`;
-
-export const ErrorNotice = styled(Alert)`
-  &.ant-alert {
-    display: inline-flex;
-    width: fit-content;
-    max-width: 100%;
-    min-width: 0;
-    justify-self: start;
-    align-self: flex-start;
-    padding: 8px 12px;
-    border-radius: var(--radius-control);
-  }
-  .ant-alert-icon { flex-shrink: 0; }
-  .ant-alert-content { min-width: 0; }
-  .ant-alert-message { overflow-wrap: anywhere; }
 `;
 
 const Header = styled.header`

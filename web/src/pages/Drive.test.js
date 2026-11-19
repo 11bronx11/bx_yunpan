@@ -74,12 +74,22 @@ test.each(['children', 'breadcrumb'])('shows a top message when opening a delete
   expect(mockLogout).not.toHaveBeenCalled();
 });
 
-test('keeps an inline error when the first directory cannot be opened', async () => {
-  getChildren.mockRejectedValueOnce(Object.assign(new Error('文件或目录不存在，可能已被删除'), { status: 404, code: 'drive.not_found' }));
+test.each([
+  ['root', getRoot, '请求处理超时，请稍后重试'],
+  ['children', getChildren, '请求处理超时，请稍后重试'],
+  ['breadcrumb', getBreadcrumb, '请求处理超时，请稍后重试'],
+  ['network', getRoot, '网络连接失败，请检查网络后重试'],
+])('shows an initial %s failure at the top and can reload without refreshing the page', async (source, request, text) => {
+  request.mockRejectedValueOnce(new Error(text));
   renderDrive();
 
-  expect(await screen.findByRole('alert')).toHaveTextContent('文件或目录不存在，可能已被删除');
-  expect(screen.getAllByText('文件或目录不存在，可能已被删除')).toHaveLength(1);
+  expect(await screen.findByText(text, { selector: '.ant-message-error span' })).toBeVisible();
+  expect(within(screen.getByRole('main')).queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.queryByText(text, { selector: '.ant-alert-message' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /重新加载/ }));
+  expect(await screen.findByRole('row', { name: '进入目录 空目录' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /重新加载/ })).not.toBeInTheDocument();
+  expect(mockLogout).not.toHaveBeenCalled();
 });
 
 test('opens the stored AI summary for an octet-stream source file', async () => {
@@ -168,6 +178,20 @@ test('loads one bounded page and appends the next page on demand', async () => {
   const signal = getChildren.mock.calls[1][1].signal;
   view.unmount();
   expect(signal.aborted).toBe(true);
+});
+
+test('shows a pagination failure at the top, keeps existing files, and can retry', async () => {
+  getChildren.mockResolvedValueOnce({ items: [pageFile('first.pdf')], page: { has_more: true, next_cursor: 'page-2' } })
+    .mockRejectedValueOnce(new Error('请求处理超时，请稍后重试'))
+    .mockResolvedValueOnce({ items: [pageFile('second.pdf')], page: { has_more: false } });
+  renderDrive();
+  fireEvent.click(await screen.findByRole('button', { name: '加载更多' }));
+  expect(await screen.findByText('请求处理超时，请稍后重试', { selector: '.ant-message-error span' })).toBeVisible();
+  expect(screen.getByText('first.pdf')).toBeInTheDocument();
+  expect(within(screen.getByRole('main')).queryByRole('alert')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '加载更多' }));
+  expect(await screen.findByText('second.pdf')).toBeInTheDocument();
+  expect(screen.getByText('first.pdf')).toBeInTheDocument();
 });
 
 test('aborts a previous directory request and ignores its late result', async () => {

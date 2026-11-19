@@ -100,11 +100,27 @@ test('ignores a late response from a previously selected tab', async () => {
 test('shows a list error without a retry button and clears it when switching tabs', async () => {
   listShares.mockRejectedValueOnce(new Error('网络连接失败')).mockResolvedValueOnce({ items: [], page: {} });
   show();
-  expect(await screen.findByText('网络连接失败')).toBeInTheDocument();
-  expect(within(screen.getByRole('alert')).queryByRole('button')).not.toBeInTheDocument();
+  expect(await screen.findByText('网络连接失败', { selector: '.ant-message-error span' })).toBeVisible();
+  expect(within(screen.getByRole('main')).queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.queryByText('网络连接失败', { selector: '.ant-alert-message' })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('tab', { name: '分享过期' }));
   expect(await screen.findByText('暂无过期分享')).toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByText('网络连接失败')).not.toBeInTheDocument());
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+test('shows a pagination error at the top and can return to the previous page', async () => {
+  listShares.mockResolvedValueOnce({ items: [share('one')], page: { has_more: true, next_cursor: 'page-2' } })
+    .mockRejectedValueOnce(new Error('服务暂时不可用'))
+    .mockResolvedValueOnce({ items: [share('one')], page: { has_more: true, next_cursor: 'page-2' } });
+  show();
+  await screen.findByText('one.pdf');
+  fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+  expect(await screen.findByText('服务暂时不可用', { selector: '.ant-message-error span' })).toBeVisible();
+  expect(within(screen.getByRole('main')).queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: '上一页' }));
+  expect(await screen.findByText('one.pdf')).toBeInTheDocument();
 });
 
 

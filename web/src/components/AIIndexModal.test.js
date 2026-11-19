@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { App } from 'antd';
+import { App, ConfigProvider } from 'antd';
 import AIIndexModal from './AIIndexModal';
 import { getAIJob, getFileAI, reprocessFileAI } from '../services/ai';
 
@@ -16,6 +16,34 @@ beforeEach(() => {
 });
 
 afterEach(() => jest.useRealTimers());
+
+test('shows index status load errors at the top and allows refreshing', async () => {
+  getFileAI.mockRejectedValueOnce(new Error('private upstream error')).mockResolvedValueOnce({ ai_status: 'indexed' });
+  render(<App><AIIndexModal file={{ id: 'unavailable' }} open onClose={jest.fn()} /></App>);
+  expect(await screen.findByText('索引状态加载失败，请稍后重试。', { selector: '.ant-message-error span' })).toBeVisible();
+  expect(within(screen.getByRole('dialog')).queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.queryByText('private upstream error')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '刷新 AI 索引状态' }));
+  expect(await screen.findByText('已索引')).toBeInTheDocument();
+});
+
+test('does not repeat the same top error during consecutive polling failures', async () => {
+  jest.useFakeTimers();
+  getFileAI.mockResolvedValue({ ai_status: 'failed' });
+  reprocessFileAI.mockResolvedValue({ id: 'poll-error', status: 'pending' });
+  getAIJob.mockRejectedValue(Object.assign(new Error('private upstream error'), { status: 503 }));
+  render(<ConfigProvider theme={{ token: { motion: false } }}><App><AIIndexModal file={{ id: 'poll-error' }} open onClose={jest.fn()} /></App></ConfigProvider>);
+  await screen.findByText('构建失败');
+  fireEvent.click(screen.getByRole('button', { name: '重新构建索引' }));
+  await screen.findByRole('progressbar');
+  await act(async () => { jest.advanceTimersByTime(600); });
+  expect(await screen.findByText('索引状态获取失败，正在重试。', { selector: '.ant-message-error span' })).toBeVisible();
+  expect(within(screen.getByRole('dialog')).queryByRole('alert')).not.toBeInTheDocument();
+  await act(async () => { jest.advanceTimersByTime(5000); });
+  await act(async () => { jest.advanceTimersByTime(1000); });
+  expect(getAIJob).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText('索引状态获取失败，正在重试。')).not.toBeInTheDocument();
+});
 
 test('reprocesses a failed AI index and refreshes its status', async () => {
   getFileAI
@@ -93,7 +121,7 @@ test('task checks back off, recover from temporary failure and speed up on progr
   expect(getAIJob).toHaveBeenCalledTimes(1);
   await advance(2000);
   expect(getAIJob).toHaveBeenCalledTimes(2);
-  expect(screen.getByText('索引状态获取失败，正在重试。')).toBeInTheDocument();
+  expect(screen.getByText('索引状态获取失败，正在重试。', { selector: '.ant-message-error span' })).toBeInTheDocument();
   await advance(5000);
   expect(getAIJob).toHaveBeenCalledTimes(3);
   await advance(4000);
@@ -164,7 +192,7 @@ test('an unconfirmed result does not claim indexed and can be confirmed by refre
   fireEvent.click(screen.getByRole('button', { name: '重新构建索引' }));
 
   expect(await screen.findByText('未建立')).toBeInTheDocument();
-  expect(screen.getByText('索引状态加载失败，请稍后重试。')).toBeInTheDocument();
+  expect(screen.getByText('索引状态加载失败，请稍后重试。', { selector: '.ant-message-error span' })).toBeInTheDocument();
   expect(screen.queryByText(/upstream|HTTP 403/)).not.toBeInTheDocument();
   expect(screen.getByRole('progressbar')).not.toHaveClass('ant-progress-status-success');
   fireEvent.click(screen.getByRole('button', { name: '刷新 AI 索引状态' }));

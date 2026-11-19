@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { App, Alert, Button, Modal, Progress, Space } from 'antd';
+import { App, Button, Modal, Progress, Space } from 'antd';
 import { ReloadOutlined, SyncOutlined } from '@ant-design/icons';
 import styled from '@emotion/styled';
 import { getAIJob, getFileAI, reprocessFileAI } from '../services/ai';
@@ -86,15 +86,21 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [task, setTask] = useState(null);
-  const [loadError, setLoadError] = useState('');
+  const loadError = useRef('');
   const view = useRef(null);
   const submissionPending = useRef(false);
   const activeTaskID = isActiveTask(task) ? task.id : null;
 
+  const reportLoadError = useCallback(text => {
+    if (text && loadError.current !== text) message.error({ key: 'index-load-error', content: text });
+    if (!text) message.destroy('index-load-error');
+    loadError.current = text;
+  }, [message]);
+
   const refreshDocument = useCallback(async (signal, quiet = false) => {
     if (!file?.id) return null;
     if (!quiet) setLoading(true);
-    setLoadError('');
+    reportLoadError('');
     try {
       const value = await getFileAI(file.id, { signal });
       if (signal?.aborted) return null;
@@ -112,12 +118,12 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
         onStatusChange?.(file.id, null);
         return null;
       }
-      setLoadError('索引状态加载失败，请稍后重试。');
+      reportLoadError('索引状态加载失败，请稍后重试。');
       return null;
     } finally {
       if (!quiet && !signal?.aborted) setLoading(false);
     }
-  }, [file?.id, onStatusChange]);
+  }, [file?.id, onStatusChange, reportLoadError]);
 
   useEffect(() => {
     if (!open || !file?.id) return undefined;
@@ -133,6 +139,7 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
       controller.abort();
       view.current = null;
       message.destroy(buildMessageKey);
+      message.destroy('index-load-error');
     };
   }, [open, file?.id, message, refreshDocument]);
 
@@ -146,7 +153,7 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
       try {
         const current = await getAIJob(activeTaskID, { signal: controller.signal });
         if (stopped) return;
-        setLoadError('');
+        reportLoadError('');
         if (isTerminalTask(current)) {
           const result = await refreshDocument(controller.signal, true);
           if (stopped) return;
@@ -168,11 +175,11 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
       } catch (error) {
         if (stopped || error.name === 'AbortError') return;
         if (!error.status || error.status >= 500 || error.status === 429) {
-          setLoadError('索引状态获取失败，正在重试。');
+          reportLoadError('索引状态获取失败，正在重试。');
           timer = window.setTimeout(poll, 5000);
         } else {
           setTask(null);
-          setLoadError('索引状态获取失败，请刷新状态。');
+          reportLoadError('索引状态获取失败，请刷新状态。');
         }
       }
     };
@@ -182,14 +189,14 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [activeTaskID, file?.id, message, onStatusChange, open, refreshDocument]);
+  }, [activeTaskID, file?.id, message, onStatusChange, open, refreshDocument, reportLoadError]);
 
   const startReprocess = async () => {
     const controller = view.current;
     if (!file?.id || !controller || controller.signal.aborted || submissionPending.current || isActiveTask(task)) return;
     submissionPending.current = true;
     setSubmitting(true);
-    setLoadError('');
+    reportLoadError('');
     try {
       const value = await reprocessFileAI(file.id);
       if (controller.signal.aborted) return;
@@ -239,7 +246,6 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
         <StatusRow>
           <Space><span>当前状态</span><StatusTag tone={meta.tone}>{loading ? '正在加载' : meta.label}</StatusTag></Space>
         </StatusRow>
-        {loadError && <Alert type="error" showIcon message={loadError} />}
         {task && <Progress percent={task.progress || 0} status={progressStatus} />}
         {document && <Metadata>
           <dt>语言</dt><dd>{document.language || '-'}</dd>

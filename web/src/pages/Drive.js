@@ -1,14 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Button, Dropdown, Grid, Modal, Space, Table, Tooltip, Upload } from 'antd';
 import Input from '../components/IMEInput';
-import { DeleteOutlined, DownOutlined, DownloadOutlined, EditOutlined, FolderAddOutlined, FolderOpenOutlined, FolderOutlined, ImportOutlined, LeftOutlined, LinkOutlined, MoreOutlined, RightOutlined, RobotOutlined, UploadOutlined } from '@ant-design/icons';
+import { DeleteOutlined, DownOutlined, DownloadOutlined, EditOutlined, FolderAddOutlined, FolderOpenOutlined, FolderOutlined, ImportOutlined, LeftOutlined, LinkOutlined, MoreOutlined, ReloadOutlined, RightOutlined, RobotOutlined, UploadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useTransfers } from '../contexts/TransferContext';
 import { createFolder, deleteFile, deleteFolder, getBreadcrumb, getChildren, getDownloadURL, getPreview, getRoot, renameFile } from '../services/drive';
 import ShareModal from '../components/ShareModal';
 import ImportShareModal from '../components/ImportShareModal';
-import { ErrorNotice, FileTypeBadge, fileTypeLabel, GraphicEmpty, PageHeader, ProductPage, StatusTag } from '../components/design/ProductUI';
+import { FileTypeBadge, fileTypeLabel, GraphicEmpty, PageHeader, ProductPage, StatusTag } from '../components/design/ProductUI';
 import MoveFileModal from '../components/MoveFileModal';
 import AIIndexModal from '../components/AIIndexModal';
 import FileSummaryModal from '../components/FileSummaryModal';
@@ -101,7 +101,7 @@ const Drive = () => {
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState('');
-  const folderLoaded = useRef(false);
+  const rootRequest = useRef(null);
   const folderRequest = useRef(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [folderName, setFolderName] = useState('');
@@ -131,7 +131,6 @@ const Drive = () => {
         cursor ? Promise.resolve(null) : getBreadcrumb(folderId, { signal }),
       ]);
       if (signal.aborted) return;
-      folderLoaded.current = true;
       setFolder(folderId);
       setItems(current => cursor ? [...current, ...(children.items || [])] : children.items || []);
       setPage(children.page || { has_more: false, next_cursor: '' });
@@ -153,8 +152,11 @@ const Drive = () => {
         return fetchFolder(folderId);
       }
       if (error.status === 401) logout();
-      else if (error.code === 'drive.not_found' && folderLoaded.current) message.error(error.message || '文件或目录不存在，可能已被删除');
-      else setLoadError(error.message || '目录加载失败');
+      else {
+        const text = error.message || (error.code === 'drive.not_found' ? '文件或目录不存在，可能已被删除' : '目录加载失败');
+        setLoadError(text);
+        message.error({ key: 'drive-load-error', content: text });
+      }
     } finally {
       if (!signal.aborted) {
         setLoading(false);
@@ -163,17 +165,28 @@ const Drive = () => {
     }
   }, [logout, message]);
 
-  useEffect(() => {
+  const openRoot = useCallback(() => {
+    rootRequest.current?.abort();
     const controller = new AbortController();
+    rootRequest.current = controller;
+    setLoadError('');
     getRoot({ signal: controller.signal }).then(value => {
       if (controller.signal.aborted) return;
       setRoot(value);
       return loadFolder(value.id);
     }).catch(error => {
-      if (!controller.signal.aborted) setLoadError(error.message || '网盘加载失败');
+      if (!controller.signal.aborted && error.name !== 'AbortError') {
+        const text = error.message || '网盘加载失败';
+        setLoadError(text);
+        message.error({ key: 'drive-load-error', content: text });
+      }
     });
-    return () => { controller.abort(); folderRequest.current?.abort(); };
-  }, [loadFolder]);
+  }, [loadFolder, message]);
+  useEffect(() => {
+    openRoot();
+    return () => { rootRequest.current?.abort(); folderRequest.current?.abort(); };
+  }, [openRoot]);
+  useEffect(() => () => message.destroy('drive-load-error'), [message]);
 
   const folders = useMemo(() => items.filter(item => item.type === 'folder'), [items]);
   const files = useMemo(() => items.filter(item => item.type === 'file'), [items]);
@@ -367,11 +380,10 @@ const Drive = () => {
     return { tabIndex: 0, 'aria-label': `文件 ${item.name}` };
   };
 
-  if (!root || !folder) return <ProductPage>{loadError ? <ErrorNotice type="error" showIcon message={loadError} /> : <GraphicEmpty title="正在打开你的云盘" description="目录与对象索引加载中。" />}</ProductPage>;
+  if (!root || !folder) return <ProductPage><GraphicEmpty title={loadError ? '暂未加载文件' : '正在打开你的云盘'} description={loadError ? undefined : '目录与对象索引加载中。'} action={loadError && <Button icon={<ReloadOutlined />} onClick={openRoot}>重新加载</Button>} /></ProductPage>;
   return <ProductPage accent="var(--lime)"><Workspace>
     <PageHeader title="我的云盘" action={<ActionGroup><Button icon={<ImportOutlined />} onClick={openShareImport}>导入分享</Button><Button icon={<FolderAddOutlined />} onClick={() => setCreateOpen(true)}>新建目录</Button><Upload multiple showUploadList={false} beforeUpload={handleUpload}><Button type="primary" icon={<UploadOutlined />}>上传文件</Button></Upload></ActionGroup>} />
     <DirectoryRow aria-label="目录导航"><Tooltip title="返回上级目录"><Button aria-label="返回上级目录" icon={<LeftOutlined />} disabled={!parentFolder} onClick={() => parentFolder && loadFolder(parentFolder.id)} /></Tooltip><FolderRow>{crumbs.map((item, index) => <React.Fragment key={item.id}>{index > 0 && <CrumbSeparator aria-hidden="true" />}<li><FolderCrumb type="button" aria-current={item.id === folder ? 'page' : undefined} onClick={() => loadFolder(item.id)}><FolderOutlined />{item.name === '/' ? '根目录' : item.name}</FolderCrumb></li></React.Fragment>)}</FolderRow></DirectoryRow>
-    {loadError && <ErrorNotice type="error" showIcon message={loadError} />}
     {items.length === 0 && !loading ? <GraphicEmpty title="这个目录还是空的" description="新建目录或上传第一个文件。" /> : <Table className="editorial-ledger" rowKey="id" columns={columns} dataSource={[...folders, ...files]} loading={loading} pagination={false} tableLayout="fixed" onRow={rowInteraction} />}
     {page.has_more && <Button icon={<DownOutlined aria-hidden="true" />} loading={loadingMore} disabled={loading} onClick={() => loadFolder(folder, page.next_cursor)}>加载更多</Button>}
     <Modal open={createOpen} title="新建目录" okText="创建" cancelText="取消" confirmLoading={creatingFolder} onOk={handleCreate} onCancel={() => setCreateOpen(false)}><Input autoFocus aria-label="目录名称" value={folderName} onChange={event => setFolderName(event.target.value)} onPressEnter={handleCreate} placeholder="目录名称" /></Modal>

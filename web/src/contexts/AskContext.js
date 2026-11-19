@@ -73,6 +73,7 @@ export const AskProvider = ({ children }) => {
       pending.status = 'failed';
       setPreparing(false);
       setScopeError(message);
+      setUnread(true);
     };
     const check = async () => {
       try {

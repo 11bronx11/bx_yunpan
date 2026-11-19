@@ -69,8 +69,33 @@ test('keeps the submitted question cleared when the request fails', async () => 
   const input = screen.getByLabelText('向文件提问');
   fireEvent.change(input, { target: { value: '需要重试的问题' } });
   fireEvent.click(await screen.findByRole('button', { name: '提问' }));
-  await screen.findByText('网络连接失败');
+  expect(await screen.findByText('网络连接失败', { selector: '.ant-message-error span' })).toBeVisible();
+  expect(screen.queryByText('网络连接失败', { selector: '.ant-alert-message' })).not.toBeInTheDocument();
   expect(input).toHaveValue('');
+});
+
+test.each([
+  ['ai.unavailable', '功能暂时不可用'],
+  ['ai.quota_exhausted', '功能暂时不可用'],
+  ['ai.answer_unavailable', '回答服务暂不可用，请稍后重试'],
+  ['ai.query_timeout', '本次查询超时，请稍后重试'],
+  ['ai.scope_changed', '文件范围已变化，请更新选择后重试'],
+])('shows %s as a top message without a page alert', async (code, text) => {
+  askFiles.mockRejectedValue(Object.assign(new Error(text), { code }));
+  renderAsk();
+  fireEvent.change(screen.getByLabelText('向文件提问'), { target: { value: '测试问题' } });
+  fireEvent.click(screen.getByRole('button', { name: '提问' }));
+  expect(await screen.findByText(text, { selector: '.ant-message-error span' })).toBeVisible();
+  expect(screen.queryByText(text, { selector: '.ant-alert-message' })).not.toBeInTheDocument();
+});
+
+test('shows file preparation failures as a top message and keeps submission blocked', async () => {
+  window.history.replaceState({}, '', '/ask?file=selected-id&name=alpha.txt');
+  getFileAI.mockRejectedValueOnce(new Error('功能暂时不可用'));
+  renderAsk();
+  expect(await screen.findByText('功能暂时不可用', { selector: '.ant-message-error span' })).toBeVisible();
+  expect(screen.getByRole('button', { name: '提问' })).toBeDisabled();
+  expect(screen.queryByText('功能暂时不可用', { selector: '.ant-alert-message' })).not.toBeInTheDocument();
 });
 
 test('does not overwrite a new draft when the previous question fails', async () => {
@@ -96,7 +121,8 @@ test('keeps an invalid selected scope and question without retrying all files', 
   const input = screen.getByLabelText('向文件提问');
   fireEvent.change(input, { target: { value: '保留这个问题' } });
   fireEvent.click(screen.getByRole('button', { name: '提问' }));
-  await screen.findByText('选择已失效');
+  expect(await screen.findByText('选择已失效', { selector: '.ant-message-error span' })).toBeVisible();
+  expect(screen.queryByText('选择已失效', { selector: '.ant-alert-message' })).not.toBeInTheDocument();
   expect(input).toHaveValue('保留这个问题');
   expect(askFiles).toHaveBeenCalledTimes(1);
   expect(askFiles).toHaveBeenCalledWith('保留这个问题', expect.objectContaining({ scope: { mode: 'selected', file_ids: ['selected-id'] } }));
@@ -158,11 +184,15 @@ test.each([
   fireEvent.click(screen.getByRole('link', { name: '离开问答' }));
   await act(async () => fail(Object.assign(new Error(text), { code })));
   fireEvent.click(screen.getByRole('link', { name: '返回问答' }));
-  expect(await screen.findByText(text)).toBeInTheDocument();
+  expect(await screen.findByText(text, { selector: '.ant-message-error span' })).toBeVisible();
   expect(screen.getByLabelText('向文件提问')).toHaveValue(restoredQuestion);
   fireEvent.change(screen.getByLabelText('向文件提问'), { target: { value: '下一问' } });
   expect(screen.getByRole('button', { name: '提问' })).toHaveProperty('disabled', blocksRetry);
   expect(askFiles).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('link', { name: '离开问答' }));
+  await waitFor(() => expect(screen.queryByText(text)).not.toBeInTheDocument());
+  fireEvent.click(screen.getByRole('link', { name: '返回问答' }));
+  expect(screen.queryByText(text)).not.toBeInTheDocument();
 });
 
 test('clears and aborts on pagehide, and ignores a late answer', async () => {

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, App, Button, Modal, Spin, Tree } from 'antd';
+import { App, Button, Modal, Spin, Tree } from 'antd';
 import { DownOutlined, FolderOutlined } from '@ant-design/icons';
 import styled from '@emotion/styled';
 import { getBreadcrumb, getChildren, moveFile } from '../services/drive';
@@ -106,11 +106,15 @@ const MoveFileModal = ({ open, file, root, currentFolderId, onCancel, onMoved })
       setTreeData([node]);
       setExpandedKeys([root.id]);
     } catch (error) {
-      if (!signal.aborted) setBrowseError(error.message || '目录加载失败，请重试');
+      if (!signal.aborted && error.name !== 'AbortError') {
+        const text = error.message || '目录加载失败，请重试';
+        setBrowseError(text);
+        message.error({ key: 'move-directory-error', content: text });
+      }
     } finally {
       if (!signal.aborted) setLoading(false);
     }
-  }, [currentFolderId, root]);
+  }, [currentFolderId, message, root]);
 
   useEffect(() => {
     if (!open) return;
@@ -118,8 +122,11 @@ const MoveFileModal = ({ open, file, root, currentFolderId, onCancel, onMoved })
     setDestination('');
     setTreeData([]);
     loadRoot();
-    return () => { browseRequest.current?.abort(); selectionRequest.current?.abort(); };
-  }, [loadRoot, open]);
+    return () => {
+      browseRequest.current?.abort(); selectionRequest.current?.abort();
+      message.destroy('move-directory-error');
+    };
+  }, [loadRoot, message, open]);
 
   const loadTreePage = async (folderId, cursor = '') => {
     const signal = browseRequest.current?.signal;
@@ -132,12 +139,14 @@ const MoveFileModal = ({ open, file, root, currentFolderId, onCancel, onMoved })
       setTreeData(current => replaceChildren(current, folderId, directoryChildren(response, currentFolderId, folderId), Boolean(cursor)));
       setBrowseError('');
     } catch (error) {
-      if (signal.aborted) return;
+      if (signal.aborted || error.name === 'AbortError') return;
       if (error.code === 'drive.cursor_stale') {
         await loadRoot();
         return;
       }
-      setBrowseError(error.message || '子目录加载失败，请重试展开');
+      const text = error.message || '子目录加载失败，请重试展开';
+      setBrowseError(text);
+      message.error({ key: 'move-directory-error', content: text });
       throw error;
     } finally {
       if (!signal.aborted) {
@@ -195,7 +204,7 @@ const MoveFileModal = ({ open, file, root, currentFolderId, onCancel, onMoved })
       width={560}
     >
       <Picker>
-        {browseError && <Alert type="error" showIcon message={browseError} action={<Button size="small" onClick={loadRoot}>重试</Button>} />}
+        {browseError && <Button onClick={loadRoot}>重试</Button>}
         <TreeShell>
           {loading
             ? <Loading><Spin /></Loading>

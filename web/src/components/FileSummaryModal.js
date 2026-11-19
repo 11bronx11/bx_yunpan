@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Modal, Skeleton, Tag } from 'antd';
+import { App, Modal, Skeleton, Tag } from 'antd';
 import { FileTextOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import styled from '@emotion/styled';
 import { getFileAI } from '../services/ai';
@@ -101,6 +101,7 @@ const Metadata = styled.div`
 const unavailableMessage = '暂时无法查看AI摘要';
 
 const FileSummaryModal = ({ file, open, onClose }) => {
+  const { message } = App.useApp();
   const [document, setDocument] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -117,13 +118,15 @@ const FileSummaryModal = ({ file, open, onClose }) => {
       .catch(value => {
         if (!active || value.name === 'AbortError') return;
         setError(unavailableMessage);
+        message.error({ key: 'summary-load-error', content: unavailableMessage });
       })
       .finally(() => { if (active) setLoading(false); });
     return () => {
       active = false;
       controller.abort();
+      message.destroy('summary-load-error');
     };
-  }, [file?.id, open]);
+  }, [file?.id, message, open]);
 
   const summary = useMemo(() => truncateSummary(document?.summary), [document?.summary]);
   const indexed = (document?.ai_status || document?.status) === 'indexed';
@@ -142,7 +145,7 @@ const FileSummaryModal = ({ file, open, onClose }) => {
       {loading && <Skeleton active paragraph={{ rows: 5 }} title={false} />}
       {!loading && (error || !available) && <Unavailable>
         <InfoCircleOutlined aria-hidden="true" />
-        <p>{error || unavailableMessage}</p>
+        <p>{error ? '暂无可展示的摘要' : unavailableMessage}</p>
       </Unavailable>}
       {!loading && available && <>
         <Summary>{summary}</Summary>

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Button, Checkbox, Modal, Spin, Tooltip, TreeSelect, Typography } from 'antd';
+import { Alert, App, Button, Checkbox, Modal, Spin, Tooltip, TreeSelect, Typography } from 'antd';
 import { ClearOutlined, FileOutlined, SearchOutlined } from '@ant-design/icons';
 import Input from './IMEInput';
 import { getRoot, getChildren } from '../services/drive';
@@ -8,12 +8,12 @@ import './AskFilePicker.css';
 
 // Selection lives independently of the current result page and search query.
 export default function AskFilePicker({ open, selected, onApply, onCancel }) {
+  const { message } = App.useApp();
   const [draft, setDraft] = useState(new Map());
   const [query, setQuery] = useState('');
   const [folder, setFolder] = useState('');
   const [folders, setFolders] = useState([]);
   const [expandedFolders, setExpandedFolders] = useState([]);
-  const [directoryError, setDirectoryError] = useState('');
   const [items, setItems] = useState([]);
   const [page, setPage] = useState({});
   const [incomplete, setIncomplete] = useState(false);
@@ -51,10 +51,12 @@ export default function AskFilePicker({ open, selected, onApply, onCancel }) {
     } catch (value) {
       if (value.name !== 'AbortError' && !current.signal.aborted) {
         if (!cursor) { setItems([]); setPage({}); setIncomplete(false); }
-        setError(value.message || '无法读取可问答文件');
+        const text = value.message || '无法读取可问答文件';
+        setError(text);
+        message.error({ key: 'ask-picker-files-error', content: text });
       }
     } finally { if (!current.signal.aborted) setLoading(false); }
-  }, [query, folder]);
+  }, [query, folder, message]);
   useEffect(() => { if (open) { setDraft(new Map(selected.map(file => [file.id, file]))); } }, [open, selected]);
   useEffect(() => {
     if (open) {
@@ -87,27 +89,32 @@ export default function AskFilePicker({ open, selected, onApply, onCancel }) {
       const attach = nodes => nodes.map(item => item.value === node.value ? { ...item, children, isLeaf: children.length === 0 } : item.children ? { ...item, children: attach(item.children) } : item);
       setFolders(previous => attach(previous));
     })().catch(error => {
-      if (!abort.signal.aborted) { directoryRequests.current.delete(node.value); setDirectoryError('目录暂时无法加载，请重新打开选择文件。'); }
+      if (!abort.signal.aborted) {
+        directoryRequests.current.delete(node.value);
+        message.error({ key: 'ask-picker-directory-error', content: '目录暂时无法加载，请重新打开选择文件。' });
+      }
       throw error;
     });
     directoryRequests.current.set(node.value, request);
     return request;
-  }, []);
+  }, [message]);
   useEffect(() => {
     if (!open) return undefined;
     const abort = new AbortController();
     directoryController.current = abort;
     directoryRequests.current.clear();
-    setDirectoryError('');
     getRoot({ signal: abort.signal }).then(root => {
       if (abort.signal.aborted) return;
       const node = { value: root.id, title: '根目录', key: root.id };
       setFolders([node]);
       setExpandedFolders([root.id]);
-      return loadFolders(node);
-    }).catch(() => { if (!abort.signal.aborted) setDirectoryError('目录暂时无法加载，请重新打开选择文件。'); });
+      // Child loading reports its own error; do not notify twice here.
+      return loadFolders(node).catch(() => {});
+    }).catch(() => {
+      if (!abort.signal.aborted) message.error({ key: 'ask-picker-directory-error', content: '目录暂时无法加载，请重新打开选择文件。' });
+    });
     return () => abort.abort();
-  }, [open, loadFolders]);
+  }, [open, loadFolders, message]);
   const toggle = file => setDraft(previous => {
     const next = new Map(previous);
     if (next.has(file.id)) next.delete(file.id);
@@ -124,9 +131,8 @@ export default function AskFilePicker({ open, selected, onApply, onCancel }) {
           <Button className="ask-picker-clear" aria-label="清空选择" icon={<ClearOutlined />} disabled={draft.size === 0} onClick={() => setDraft(new Map())} />
         </Tooltip>
       </div>
-      {directoryError && <Alert type="warning" message={directoryError} />}
       {draft.size === 50 && <Alert type="info" message="最多选择 50 个文件" />}
-      {error && <Alert type="error" message={error} action={<Button onClick={() => load()}>重试</Button>} />}
+      {error && <Button onClick={() => load()}>重试</Button>}
       <Spin spinning={loading} delay={120} wrapperClassName="ask-picker-results" tip="正在加载文件">
         <div className="ask-picker-list" aria-label="可问答文件" aria-busy={loading}>
           {items.map(file => <Checkbox key={file.id} className="ask-file-row" checked={draft.has(file.id)} disabled={loading || (!draft.has(file.id) && draft.size >= 50)} onChange={() => toggle(file)}>

@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button } from 'antd';
+import { Alert, App, Button } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
 import Input from '../components/IMEInput';
-import { FolderOpenOutlined, InfoCircleOutlined, SendOutlined } from '@ant-design/icons';
+import { FolderOpenOutlined, SendOutlined } from '@ant-design/icons';
 import styled from '@emotion/styled';
 import AskFilePicker from '../components/AskFilePicker';
 import { useAsk } from '../contexts/AskContext';
@@ -16,23 +16,6 @@ const Composer = styled.section`
   .ant-input { min-height: 104px; padding: 14px 16px; resize: vertical; line-height: 1.7; }
 `;
 const ComposerActions = styled.div`display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px;`;
-const ScopeNotice = styled(Alert)`
-  justify-self: start;
-  width: fit-content;
-  max-width: 100%;
-  align-items: flex-start;
-  padding: 6px 14px;
-  border: 1px solid #ead8ad;
-  border-radius: 18px;
-  color: #805b16;
-  background: #fff9eb;
-  text-align: left;
-  overflow-wrap: anywhere;
-
-  .ant-alert-icon { margin-top: 4px; margin-inline-end: 8px; color: #a87c22; font-size: 14px; }
-  .ant-alert-content { min-width: 0; }
-  .ant-alert-message { color: inherit; font-size: 13px; font-weight: 500; line-height: 22px; }
-`;
 const SelectionCount = styled.span`
   margin-right: 4px;
   color: var(--text-secondary);
@@ -59,7 +42,8 @@ const Answer = styled.article`
 `;
 
 const AIAsk = () => {
-  const { question, setQuestion, answer, asking, selected, scopeError, askError,
+  const { message } = App.useApp();
+  const { question, setQuestion, answer, asking, selected, scopeError, askError, unread,
     preparing, applySelection, prepareFile, runAsk, markViewed } = useAsk();
   const { search } = useLocation();
   const navigate = useNavigate();
@@ -74,14 +58,18 @@ const AIAsk = () => {
       navigate({ pathname: '/ask', search: params.toString() }, { replace: true });
     }
   }, [navigate, prepareFile, search]);
-  useEffect(() => { markViewed(); }, [answer, askError, markViewed, scopeError]);
+  useEffect(() => {
+    const error = scopeError || askError;
+    if (unread && error) message.error({ key: 'ask-error', content: error });
+    markViewed();
+  }, [answer, askError, markViewed, message, scopeError, unread]);
+  useEffect(() => () => message.destroy('ask-error'), [message]);
 
   return <ProductPage accent="var(--mint)">
     <Workspace>
       <PageHeader title="问答" />
       <Composer className="page-reveal">
         {preparing && <Alert type="info" message="正在准备指定文件的问答文本…" />}
-        {scopeError && <ScopeNotice type="warning" showIcon icon={<InfoCircleOutlined />} message={scopeError} />}
 
         <Input.TextArea
           aria-label="向文件提问"
@@ -102,7 +90,6 @@ const AIAsk = () => {
       </Composer>
       <ResultSection>
         <ResultTitle>回答</ResultTitle>
-        {askError && <Alert type="error" message={askError} />}
         {answer?.retrieval?.degraded && <Alert type="info" message="本次使用可用的文本检索生成回答" />}
         {answer?.coverage?.missing_evidence_file_ids?.length > 0 && <Alert type="warning" message="部分所选文件没有找到相关证据，回答未覆盖这些文件。" />}
 

@@ -1,4 +1,5 @@
 import React from 'react';
+import { App } from 'antd';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import AskFilePicker from './AskFilePicker';
 import { listAskableFiles } from '../services/ai';
@@ -114,4 +115,25 @@ test('keeps loading rows inactive, ignores an old directory response, and reuses
   await choose('快目录');
   expect(screen.getByRole('checkbox', { name: /beta.txt/ })).toBeEnabled();
   expect(listAskableFiles).toHaveBeenCalledTimes(callsBeforeReturn);
+});
+
+test('shows a file list failure as a top message and lets the user retry', async () => {
+  listAskableFiles.mockRejectedValueOnce(new Error('功能暂时不可用')).mockResolvedValue({ items: [alpha] });
+  render(<App><AskFilePicker open selected={[]} onApply={jest.fn()} onCancel={jest.fn()} /></App>);
+  expect(await screen.findByText('功能暂时不可用', { selector: '.ant-message-error span' })).toBeVisible();
+  expect(screen.queryByText('功能暂时不可用', { selector: '.ant-alert-message' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /重\s*试/ }));
+  expect(await screen.findByRole('checkbox', { name: /alpha.txt/ })).toBeEnabled();
+});
+
+test.each(['root', 'children'])('shows a %s directory failure once as a top message', async source => {
+  listAskableFiles.mockResolvedValue({ items: [alpha] });
+  if (source === 'root') getRoot.mockRejectedValueOnce(new Error('目录加载失败'));
+  else getChildren.mockRejectedValueOnce(new Error('目录加载失败'));
+  render(<App><AskFilePicker open selected={[]} onApply={jest.fn()} onCancel={jest.fn()} /></App>);
+  const text = '目录暂时无法加载，请重新打开选择文件。';
+  expect(await screen.findByText(text, { selector: '.ant-message-error span' })).toBeVisible();
+  expect(screen.getAllByText(text)).toHaveLength(1);
+  expect(screen.queryByText(text, { selector: '.ant-alert-message' })).not.toBeInTheDocument();
+  expect(await screen.findByRole('checkbox', { name: /alpha.txt/ })).toBeEnabled();
 });

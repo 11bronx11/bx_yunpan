@@ -1,6 +1,6 @@
 import React from 'react';
 import { App as AntApp } from 'antd';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import MoveFileModal from './MoveFileModal';
 import { getBreadcrumb, getChildren, moveFile } from '../services/drive';
 
@@ -56,6 +56,31 @@ test('moves a file to a selected directory and disables the current directory', 
 });
 
 const renderPicker = () => render(<AntApp><MoveFileModal open file={{ id: 'file-1', name: 'report.pdf', version: 3 }} root={{ id: 'root', name: '/' }} currentFolderId="current" onCancel={jest.fn()} onMoved={jest.fn()} /></AntApp>);
+
+test('shows a directory load failure at the top and reloads the picker on retry', async () => {
+  getChildren.mockRejectedValueOnce(new Error('服务暂时不可用'));
+  renderPicker();
+  expect(await screen.findByText('服务暂时不可用', { selector: '.ant-message-error span' })).toBeVisible();
+  expect(within(screen.getByRole('dialog')).queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /移\s*动/ })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: /重\s*试/ }));
+  expect(await screen.findByText('目标目录')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /重\s*试/ })).not.toBeInTheDocument();
+});
+
+test('shows a directory pagination failure at the top without losing loaded targets', async () => {
+  getChildren.mockResolvedValueOnce({ items: [{ id: 'first', type: 'folder', name: '第一批目录' }], page: { has_more: true, next_cursor: 'next' } })
+    .mockRejectedValueOnce(new Error('请求处理超时，请稍后重试'))
+    .mockResolvedValueOnce({ items: [{ id: 'last', type: 'folder', name: '最后目录' }], page: {} });
+  renderPicker();
+  await screen.findByText('第一批目录');
+  fireEvent.click(screen.getByRole('button', { name: '加载更多' }));
+  expect(await screen.findByText('请求处理超时，请稍后重试', { selector: '.ant-message-error span' })).toBeVisible();
+  expect(screen.getByText('第一批目录')).toBeInTheDocument();
+  expect(within(screen.getByRole('dialog')).queryByRole('alert')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '加载更多' }));
+  expect(await screen.findByText('最后目录')).toBeInTheDocument();
+});
 
 test('loads subsequent directories only when requested and stops at files', async () => {
   getChildren.mockResolvedValueOnce({ items: [{ id: 'first', type: 'folder', name: '第一批目录' }], page: { has_more: true, next_cursor: 'next' } })

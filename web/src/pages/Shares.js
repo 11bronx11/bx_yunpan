@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { App, Button, Grid, Space, Table, Tabs, Tooltip } from 'antd';
 import { CalendarOutlined, StopOutlined } from '@ant-design/icons';
 import { listShares, revokeShare } from '../services/share';
-import { ErrorNotice, FileTypeBadge, fileTypeLabel, PageHeader, ProductPage, StatusTag } from '../components/design/ProductUI';
+import { FileTypeBadge, fileTypeLabel, PageHeader, ProductPage, StatusTag } from '../components/design/ProductUI';
 import ShareModal, { formatShareExpiry } from '../components/ShareModal';
 
 const PAGE_SIZE = 10;
@@ -35,15 +35,22 @@ export default function Shares() {
   const load = useCallback(async () => {
     request.current?.abort();
     const controller = new AbortController(); request.current = controller;
-    setLoading(true); setError('');
+    setLoading(true); setError(''); message.destroy('shares-load-error');
     try {
       const result = await listShares({ status: query.status, cursor: query.cursors[query.index], limit: PAGE_SIZE, signal: controller.signal });
       if (controller.signal.aborted) return;
       setItems(result.items); setPage(result.page || {}); setNow(Date.now());
-    } catch (err) { if (!controller.signal.aborted) setError(err.message || '分享列表加载失败'); }
+    } catch (err) {
+      if (!controller.signal.aborted && err.name !== 'AbortError') {
+        const text = err.message || '分享列表加载失败';
+        setError(text);
+        message.error({ key: 'shares-load-error', content: text });
+      }
+    }
     finally { if (!controller.signal.aborted) setLoading(false); }
-  }, [query]);
+  }, [message, query]);
   useEffect(() => { load(); return () => request.current?.abort(); }, [load]);
+  useEffect(() => () => message.destroy('shares-load-error'), [message]);
   const refresh = useCallback(() => {
     setLoading(true); setItems([]); setPage({});
     setQuery(current => ({ status: current.status, cursors: [''], index: 0 }));
@@ -98,7 +105,6 @@ export default function Shares() {
     <PageHeader title="我的分享" />
     <Tabs activeKey={query.status} items={tabs} onChange={changeTab} tabBarGutter={24} />
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      {error && <ErrorNotice type="error" showIcon message={error} />}
       <Table className="editorial-ledger" aria-busy={loading} rowKey="id" columns={columns} dataSource={items} pagination={false} loading={loading} tableLayout="fixed" locale={{ emptyText: loading || error ? null : `暂无${query.status === 'source_deleted' ? '源文件已删除的' : tabs.find(tab => tab.key === query.status).label.slice(2)}分享` }} />
       <Space aria-label="分享分页" wrap>
         <Button disabled={loading || query.index === 0} onClick={() => turnPage(-1)}>上一页</Button>

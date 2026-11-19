@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { App } from 'antd';
 import FileSummaryModal, { AI_SUMMARY_LIMIT, truncateSummary } from './FileSummaryModal';
 import { getFileAI } from '../services/ai';
@@ -22,12 +22,14 @@ test('displays a bounded read-only overview with only the header close control',
   expect(onClose).toHaveBeenCalledTimes(1);
 });
 
-test('shows a plain unavailable message without index management when the summary is missing', async () => {
-  getFileAI.mockRejectedValue({ status: 404 });
+test.each([404, 503])('shows a summary request failure with status %s at the top', async status => {
+  getFileAI.mockRejectedValue({ status });
 
   render(<App><FileSummaryModal file={{ id: 'file-2', name: '记录.txt' }} open onClose={jest.fn()} /></App>);
 
-  expect(await screen.findByText('暂时无法查看AI摘要')).toBeInTheDocument();
+  expect(await screen.findByText('暂时无法查看AI摘要', { selector: '.ant-message-error span' })).toBeVisible();
+  expect(within(screen.getByRole('dialog')).queryByText('暂时无法查看AI摘要')).not.toBeInTheDocument();
+  expect(within(screen.getByRole('dialog')).queryByRole('alert')).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '管理索引' })).not.toBeInTheDocument();
 });
 
