@@ -41,6 +41,7 @@ func (p *observedProvider) Embeddings(ctx context.Context, texts []string) ([][]
 	}
 	return p.Provider.Embeddings(ctx, texts)
 }
+
 func (p *observedProvider) Enrich(ctx context.Context, text string) (ai.Insight, error) {
 	p.summaries++
 	p.inputs = append(p.inputs, text)
@@ -49,9 +50,10 @@ func (p *observedProvider) Enrich(ctx context.Context, text string) (ai.Insight,
 	}
 	return p.Provider.Enrich(ctx, text)
 }
-func (p *observedProvider) Answer(ctx context.Context, text string, e []ai.Evidence) (ai.AnswerResult, error) {
+
+func (p *observedProvider) Answer(ctx context.Context, text string, e []ai.Evidence, options ai.AnswerOptions) (ai.AnswerResult, error) {
 	p.answers++
-	return p.Provider.Answer(ctx, text, e)
+	return p.Provider.Answer(ctx, text, e, options)
 }
 
 type scopeClient struct {
@@ -67,9 +69,11 @@ func (c *scopeClient) BatchGetFileRefs(context.Context, *corepb.FileRefsRequest,
 func (c *scopeClient) OpenRetrievalScope(context.Context, *corepb.OpenScopeRequest, ...grpc.CallOption) (*corepb.ScopeResponse, error) {
 	return &corepb.ScopeResponse{SnapshotId: "fixture"}, nil
 }
+
 func (c *scopeClient) StreamScopeMembers(context.Context, *corepb.ScopeMembersRequest, ...grpc.CallOption) (*corepb.ScopeMembersResponse, error) {
 	return &corepb.ScopeMembersResponse{Files: []*corepb.FileRef{c.file}}, nil
 }
+
 func (c *scopeClient) ValidateEvidence(context.Context, *corepb.ValidateEvidenceRequest, ...grpc.CallOption) (*corepb.ValidateEvidenceResponse, error) {
 	if c.invalid {
 		return nil, status.Error(codes.Aborted, "ai.scope_changed")
@@ -112,6 +116,7 @@ func readyText(t *testing.T) (*gorm.DB, *asynccontrol.Store, *Publisher, aiproto
 	file := &corepb.FileRef{FileId: uuid.NewString(), ObjectId: in.Intent.ObjectID.String(), ContentGeneration: 1, Name: "alpha.txt"}
 	return db, s, p, in, file
 }
+
 func computePublish(t *testing.T, p *Publisher, c *Computer, task asynccontrol.Task) {
 	t.Helper()
 	ctx := context.Background()

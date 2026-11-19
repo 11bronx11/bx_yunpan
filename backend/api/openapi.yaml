@@ -862,10 +862,17 @@ paths:
       tags: [AI]
       summary: Ask a question over authorized files
       description: |
-        Uses authorized parent/child evidence with a common token budget. Selected
+        Uses authorized parent/child evidence with a bounded token budget. Selected
         files never widen to all on failure. Core revalidates evidence before model
         invocation. Vector or summary failures do not block text-based answers.
         Bounded retrieval does not promise exhaustive review of every paragraph.
+        Without selected files, existing retrieval and 4096 output-token limits apply.
+        Selected file counts 1 / 2-3 / 4-5 / 6-9 / 10+ use multipliers 5 / 4 / 3 / 2 / 1
+        for candidate recall, evidence counts and the 12000 estimated evidence-token
+        budget. With default AI_RERANK_TOP_K=8, evidence caps are 40 / 32 / 24 / 16 / 8.
+        Output-token caps are 20480 / 16384 / 12288 / 8192 / 4096, each bounded by
+        AI_CHAT_MAX_OUTPUT_TOKENS. Selected requests allow up to five times the normal
+        Ask timeout, with retrieval grants valid through that deadline.
         Legacy folder_id and file_ids together restrict retrieval to their
         intersection, including subfolders. An empty or inaccessible intersection
         returns 409 ai.scope_invalid. These legacy fields cannot accompany scope.

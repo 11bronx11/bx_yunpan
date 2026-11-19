@@ -120,7 +120,7 @@ func (s *Service) answer(ctx context.Context, question string, evidence []Eviden
 		attribute.String("ai.operation", "answer"),
 		attribute.Int("ai.evidence_count", len(evidence)),
 	)
-	result, err := s.provider.Answer(ctx, question, evidence)
+	result, err := s.provider.Answer(ctx, question, evidence, AnswerOptions{})
 	endSpan(span, err)
 	return result, err
 }

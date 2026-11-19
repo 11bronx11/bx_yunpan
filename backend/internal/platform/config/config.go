@@ -239,12 +239,15 @@ type Locking struct {
 	LeaderTTL time.Duration
 }
 
+const DefaultChatMaxOutputTokens = 32768
+
 type AI struct {
 	Enabled                     bool
 	Provider                    string
 	APIKey                      string
 	BaseURL                     string
 	ChatModel                   string
+	ChatMaxOutputTokens         int
 	EmbeddingModel              string
 	VisionModel                 string
 	RerankEnabled               bool
@@ -395,6 +398,7 @@ func LoadForRole(role string) (Config, error) {
 			APIKey:                      os.Getenv("DASHSCOPE_API_KEY"),
 			BaseURL:                     env("AI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
 			ChatModel:                   env("AI_CHAT_MODEL", "qwen-plus"),
+			ChatMaxOutputTokens:         envInt("AI_CHAT_MAX_OUTPUT_TOKENS", DefaultChatMaxOutputTokens),
 			EmbeddingModel:              env("AI_EMBEDDING_MODEL", "text-embedding-v4"),
 			VisionModel:                 env("AI_VISION_MODEL", "qwen3-vl-plus"),
 			RerankEnabled:               envBool("AI_RERANK_ENABLED", false),
@@ -614,6 +618,9 @@ func (c Config) Validate() error {
 		errs = append(errs, errors.New("SHARE_SECRET must be changed in production"))
 	}
 	if c.AI.Enabled {
+		if c.AI.ChatMaxOutputTokens <= 0 {
+			errs = append(errs, errors.New("AI_CHAT_MAX_OUTPUT_TOKENS must be positive"))
+		}
 		if c.AI.Provider != "fake" && c.AI.Provider != "dashscope" {
 			errs = append(errs, errors.New("AI_PROVIDER must be fake or dashscope when AI is enabled"))
 		}

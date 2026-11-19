@@ -342,7 +342,7 @@ func (q *Query) pgText(ctx context.Context, ids []string, query string, k int) (
 // Branch ranks are merged by raw score across all authorized batches before RRF.
 // A request embeds its question once, including selected multi-file requests.
 func (q *Query) retrieve(ctx context.Context, files []activeFile, query, mode string, k int) ([]candidate, *pbv2.Retrieval, error) {
-	return q.retrieveScoped(ctx, files, query, mode, k, false)
+	return q.retrieveScoped(ctx, files, query, mode, k, false, 1)
 }
 
 func mergeRanks(items []ranked, limit int) []ranked {
@@ -368,11 +368,11 @@ func mergeRanks(items []ranked, limit int) []ranked {
 	return out
 }
 
-func (q *Query) retrieveScoped(ctx context.Context, files []activeFile, query, mode string, k int, perFile bool) ([]candidate, *pbv2.Retrieval, error) {
-	return q.retrieveWithVector(ctx, files, query, mode, k, perFile, nil)
+func (q *Query) retrieveScoped(ctx context.Context, files []activeFile, query, mode string, k int, perFile bool, scale int) ([]candidate, *pbv2.Retrieval, error) {
+	return q.retrieveWithVector(ctx, files, query, mode, k, perFile, scale, nil)
 }
 
-func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, query, mode string, k int, perFile bool, queryVector []float32) (candidates []candidate, retrieval *pbv2.Retrieval, retrieveErr error) {
+func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, query, mode string, k int, perFile bool, scale int, queryVector []float32) (candidates []candidate, retrieval *pbv2.Retrieval, retrieveErr error) {
 	ctx, finishTrace := stageTrace(ctx, "ai.retrieve")
 	defer func() { finishTrace(retrieveErr) }()
 	meta := &pbv2.Retrieval{TextBackend: "unavailable", VectorBackend: "unavailable", TokenCountIsEstimate: true}
@@ -385,7 +385,7 @@ func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, quer
 		branchK, mergeK = max(k, 50), max(k, 50)
 	}
 	if perFile {
-		batchSize, branchK, mergeK = 1, 8, 400
+		batchSize, branchK, mergeK = 1, 8*scale, 400*scale
 	}
 	var text, vector []ranked
 	var textErr, vectorErr error
@@ -546,7 +546,7 @@ func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, quer
 		if textExternal || vectorExternal {
 			copy := *q
 			copy.Projector = nil
-			fresh, m, e := copy.retrieveWithVector(ctx, files, query, mode, k, perFile, queryVector)
+			fresh, m, e := copy.retrieveWithVector(ctx, files, query, mode, k, perFile, scale, queryVector)
 			if m != nil {
 				m.Degraded = true
 				m.Reasons = append(m.Reasons, "projection.stale")
@@ -572,7 +572,7 @@ func (q *Query) retrieveWithVector(ctx context.Context, files []activeFile, quer
 		}
 		return rows[i].Score > rows[j].Score
 	})
-	rows = candidatePool(rows, 240, perFile)
+	rows = candidatePool(rows, 240*scale, perFile)
 	return rows, meta, nil
 }
 
@@ -671,27 +671,12 @@ func (q *Query) Ask(ctx context.Context, r *pbv2.AskRequest) (response *pbv2.Ask
 			}
 		}
 	}
-	k, budget, parentLimit := 40, 8000, 12
-	candidateLimit := 60
-	if selected {
-		k, budget, parentLimit = 80, 12000, 24
-		candidateLimit = 100
-		if len(grant.Scope.FileIDs) > 1 {
-			candidateLimit = 240
-		}
-	}
-	if q.RerankCandidates > 0 {
-		candidateLimit = min(q.RerankCandidates, 240)
-		k = max(k, candidateLimit)
-	}
-	if q.RerankTopK > 0 {
-		parentLimit = min(parentLimit, q.RerankTopK)
-	}
-	rows, meta, err := q.retrieveScoped(ctx, files, r.Question, "hybrid", k, selected && len(grant.Scope.FileIDs) > 1)
+	limits := q.askLimits(selected, len(grant.Scope.FileIDs))
+	rows, meta, err := q.retrieveScoped(ctx, files, r.Question, "hybrid", limits.recall, selected && len(grant.Scope.FileIDs) > 1, limits.multiplier)
 	if err != nil {
 		return nil, err
 	}
-	rows = candidatePool(rows, candidateLimit, selected && len(grant.Scope.FileIDs) > 1)
+	rows = candidatePool(rows, limits.candidates, selected && len(grant.Scope.FileIDs) > 1)
 	// No candidate text may leave this service before core revalidates it.
 	if err := q.validate(ctx, r.Grant, rows); err != nil {
 		return nil, err
@@ -727,12 +712,12 @@ func (q *Query) Ask(ctx context.Context, r *pbv2.AskRequest) (response *pbv2.Ask
 	parents := map[uuid.UUID]bool{}
 	represented := map[string]bool{}
 	add := func(c candidate) {
-		if parents[c.ParentID] || len(evidence) >= parentLimit {
+		if parents[c.ParentID] || len(evidence) >= limits.parents {
 			return
 		}
 		parentContent := rag.ContextualText(c.HeadingPath, c.ParentContent, 2400)
 		tokens := rag.EstimateTokens(parentContent)
-		if tokens+int(meta.EvidenceTokens) > budget {
+		if tokens+int(meta.EvidenceTokens) > limits.evidenceTokens {
 			return
 		}
 		parents[c.ParentID] = true
@@ -783,7 +768,12 @@ func (q *Query) Ask(ctx context.Context, r *pbv2.AskRequest) (response *pbv2.Ask
 		return nil, err
 	}
 	answerCtx, finishAnswer := stageTrace(ctx, "ai.answer")
-	answer, err := q.Provider.Answer(answerCtx, r.Question, evidence)
+	options := ai.AnswerOptions{}
+	if selected {
+		options.MaxTokens = aiprotocol.DefaultAnswerMaxTokens * limits.multiplier
+		options.TimeoutMultiplier = limits.multiplier
+	}
+	answer, err := q.Provider.Answer(answerCtx, r.Question, evidence, options)
 	finishAnswer(err)
 	if err != nil {
 		if ai.IsProviderQuota(err) {

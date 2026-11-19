@@ -23,6 +23,14 @@ type ClientOptions struct {
 	Metrics             *Metrics
 }
 
+type askTimeoutKey struct{}
+
+// WithAskTimeout carries the HTTP gateway's selected-file budget through the
+// local client interceptor. The caller's context deadline still takes priority.
+func WithAskTimeout(ctx context.Context, timeout time.Duration) context.Context {
+	return context.WithValue(ctx, askTimeoutKey{}, timeout)
+}
+
 // ClientInterceptors gives each RPC method its own breaker. A failed costly
 // Ask must not open the fulltext circuit. Retries share a single total budget;
 // only model-free reads may be replayed, never Ask or semantic/hybrid Search.
@@ -34,6 +42,9 @@ func ClientInterceptors(o ClientOptions) []grpc.DialOption {
 		timeout := o.Timeout
 		if strings.HasSuffix(method, "/Ask") && o.AskTimeout > 0 {
 			timeout = o.AskTimeout
+			if override, ok := ctx.Value(askTimeoutKey{}).(time.Duration); ok && override > 0 {
+				timeout = override
+			}
 		}
 		if timeout > 0 {
 			var cancel context.CancelFunc

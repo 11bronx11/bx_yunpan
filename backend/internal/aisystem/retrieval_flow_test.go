@@ -65,6 +65,7 @@ type retrievalProbe struct {
 	ai.Provider
 	evidence []ai.Evidence
 	embedded []string
+	options  ai.AnswerOptions
 }
 
 func (p *retrievalProbe) Embeddings(context.Context, []string) ([][]float32, error) {
@@ -73,9 +74,10 @@ func (p *retrievalProbe) Embeddings(context.Context, []string) ([][]float32, err
 	return [][]float32{v}, nil
 }
 
-func (p *retrievalProbe) Answer(ctx context.Context, question string, evidence []ai.Evidence) (ai.AnswerResult, error) {
+func (p *retrievalProbe) Answer(ctx context.Context, question string, evidence []ai.Evidence, options ai.AnswerOptions) (ai.AnswerResult, error) {
 	p.evidence = append([]ai.Evidence{}, evidence...)
-	return p.Provider.Answer(ctx, question, evidence)
+	p.options = options
+	return p.Provider.Answer(ctx, question, evidence, options)
 }
 
 type contextualEmbeddingProbe struct{ *retrievalProbe }
@@ -172,10 +174,14 @@ func TestAskHonorsRerankCandidateAndEvidenceLimits(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(reranker.docs) != 3 || len(provider.evidence) != 2 || len(out.Citations) != 2 {
+			wantCandidates, wantEvidence := 3, 2
+			if mode == "selected" {
+				wantCandidates, wantEvidence = 6, 6
+			}
+			if len(reranker.docs) != wantCandidates || len(provider.evidence) != wantEvidence || len(out.Citations) != wantEvidence {
 				t.Fatalf("limits ignored: rerank=%d evidence=%d citations=%d", len(reranker.docs), len(provider.evidence), len(out.Citations))
 			}
-			if !strings.Contains(provider.evidence[0].Content, reranker.docs[2]) {
+			if !strings.Contains(provider.evidence[0].Content, reranker.docs[wantCandidates-1]) {
 				t.Fatal("answer did not use the rerank winner first")
 			}
 		})
@@ -236,7 +242,7 @@ func TestSelectedRAGReservesFilesAndDeduplicatesParentsWithinBudget(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reranker.docs) != 4 || !strings.Contains(strings.Join(reranker.docs, "\n"), "minority-file") || len(probe.evidence) != 4 || len(out.Coverage.MissingEvidenceFileIds) != 0 {
+	if len(reranker.docs) != 7 || !strings.Contains(strings.Join(reranker.docs, "\n"), "minority-file") || len(probe.evidence) != 7 || len(out.Coverage.MissingEvidenceFileIds) != 0 {
 		t.Fatal("selected file lost its candidate/evidence share", reranker.docs, probe.evidence, out.Coverage)
 	}
 	count, parents := 0, map[string]bool{}
@@ -249,7 +255,7 @@ func TestSelectedRAGReservesFilesAndDeduplicatesParentsWithinBudget(t *testing.T
 		}
 		parents[citation.ParentId] = true
 	}
-	if count != 3 || out.Retrieval.EvidenceTokens > 12000 || strings.Contains(fmt.Sprint(reranker.docs, probe.evidence), "UNAUTHORIZED_SECRET") {
+	if count != 6 || out.Retrieval.EvidenceTokens > 48000 || strings.Contains(fmt.Sprint(reranker.docs, probe.evidence), "UNAUTHORIZED_SECRET") {
 		t.Fatal("per-file hard cap, token overrun, or unauthorized model input", count, out.Retrieval)
 	}
 }
@@ -377,7 +383,7 @@ func TestGlobalRecallRanksLateScopeBatchBeforeFusion(t *testing.T) {
 
 func TestAskExpandsRepeatedChildrenOnceAndEnforcesEvidenceBudget(t *testing.T) {
 	var blocks []rag.Section
-	for n := range 10 {
+	for n := range 50 {
 		blocks = append(blocks, rag.Section{
 			Text:        strings.Repeat("rollback beta gamma delta. ", 175),
 			HeadingPath: fmt.Sprintf("long-section-%d", n),
@@ -404,13 +410,13 @@ func TestAskExpandsRepeatedChildrenOnceAndEnforcesEvidenceBudget(t *testing.T) {
 	if err := db.Table("ai_published_children").Where("content_version_id=?", in.ContentVersionID).Count(&children).Error; err != nil {
 		t.Fatal(err)
 	}
-	if children <= int64(len(parents))*2 || totalTokens <= 12000 {
+	if children <= int64(len(parents))*2 || totalTokens <= 60000 {
 		t.Fatal("fixture must hit repeated children and exceed both scope budgets", children, totalTokens)
 	}
 	for _, tc := range []struct {
-		mode   string
-		budget int
-	}{{"all", 8000}, {"selected", 12000}} {
+		mode               string
+		budget, candidates int
+	}{{"all", 8000, 100}, {"selected", 60000, 500}} {
 		t.Run(tc.mode, func(t *testing.T) {
 			probe := &retrievalProbe{Provider: ai.NewProvider(config.AI{Dimension: 1024})}
 			reranker := &orderingReranker{}
@@ -419,7 +425,7 @@ func TestAskExpandsRepeatedChildrenOnceAndEnforcesEvidenceBudget(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(reranker.docs) != int(children) || len(probe.evidence) < 3 || len(probe.evidence) >= len(parents) || len(out.Citations) != len(probe.evidence) {
+			if len(reranker.docs) != min(int(children), tc.candidates) || len(probe.evidence) < 3 || len(probe.evidence) >= len(parents) || len(out.Citations) != len(probe.evidence) {
 				t.Fatal("child recall, parent expansion, or budget fixture failed", len(reranker.docs), len(probe.evidence), len(out.Citations))
 			}
 			seen := map[string]bool{}

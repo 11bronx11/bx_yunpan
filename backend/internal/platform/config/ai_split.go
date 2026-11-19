@@ -64,6 +64,9 @@ func (c Config) validateAISplit() error {
 	}
 	dsn := a.CommitDSN
 	if c.Role == "ai-query" {
+		if c.AI.ChatMaxOutputTokens <= 0 {
+			return errors.New("AI_CHAT_MAX_OUTPUT_TOKENS must be positive")
+		}
 		dsn = a.QueryDSN
 	}
 	if c.Role == "ai-committer" {

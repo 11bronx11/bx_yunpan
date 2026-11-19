@@ -99,7 +99,7 @@ func TestDashScopeAnswerParsesGroundingContract(t *testing.T) {
 	defer server.Close()
 
 	provider := &dashScopeProvider{baseURL: server.URL, chatModel: "test-chat", client: server.Client()}
-	result, err := provider.Answer(context.Background(), "发布前要做什么？", []Evidence{{ID: "chunk-1", FileName: "发布清单.md", Content: "完成接口联调"}})
+	result, err := provider.Answer(context.Background(), "发布前要做什么？", []Evidence{{ID: "chunk-1", FileName: "发布清单.md", Content: "完成接口联调"}}, AnswerOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

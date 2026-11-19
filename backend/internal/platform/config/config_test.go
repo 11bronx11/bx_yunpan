@@ -14,6 +14,31 @@ func TestLoadRejectsInvalidWorkerConcurrency(t *testing.T) {
 	}
 }
 
+func TestLoadChatModelOutputCeiling(t *testing.T) {
+	t.Setenv("AI_ENABLED", "true")
+	t.Setenv("AI_PROVIDER", "fake")
+	for _, tc := range []struct {
+		value string
+		want  int
+	}{
+		{"", 32768}, {"8192", 8192}, {"0", 0}, {"-1", 0},
+	} {
+		t.Run("ceiling_"+tc.value, func(t *testing.T) {
+			t.Setenv("AI_CHAT_MAX_OUTPUT_TOKENS", tc.value)
+			cfg, err := LoadForRole("api")
+			if tc.want == 0 {
+				if err == nil {
+					t.Fatal("non-positive output ceiling was accepted")
+				}
+				return
+			}
+			if err != nil || cfg.AI.ChatMaxOutputTokens != tc.want {
+				t.Fatalf("ceiling=%d, want %d: %v", cfg.AI.ChatMaxOutputTokens, tc.want, err)
+			}
+		})
+	}
+}
+
 func TestLoadUsesDevelopmentDefaults(t *testing.T) {
 	// The default-value contract must not depend on a developer's deployment
 	// environment. In particular, deploy/.env carries an optional reranker URL

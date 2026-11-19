@@ -16,13 +16,16 @@ func (p *countingEmbeddingProvider) Embeddings(context.Context, []string) ([][]f
 	p.calls++
 	return [][]float32{{1, 0, 0}}, nil
 }
+
 func (*countingEmbeddingProvider) Enrich(context.Context, string) (Insight, error) {
 	return Insight{}, nil
 }
+
 func (*countingEmbeddingProvider) ExtractImage(context.Context, string, []byte) (string, error) {
 	return "", nil
 }
-func (*countingEmbeddingProvider) Answer(context.Context, string, []Evidence) (AnswerResult, error) {
+
+func (*countingEmbeddingProvider) Answer(context.Context, string, []Evidence, AnswerOptions) (AnswerResult, error) {
 	return AnswerResult{}, nil
 }
 
@@ -32,6 +35,7 @@ func (c *memoryEmbeddingCache) Get(_ context.Context, key string) ([]float32, bo
 	value, ok := c.values[key]
 	return append([]float32(nil), value...), ok, nil
 }
+
 func (c *memoryEmbeddingCache) Set(_ context.Context, key string, value []float32) error {
 	if c.values == nil {
 		c.values = map[string][]float32{}

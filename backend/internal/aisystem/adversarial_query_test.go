@@ -2,6 +2,8 @@ package aisystem
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"math"
 	"net/http"
@@ -9,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"crypto/ed25519"
-	"crypto/rand"
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai"
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai/pbv2"
 	"github.com/11bronx11/bx_yunpan/backend/internal/ai/rag"
@@ -66,6 +66,7 @@ func (p *invalidModel) Enrich(context.Context, string) (ai.Insight, error) {
 	}
 	return ai.Insight{Summary: " \n\t"}, nil
 }
+
 func (p *invalidModel) Embeddings(_ context.Context, texts []string) ([][]float32, error) {
 	p.calls++
 	if p.mode == "error" {
@@ -135,13 +136,13 @@ type changingProvider struct {
 	unknown bool
 }
 
-func (p *changingProvider) Answer(ctx context.Context, q string, e []ai.Evidence) (ai.AnswerResult, error) {
+func (p *changingProvider) Answer(ctx context.Context, q string, e []ai.Evidence, options ai.AnswerOptions) (ai.AnswerResult, error) {
 	p.answers++
 	if p.unknown {
 		return ai.AnswerResult{Answer: "fixture", CitationIDs: []string{"unknown", "unknown"}}, nil
 	}
 	p.core.revoked = true
-	return p.Provider.Answer(ctx, q, e)
+	return p.Provider.Answer(ctx, q, e, options)
 }
 
 // D10/D11/D16: pre-model changes prevent calls; changes during Answer suppress
@@ -158,8 +159,10 @@ func TestEvidenceRevalidationAtModelBoundaries(t *testing.T) {
 		answers   int
 		success   bool
 	}{
-		{"before-reranker", 1, false, 0, false}, {"before-answer", 2, false, 0, false},
-		{"during-answer", 0, false, 1, false}, {"unknown-citation", 0, true, 1, true},
+		{"before-reranker", 1, false, 0, false},
+		{"before-answer", 2, false, 0, false},
+		{"during-answer", 0, false, 1, false},
+		{"unknown-citation", 0, true, 1, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			core := &changingScope{scopeClient: scopeClient{file: file}, invalidAt: tc.invalidAt}

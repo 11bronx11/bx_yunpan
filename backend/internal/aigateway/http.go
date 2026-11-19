@@ -21,6 +21,7 @@ import (
 	"github.com/11bronx11/bx_yunpan/backend/internal/core"
 	corepb "github.com/11bronx11/bx_yunpan/backend/internal/core/pb"
 	"github.com/11bronx11/bx_yunpan/backend/internal/ownerepoch"
+	"github.com/11bronx11/bx_yunpan/backend/internal/platform/grpcx"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/httpapi"
 	"github.com/11bronx11/bx_yunpan/backend/internal/platform/serviceauth"
 	"github.com/gin-gonic/gin"
@@ -79,8 +80,25 @@ func (h *HTTP) grant(ctx context.Context, owner uuid.UUID, scope aiprotocol.Scop
 	if err != nil {
 		return "", err
 	}
-	g := aiprotocol.ScopeGrant{Principal: owner, Scope: scope, ContentEpoch: epoch.ContentEpoch, ACLEpoch: epoch.ACLEpoch, RequestID: uuid.NewString(), Action: "retrieve", ExpiresAt: time.Now().Add(2 * time.Minute).Unix()}
+	g := aiprotocol.ScopeGrant{Principal: owner, Scope: scope, ContentEpoch: epoch.ContentEpoch, ACLEpoch: epoch.ACLEpoch, RequestID: uuid.NewString(), Action: "retrieve", ExpiresAt: time.Now().Add(h.scopeGrantTTL(scope)).Unix()}
 	return serviceauth.Sign(h.ScopeKey, "core-retrieval-v1", g.ExpiresAt, g)
+}
+
+func (h *HTTP) askTimeout(scope aiprotocol.Scope) time.Duration {
+	timeout := max(h.AskTimeout, time.Second)
+	if scope.Mode == "selected" {
+		// Legacy folder+file filters can resolve to fewer files. Reserve the
+		// single-file deadline so that intersection can use its full detail tier.
+		timeout *= time.Duration(aiprotocol.SelectedAskMultiplier(1))
+	}
+	return timeout
+}
+
+func (h *HTTP) scopeGrantTTL(scope aiprotocol.Scope) time.Duration {
+	if scope.Mode == "selected" {
+		return max(2*time.Minute, h.askTimeout(scope)+time.Minute)
+	}
+	return 2 * time.Minute
 }
 
 // Legacy requests may supply both filters. Resolve their intersection in core
@@ -122,6 +140,7 @@ func (h *HTTP) legacyAskGrant(ctx context.Context, owner uuid.UUID, selected aip
 		return "", status.Error(codes.Unavailable, "ai.unavailable")
 	}
 	g.Scope = selected
+	g.ExpiresAt = time.Now().Add(h.scopeGrantTTL(selected)).Unix()
 	return serviceauth.Sign(h.ScopeKey, "core-retrieval-v1", g.ExpiresAt, g)
 }
 
@@ -302,8 +321,10 @@ func (h *HTTP) ask(c *gin.Context) {
 		h.fail(c, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), max(h.AskTimeout, time.Second))
+	timeout := h.askTimeout(scope)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 	defer cancel()
+	ctx = grpcx.WithAskTimeout(ctx, timeout)
 	resp, err := h.Client.Ask(ctx, &pbv2.AskRequest{Grant: grant, Question: req.Question, RequestId: httpapi.RequestIDValue(c)})
 	if err != nil {
 		h.fail(c, err)
