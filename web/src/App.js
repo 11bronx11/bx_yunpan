@@ -11,6 +11,7 @@ import Shares from './pages/Shares';
 import NavBar from './components/NavBar';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { TransferProvider } from './contexts/TransferContext';
+import { AskProvider } from './contexts/AskContext';
 
 const Shell = styled(Layout)`min-height: 100vh; background: var(--paper);`;
 const Content = styled(Layout.Content)`width: min(calc(100% - 48px), 1344px); min-width: 0; margin: 44px auto 80px; @media (max-width: 760px) { width: calc(100% - 28px); margin-top: 32px; }`;
@@ -18,7 +19,7 @@ const Content = styled(Layout.Content)`width: min(calc(100% - 48px), 1344px); mi
 const PrivateRoute = ({ children }) => {
   const { user, ready } = useAuth();
   if (!ready) return <Spin fullscreen />;
-  return user ? children : <Navigate to="/login" replace />;
+  return user ? <AskProvider key={user.id}>{children}</AskProvider> : <Navigate to="/login" replace />;
 };
 
 const LoginRoute = () => {

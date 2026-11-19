@@ -1,7 +1,16 @@
 import { api } from './api';
-import { listAskableFiles, searchFiles } from './ai';
+import { askFiles, listAskableFiles, searchFiles } from './ai';
 
 jest.mock('./api', () => ({ api: jest.fn() }));
+
+test('passes ask cancellation to fetch without serializing its signal into the request', async () => {
+  const controller = new AbortController();
+  await askFiles('question', { scope: { mode: 'selected', file_ids: ['file-1'] }, signal: controller.signal });
+  const [path, options] = api.mock.calls.at(-1);
+  expect(path).toBe('/api/v1/ai/ask');
+  expect(options.signal).toBe(controller.signal);
+  expect(JSON.parse(options.body)).toEqual({ question: 'question', scope: { mode: 'selected', file_ids: ['file-1'] } });
+});
 
 test('passes search cancellation to fetch and keeps scope filters in the JSON body', async () => {
   const controller = new AbortController();

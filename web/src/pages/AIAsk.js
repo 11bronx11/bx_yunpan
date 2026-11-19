@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, App, Button, Tag } from 'antd';
+import { Alert, Button, Tag } from 'antd';
+import { useLocation, useNavigate } from 'react-router-dom';
 import Input from '../components/IMEInput';
 import { FolderOpenOutlined, SendOutlined } from '@ant-design/icons';
 import styled from '@emotion/styled';
 import AskFilePicker from '../components/AskFilePicker';
-import { askFiles, getFileAI } from '../services/ai';
+import { useAsk } from '../contexts/AskContext';
 import { GraphicEmpty, PageHeader, ProductPage } from '../components/design/ProductUI';
 
 const Workspace = styled.div`width: 100%; margin: 0;`;
@@ -41,57 +42,22 @@ const Answer = styled.article`
 `;
 
 const AIAsk = () => {
-  const { message } = App.useApp();
-  const [question, setQuestion] = useState('');
-  const [answer, setAnswer] = useState(null);
-  const [asking, setAsking] = useState(false);
-  const [selected, setSelected] = useState([]);
+  const { question, setQuestion, answer, asking, selected, invalidFiles, scopeError, askError,
+    preparing, applySelection, prepareFile, runAsk, markViewed } = useAsk();
+  const { search } = useLocation();
+  const navigate = useNavigate();
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [invalidFiles, setInvalidFiles] = useState([]);
-  const [scopeError, setScopeError] = useState('');
-  const [preparing, setPreparing] = useState(false);
   useEffect(() => {
-    const fileId = new URLSearchParams(window.location.search).get('file');
-    if (!fileId) return undefined;
-    const controller = new AbortController();
-    let timer;
-    let attempts = 0;
-    setPreparing(true);
-    const check = async () => {
-      try {
-        const info = await getFileAI(fileId, { signal: controller.signal });
-        if (controller.signal.aborted) return;
-        if (info.capabilities?.askable) {
-          setSelected([{ id: fileId, name: new URLSearchParams(window.location.search).get('name') || '指定文件' }]);
-          setPreparing(false); setScopeError('');
-        } else if (++attempts < 60 && info.capabilities?.text?.latest_build?.state !== 'failed') {
-          timer = setTimeout(check, 2000);
-        } else { setPreparing(false); setScopeError('这个文件尚未准备好问答，请在文件菜单中重建后重试。'); }
-      } catch (error) { if (!controller.signal.aborted) { setPreparing(false); setScopeError(error.message || '无法读取指定文件'); } }
-    };
-    check();
-    return () => { controller.abort(); clearTimeout(timer); };
-  }, []);
-
-  const runAsk = async () => {
-    const value = question.trim();
-    if (!value || asking || preparing || scopeError) return;
-    const scope = selected.length ? { mode: 'selected', file_ids: selected.map(file => file.id) } : { mode: 'all' };
-    setAsking(true);
-    setQuestion('');
-    setAnswer(null);
-    try {
-      setAnswer(await askFiles(value, { scope }));
-    } catch (error) {
-      if (error.code === 'ai.scope_invalid' || error.code === 'ai.scope_changed') {
-        setQuestion(current => current || value);
-        setScopeError(error.message || '选择已失效，请更新文件范围');
-        setInvalidFiles(error.invalidFiles || []);
-      } else message.error(error.message || '问答失败');
-    } finally {
-      setAsking(false);
+    const params = new URLSearchParams(search);
+    if (params.get('file')) {
+      prepareFile(params.get('file'), params.get('name'));
+      // Consume the file shortcut so reloading starts with an empty workspace.
+      params.delete('file');
+      params.delete('name');
+      navigate({ pathname: '/ask', search: params.toString() }, { replace: true });
     }
-  };
+  }, [navigate, prepareFile, search]);
+  useEffect(() => { markViewed(); }, [answer, askError, markViewed, scopeError]);
 
   return <ProductPage accent="var(--mint)">
     <Workspace>
@@ -119,6 +85,7 @@ const AIAsk = () => {
       </Composer>
       <ResultSection>
         <ResultTitle>回答</ResultTitle>
+        {askError && <Alert type="error" message={askError} />}
         {answer?.retrieval?.degraded && <Alert type="info" message="本次使用可用的文本检索生成回答" />}
         {answer?.coverage?.missing_evidence_file_ids?.length > 0 && <Alert type="warning" message="部分所选文件没有找到相关证据，回答未覆盖这些文件。" />}
 
@@ -126,7 +93,7 @@ const AIAsk = () => {
           ? <Answer className="page-reveal">{answer.answer}</Answer>
           : <GraphicEmpty title={asking ? '正在整理答案' : '等待你的问题'} />}
       </ResultSection>
-      <AskFilePicker open={pickerOpen} selected={selected} onCancel={() => setPickerOpen(false)} onApply={files => { setSelected(files); setScopeError(''); setInvalidFiles([]); setPickerOpen(false); }} />
+      <AskFilePicker open={pickerOpen} selected={selected} onCancel={() => setPickerOpen(false)} onApply={files => { applySelection(files); setPickerOpen(false); }} />
     </Workspace>
   </ProductPage>;
 };

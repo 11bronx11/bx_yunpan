@@ -5,6 +5,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import styled from '@emotion/styled';
 import { useAuth } from '../contexts/AuthContext';
 import { useTransfers } from '../contexts/TransferContext';
+import { useAsk } from '../contexts/AskContext';
 
 const Header = styled.header`width: min(calc(100% - 64px), 1280px); margin: 20px auto 0; @media (max-width: 900px) { width: calc(100% - 28px); margin-top: 14px; }`;
 const Bar = styled.div`display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 16px; align-items: center; min-width: 0; min-height: 60px; padding: 7px 12px; border: 1px solid var(--ink); border-radius: var(--radius-pill); background: rgba(255,255,255,.94); box-shadow: 0 3px 0 var(--ink); @media (max-width: 900px) { display: flex; }`;
@@ -18,21 +19,24 @@ const Mobile = styled(Button)`display: none; width: 44px; height: 44px; @media (
 const NavBar = () => {
   const { user, logout } = useAuth();
   const { activeCount } = useTransfers();
+  const { asking, unread, askError, scopeError, reset } = useAsk();
   const location = useLocation();
   const navigate = useNavigate();
-  const links = [{ to: '/drive', text: '我的云盘', icon: <CloudOutlined /> }, { to: '/transfers', text: '传输', icon: <Badge count={activeCount} size="small" offset={[7, -3]}><SwapOutlined /></Badge> }, { to: '/shares', text: '我的分享', icon: <LinkOutlined /> }, { to: '/ai', text: '检索', icon: <SearchOutlined /> }, { to: '/ask', text: '问答', icon: <CommentOutlined /> }];
+  const signOut = () => { reset(); logout(); };
+  const askStatus = asking ? '问答正在生成' : unread ? (askError || scopeError ? '问答失败，请返回查看' : '回答已生成，点击查看') : undefined;
+  const links = [{ to: '/drive', text: '我的云盘', icon: <CloudOutlined /> }, { to: '/transfers', text: '传输', icon: <Badge count={activeCount} size="small" offset={[7, -3]}><SwapOutlined /></Badge> }, { to: '/shares', text: '我的分享', icon: <LinkOutlined /> }, { to: '/ai', text: '检索', icon: <SearchOutlined /> }, { to: '/ask', text: '问答', icon: <Badge dot={asking || unread} color={asking ? 'var(--blue)' : 'var(--mint)'} title={askStatus}><CommentOutlined /></Badge> }];
   const accountMenu = {
     items: [
       { key: 'username', label: user?.username || '当前用户', disabled: true },
       { type: 'divider' },
       { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true },
     ],
-    onClick: ({ key }) => { if (key === 'logout') logout(); },
+    onClick: ({ key }) => { if (key === 'logout') signOut(); },
   };
   const mobileMenu = {
     items: [...links.map(link => ({ key: link.to, icon: link.icon, label: link.text })), { type: 'divider' }, { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true }],
     selectedKeys: [location.pathname],
-    onClick: ({ key }) => { if (key === 'logout') logout(); else navigate(key); },
+    onClick: ({ key }) => { if (key === 'logout') signOut(); else navigate(key); },
   };
   return <Header><Bar><Brand to="/drive"><Mark /><span>BX YUNPAN</span></Brand><Nav>{links.map(link => <Item key={link.to} to={link.to} className={location.pathname === link.to ? 'active' : ''}>{link.icon}{link.text}</Item>)}</Nav><Dropdown menu={accountMenu} trigger={['click']} placement="bottomRight"><Account type="button" aria-label="打开账户菜单">{user?.username}</Account></Dropdown><Dropdown menu={mobileMenu} trigger={['click']} placement="bottomRight"><Mobile icon={<MenuOutlined />} aria-label="打开导航" /></Dropdown></Bar></Header>;
 };
