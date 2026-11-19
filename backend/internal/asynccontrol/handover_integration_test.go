@@ -13,6 +13,15 @@ import (
 )
 
 func TestLegacyDrainPersistsProofBeforeAckAndResumes(t *testing.T) {
+	testLegacyDrainPersistsProofBeforeAckAndResumes(t, false)
+}
+
+func TestLegacyDrainSingleActiveQuorumPreservesProofBeforeAck(t *testing.T) {
+	testLegacyDrainPersistsProofBeforeAckAndResumes(t, true)
+}
+
+func testLegacyDrainPersistsProofBeforeAckAndResumes(t *testing.T, singleActive bool) {
+	t.Helper()
 	s := New(testdb.Control(t))
 	b := testBroker(t)
 	ctx := context.Background()
@@ -31,6 +40,17 @@ func TestLegacyDrainPersistsProofBeforeAckAndResumes(t *testing.T) {
 	}
 	defer ch.Close()
 	queue := b.WorkQueue("upload")
+	if singleActive {
+		queue = b.Prefix + ".result.00"
+		if _, err := ch.QueueDeclare(queue, true, false, false, false, amqp.Table{"x-queue-type": "quorum", "x-single-active-consumer": true}); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if _, err := ch.QueueDelete(queue, false, false, false); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
 	n := task.Notice()
 	n.Version, n.ShardKey, n.Shard, n.LayoutVersion = 1, task.ShardKey, task.Shard, task.LayoutVersion
 	body, _ := json.Marshal(n)

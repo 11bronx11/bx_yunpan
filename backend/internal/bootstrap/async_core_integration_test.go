@@ -368,6 +368,7 @@ func TestAsyncCoreRealDependencies(t *testing.T) {
 	}
 	otherToken := token
 	token = ownerToken
+	runShareLifecycleRequestChecks(t, fileID, shareID, share["share_key"].(string), imported["id"].(string), ownerToken, otherToken, func(value string) { token = value }, func(value string) { shareAccess = value }, request)
 	// Hash mismatch must fail once, release only its reservation, and preserve
 	// the canonical bytes shared by both owners.
 	bad := request("POST", "/api/v1/uploads", map[string]any{"folder_id": root, "filename": "bad.png", "sha256": strings.Repeat("a", 64), "size_bytes": len(content), "mime_type": "image/png"}, 201)["upload"].(map[string]any)["id"].(string)
@@ -446,6 +447,8 @@ func TestAsyncCoreRealDependencies(t *testing.T) {
 		t.Fatal("GC retained authorized object bytes")
 	}
 	t.Log("share import/reference/quota, hash mismatch, cancellation, expiry/rescheduling and authorized shared-object GC passed")
+	runMultipartRequestChecks(t, ctx, otherRoot, token, func(value string) { token = value }, request)
+	runChainWhiteboxChecks(t, ctx, business, control, nil, cfg)
 }
 
 func TestAsyncCoreDirectRealDependencies(t *testing.T) {

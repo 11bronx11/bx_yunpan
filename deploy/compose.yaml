@@ -402,7 +402,7 @@ services:
       args: {TARGET: ai-content-worker, GO_VERSION: "${GO_VERSION:-1.25.13}"}
     environment:
       <<: *app-environment
-      DASHSCOPE_API_KEY: ""
+      # Image OCR calls the vision model here and needs the inherited provider key.
       AI_INTENT_MIGRATION_DSN: ""
       AI_CONTROL_MIGRATION_DSN: ""
       AI_QUERY_DSN: ""
@@ -724,9 +724,9 @@ services:
       - rabbitmq-data:/var/lib/rabbitmq
       - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running && rabbitmq-diagnostics -q check_port_connectivity"]
       interval: 5s
-      timeout: 5s
+      timeout: 10s
       retries: 20
       start_period: 15s
     restart: unless-stopped

@@ -644,6 +644,7 @@ func TestAISplitRealDependencies(t *testing.T) {
 		})
 		runAIOnlineChecks(t, ctx, base, token, root, a, b, &esFail, &qdFail, &qdGate, upload)
 	}
+	runChainWhiteboxChecks(t, ctx, biz, ctrl, aidb, cfg)
 	if ready := os.Getenv("TEST_AI_BROWSER_READY_FILE"); ready != "" {
 		raw, _ := json.Marshal(map[string]any{"base_url": browserBase, "api": base, "storage": "http://" + cfg.Storage.Endpoint, "username": username, "password": password, "file_ids": []string{a, b}, "root": root})
 		if err := os.WriteFile(ready, raw, 0o600); err != nil {

@@ -220,28 +220,48 @@ func (s *Store) DrainLegacy(ctx context.Context, url, prefix string) error {
 			ch.Close()
 			return fmt.Errorf("legacy queue %s still has consumers", queue)
 		}
-		for {
-			msg, ok, err := ch.Get(queue, false)
-			if err != nil {
-				ch.Close()
-				return err
-			}
-			if !ok {
-				break
-			}
-			if err := s.TransferMessage(ctx, queue, msg.Body); err != nil {
-				ch.Close()
-				return err
-			}
-			if err := msg.Ack(false); err != nil {
-				ch.Close()
-				return err
-			}
+		if err := s.drainLegacyMessages(ctx, ch, queue, info.Messages); err != nil {
+			ch.Close()
+			return err
 		}
 		ch.Close()
 	}
 	return nil
 }
+
+func (s *Store) drainLegacyMessages(ctx context.Context, ch *amqp.Channel, queue string, count int) error {
+	if count == 0 {
+		return nil
+	}
+	// Legacy result queues use quorum + single-active-consumer, which rejects
+	// basic.get. Consume the inspected backlog with bounded unacknowledged work;
+	// closing the channel returns any message whose proof could not be saved.
+	if err := ch.Qos(1, 0, false); err != nil {
+		return err
+	}
+	messages, err := ch.ConsumeWithContext(ctx, queue, "", false, false, false, false, nil)
+	if err != nil {
+		return err
+	}
+	for range count {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case msg, ok := <-messages:
+			if !ok {
+				return fmt.Errorf("legacy queue %s consumer closed before drain completed", queue)
+			}
+			if err := s.TransferMessage(ctx, queue, msg.Body); err != nil {
+				return err
+			}
+			if err := msg.Ack(false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func errorsAsAMQP(err error, target **amqp.Error) bool { return errors.As(err, target) }
 func (s *Store) Activate(ctx context.Context) error {
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

@@ -109,15 +109,17 @@ yunpan_wait_one_shots compose migrate migrate-control async-reader-init
 # new-protocol launch value for this invocation.
 if [[ ${ASYNC_BROKER_PREFIX:-bx.async.v1} == bx.async.v1 ]]; then export ASYNC_BROKER_PREFIX=bx.async.v2; fi
 if [[ ${AI_ENABLED:-true} == true ]]; then
-  "${compose[@]}" --profile ai-split up -d --no-build migrate-ai ai-role-init
+  "${compose[@]}" "${profiles[@]}" up -d --no-build migrate-ai ai-role-init
   yunpan_wait_one_shots compose migrate-ai ai-role-init
 fi
-"${compose[@]}" --profile async-admin run --rm --no-deps async-handover transfer
+# Handover reads retained broker messages before any application role starts.
+"${compose[@]}" "${profiles[@]}" up -d --no-build --wait --wait-timeout 240 rabbitmq
+"${compose[@]}" "${profiles[@]}" --profile async-admin run --rm --no-deps async-handover transfer
 if [[ ${ASYNC_PROTOCOL_VERSION:-2} == 3 && ${AI_ENABLED:-true} == true ]]; then
-  "${compose[@]}" --profile async-admin run --rm --no-deps ai-direct-admin transfer
-  "${compose[@]}" --profile async-admin run --rm --no-deps ai-direct-admin activate
+  "${compose[@]}" "${profiles[@]}" --profile async-admin run --rm --no-deps ai-direct-admin transfer
+  "${compose[@]}" "${profiles[@]}" --profile async-admin run --rm --no-deps ai-direct-admin activate
 fi
-"${compose[@]}" --profile async-admin run --rm --no-deps async-handover activate
+"${compose[@]}" "${profiles[@]}" --profile async-admin run --rm --no-deps async-handover activate
 scale=()
 [[ -z "$api_replicas" ]] || scale+=(--scale "api=$api_replicas")
 if [[ -n "$aisvc_replicas" ]]; then
