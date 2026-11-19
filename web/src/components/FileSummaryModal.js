@@ -96,8 +96,6 @@ const Metadata = styled.div`
     white-space: normal;
     overflow-wrap: anywhere;
   }
-
-  .overview-label { color: var(--ink); background: var(--mint); }
 `;
 
 const unavailableMessage = '暂时无法查看AI摘要';
@@ -149,7 +147,6 @@ const FileSummaryModal = ({ file, open, onClose }) => {
       {!loading && available && <>
         <Summary>{summary}</Summary>
         <Metadata aria-label="概览标签">
-          <Tag className="overview-label">AI 概览</Tag>
           {document.language && <Tag>{document.language.toUpperCase()}</Tag>}
           {document.tags?.map(tag => <Tag key={tag}>{tag}</Tag>)}
         </Metadata>

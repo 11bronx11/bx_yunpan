@@ -33,7 +33,7 @@ func TestIndexStatus(t *testing.T) {
 		want string
 	}{
 		{"missing response", nil, "missing"},
-		{"unsupported file", &pbv2.Capabilities{}, "missing"},
+		{"unsupported file", &pbv2.Capabilities{}, "failed"},
 		{"no recorded build", &pbv2.Capabilities{Source: pending(false), Text: pending(false)}, "missing"},
 		{"queued build", &pbv2.Capabilities{Source: pending(true), Text: pending(true)}, "processing"},
 		{"text ready while vectors are queued", &pbv2.Capabilities{Source: ready(), Text: ready(), Vector: pending(true)}, "processing"},

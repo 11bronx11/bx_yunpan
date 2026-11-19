@@ -281,7 +281,6 @@ const Drive = () => {
     if (key === 'move') setMoveTarget(file);
     if (key === 'rename') openRename(file);
     if (key === 'ai') setAITarget(file);
-    if (key === 'ask') window.location.assign(`/ask?file=${encodeURIComponent(file.id)}&name=${encodeURIComponent(file.name)}`);
   };
 
   const compactFileMenu = file => ({
@@ -290,7 +289,6 @@ const Drive = () => {
       { key: 'delete', icon: <DeleteOutlined />, label: '删除', danger: true },
       { key: 'share', icon: <LinkOutlined />, label: '分享' },
       { key: 'ai', icon: <RobotOutlined />, label: 'AI 索引' },
-      { key: 'ask', icon: <RobotOutlined />, label: '问此文件' },
       { key: 'move', icon: <FolderOpenOutlined />, label: '移动到' },
       { key: 'rename', icon: <EditOutlined />, label: '重命名' },
     ],
@@ -305,7 +303,6 @@ const Drive = () => {
   const moreFileMenu = file => ({
     items: [
       { key: 'ai', icon: <RobotOutlined />, label: 'AI 索引' },
-      { key: 'ask', icon: <RobotOutlined />, label: '问此文件' },
       { key: 'move', icon: <FolderOpenOutlined />, label: '移动到' },
       { key: 'rename', icon: <EditOutlined />, label: '重命名' },
     ],

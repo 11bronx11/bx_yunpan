@@ -105,6 +105,7 @@ test('downloads a file without opening a new window', async () => {
   renderDrive();
 
   fireEvent.click(await screen.findByRole('button', { name: '管理 report.pdf' }));
+  expect(screen.queryByText('问此文件')).not.toBeInTheDocument();
   fireEvent.click(await screen.findByText('下载'));
 
   await waitFor(() => expect(startDownload).toHaveBeenCalledWith('https://example.test/report.pdf', 'report.pdf'));

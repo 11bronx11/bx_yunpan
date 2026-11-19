@@ -16,6 +16,7 @@ test('displays a bounded read-only overview with only the header close control',
   expect(getFileAI).toHaveBeenCalledWith('file-1', expect.objectContaining({ signal: expect.any(AbortSignal) }));
   expect(Array.from(truncateSummary(longSummary))).toHaveLength(AI_SUMMARY_LIMIT);
   expect(screen.getByRole('article', { name: 'AI 概览' })).toHaveTextContent('复盘');
+  expect(screen.queryByText('AI 概览')).not.toBeInTheDocument();
   expect(screen.getAllByRole('button')).toHaveLength(1);
   fireEvent.click(screen.getByRole('button', { name: 'Close' }));
   expect(onClose).toHaveBeenCalledTimes(1);

@@ -62,6 +62,23 @@ const isFailedIndex = status => status === 'failed' || status === 'unsupported';
 const isTerminalTask = task => task && !isActiveTask(task);
 const buildMessageKey = 'index-build';
 
+// Only known file limitations may explain a failure to the user. Never render
+// task/provider error messages, which can contain internal service details.
+const buildFailureMessage = (...values) => {
+  const codes = values.flatMap(value => [
+    value?.code,
+    value?.error_code,
+    ...Object.values(value?.capabilities || {})
+      .filter(capability => capability?.supported)
+      .map(capability => capability.latest_build?.error_code),
+  ]);
+  if (codes.some(code => ['ai.capability_unsupported', 'ai.unsupported_type', 'ai.parse.unsupported'].includes(code))) {
+    return '构建失败：类型不支持';
+  }
+  if (codes.includes('ai.parse.resource_limit')) return '构建失败：文件过大';
+  return '构建失败';
+};
+
 const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
   const { message } = App.useApp();
   const [document, setDocument] = useState(null);
@@ -136,7 +153,7 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
           setTask({ ...current, resultStatus: result?.status });
           if (['failed', 'partial_success', 'needs_attention'].includes(current.status) || (current.status === 'succeeded' && isFailedIndex(result?.status))) {
             onStatusChange?.(file.id, 'failed');
-            message.open({ key: buildMessageKey, type: 'error', content: '构建失败' });
+            message.open({ key: buildMessageKey, type: 'error', content: buildFailureMessage(current, result) });
           } else if (current.status === 'canceled') {
             message.open({ key: buildMessageKey, type: 'info', content: '构建已取消' });
           } else if (result?.status === 'indexed') {
@@ -180,7 +197,7 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
       onStatusChange?.(file.id, 'processing');
       message.open({ key: buildMessageKey, type: 'success', content: '索引构建请求已提交' });
     } catch (error) {
-      if (!controller.signal.aborted) message.open({ key: buildMessageKey, type: 'error', content: '构建失败' });
+      if (!controller.signal.aborted) message.open({ key: buildMessageKey, type: 'error', content: buildFailureMessage(error) });
     } finally {
       if (!controller.signal.aborted) {
         submissionPending.current = false;
@@ -223,11 +240,8 @@ const AIIndexModal = ({ file, open, onClose, onStatusChange }) => {
           <Space><span>当前状态</span><StatusTag tone={meta.tone}>{loading ? '正在加载' : meta.label}</StatusTag></Space>
         </StatusRow>
         {loadError && <Alert type="error" showIcon message={loadError} />}
-        {failed && <Alert type="error" showIcon message="构建失败" />}
         {task && <Progress percent={task.progress || 0} status={progressStatus} />}
         {document && <Metadata>
-          <dt>模型</dt><dd>{document.model_version || '-'}</dd>
-          <dt>索引管线</dt><dd>{document.pipeline_version || '-'}</dd>
           <dt>语言</dt><dd>{document.language || '-'}</dd>
           <dt>标签</dt><dd>{document.tags?.length ? document.tags.join(' · ') : '-'}</dd>
         </Metadata>}

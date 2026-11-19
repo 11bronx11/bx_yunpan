@@ -105,16 +105,17 @@ test('task checks back off, recover from temporary failure and speed up on progr
   expect(screen.getByRole('button', { name: '刷新 AI 索引状态' })).toBeEnabled();
 });
 
-test('keeps model metadata while hiding known and unknown index errors', async () => {
+test('hides model, pipeline metadata and internal index errors', async () => {
   getFileAI.mockResolvedValue({
     status: 'unsupported', error_code: 'ai.vision.rejected',
     model_version: 'qwen-plus+embedding', pipeline_version: 'document-index-v5', tags: [],
   });
   render(<App><AIIndexModal file={{ id: 'image' }} open onClose={jest.fn()} /></App>);
 
-  expect(await screen.findByText('qwen-plus+embedding')).toBeInTheDocument();
-  expect(screen.getByText('document-index-v5')).toBeInTheDocument();
-  expect(within(screen.getByRole('alert')).getByText('构建失败')).toBeInTheDocument();
+  await screen.findByText('构建失败');
+  expect(screen.queryByText(/模型|索引管线|qwen-plus|document-index-v5/)).not.toBeInTheDocument();
+  expect(screen.getAllByText('构建失败')).toHaveLength(1);
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(screen.queryByText(/ai\.vision|Provider|AI_MAX|Worker|不支持/)).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: '重新构建索引' })).toBeEnabled();
 });
@@ -133,7 +134,7 @@ test.each([
     error_code: code, error_message: 'HTTP 400 AllocationQuota.FreeTierOnly ai.vision.rejected',
   });
   render(<App><AIIndexModal file={{ id: 'private-error' }} open onClose={jest.fn()} /></App>);
-  await screen.findByRole('alert');
+  await screen.findByText('构建失败');
   const button = screen.getByRole('button', { name: '重新构建索引' });
   fireEvent.click(button);
   fireEvent.click(button);
@@ -146,7 +147,8 @@ test.each([
   expect(screen.getByRole('progressbar')).not.toHaveClass('ant-progress-status-success');
   expect(screen.queryByText(/HTTP 400|AllocationQuota|ai\.vision|unknown\.provider|第 1 次处理|处理已完成/)).not.toBeInTheDocument();
   expect(screen.queryByText('索引构建完成')).not.toBeInTheDocument();
-  expect(within(screen.getByRole('alert')).getByText('构建失败')).toBeInTheDocument();
+  expect(within(screen.getByRole('dialog')).getByText('构建失败')).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(button).toBeEnabled();
 });
 
@@ -217,11 +219,50 @@ test.each(['partial_success', 'needs_attention'])('%s refreshes the result, show
   const onStatusChange = jest.fn();
   render(<App><AIIndexModal file={{ id: 'partial' }} open onClose={jest.fn()} onStatusChange={onStatusChange} /></App>);
 
-  await screen.findByRole('alert');
+  await screen.findByText('构建失败');
   fireEvent.click(screen.getByRole('button', { name: '重新构建索引' }));
   await waitFor(() => expect(getFileAI).toHaveBeenCalledTimes(2));
   expect(screen.getByRole('progressbar')).toHaveClass('ant-progress-status-exception');
   expect(screen.getByRole('button', { name: '重新构建索引' })).toBeEnabled();
   expect(onStatusChange).toHaveBeenLastCalledWith('partial', 'failed');
   expect(getAIJob).toHaveBeenCalledTimes(1);
+});
+
+test.each([
+  ['ai.capability_unsupported', '构建失败：类型不支持'],
+  ['ai.parse.resource_limit', '构建失败：文件过大'],
+  ['internal.error', '构建失败'],
+])('submission error %s only shows the allowed top message', async (code, expected) => {
+  getFileAI.mockResolvedValue({ ai_status: 'failed' });
+  reprocessFileAI.mockRejectedValue(Object.assign(new Error('private provider details'), { code }));
+  render(<App><AIIndexModal file={{ id: 'rejected' }} open onClose={jest.fn()} /></App>);
+  await screen.findByText('构建失败');
+  fireEvent.click(screen.getByRole('button', { name: '重新构建索引' }));
+
+  await waitFor(() => expect(screen.getAllByText(expected)).toHaveLength(expected === '构建失败' ? 2 : 1));
+  expect(screen.queryByText(/private provider|internal\.error/)).not.toBeInTheDocument();
+  expect(within(screen.getByRole('dialog')).queryByRole('alert')).not.toBeInTheDocument();
+});
+
+test.each([
+  ['ai.parse.resource_limit', '构建失败：文件过大'],
+  ['ai.parse.unsupported', '构建失败：类型不支持'],
+  ['ai.vision.rejected', '构建失败'],
+])('a completed rebuild reads %s from the published capability', async (code, expected) => {
+  getFileAI
+    .mockResolvedValueOnce({ ai_status: 'failed' })
+    .mockResolvedValueOnce({ ai_status: 'failed', capabilities: {
+      source: { supported: true, latest_build: { state: 'failed', error_code: code } },
+      vector: { supported: false, latest_build: { state: 'failed', error_code: 'ai.parse.unsupported' } },
+    } });
+  reprocessFileAI.mockResolvedValue({ id: 'limited', status: 'pending' });
+  getAIJob.mockResolvedValue({ id: 'limited', status: 'failed', error_code: 'ai.reprocess_failed', error_message: 'private provider details' });
+  render(<App><AIIndexModal file={{ id: 'limited' }} open onClose={jest.fn()} /></App>);
+  await screen.findByText('构建失败');
+  fireEvent.click(screen.getByRole('button', { name: '重新构建索引' }));
+
+  await waitFor(() => expect(screen.getAllByText(expected)).toHaveLength(expected === '构建失败' ? 2 : 1));
+  expect(screen.queryByText(/private provider|ai\.vision|ai\.parse/)).not.toBeInTheDocument();
+  expect(screen.getByRole('progressbar')).toHaveClass('ant-progress-status-exception');
+  expect(within(screen.getByRole('dialog')).queryByRole('alert')).not.toBeInTheDocument();
 });

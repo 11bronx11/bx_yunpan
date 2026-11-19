@@ -797,7 +797,7 @@ type AICoverageMode string
 
 // AIDocument defines model for AIDocument.
 type AIDocument struct {
-	// AiStatus Aggregated AI index status for the existing four-state UI.
+	// AiStatus Aggregated AI index status. Unsupported file types and failed builds (including file size limits) report failed; missing means no recorded build for a supported file.
 	AiStatus     *AIDocumentAiStatus `json:"ai_status,omitempty"`
 	Capabilities AICapabilities      `json:"capabilities"`
 	Coverage     *AICoverage         `json:"coverage,omitempty"`
@@ -823,7 +823,7 @@ type AIDocument struct {
 	Tags    *[]string         `json:"tags,omitempty"`
 }
 
-// AIDocumentAiStatus Aggregated AI index status for the existing four-state UI.
+// AIDocumentAiStatus Aggregated AI index status. Unsupported file types and failed builds (including file size limits) report failed; missing means no recorded build for a supported file.
 type AIDocumentAiStatus string
 
 // AIDocumentPreviewKind defines model for AIDocument.Preview.Kind.
@@ -888,7 +888,7 @@ type AskResponse struct {
 // AskableFilePage defines model for AskableFilePage.
 type AskableFilePage struct {
 	Items []struct {
-		// AiStatus Aggregated AI index status; processing includes queued builds. Unavailable status reads may omit this field.
+		// AiStatus Aggregated AI index status; processing includes queued builds, failed includes unsupported file types and file size limits. Unavailable status reads may omit this field.
 		AiStatus     *AskableFilePageItemsAiStatus `json:"ai_status,omitempty"`
 		Capabilities *AICapabilities               `json:"capabilities,omitempty"`
 		CreatedAt    Timestamp                     `json:"created_at"`
@@ -916,7 +916,7 @@ type AskableFilePage struct {
 	ScanIncomplete bool     `json:"scan_incomplete"`
 }
 
-// AskableFilePageItemsAiStatus Aggregated AI index status; processing includes queued builds. Unavailable status reads may omit this field.
+// AskableFilePageItemsAiStatus Aggregated AI index status; processing includes queued builds, failed includes unsupported file types and file size limits. Unavailable status reads may omit this field.
 type AskableFilePageItemsAiStatus string
 
 // AskableFilePageItemsType defines model for AskableFilePage.Items.Type.
@@ -1083,7 +1083,7 @@ type ErrorEnvelopeInvalidFilesReason string
 
 // FileEntry defines model for FileEntry.
 type FileEntry struct {
-	// AiStatus Aggregated AI index status; processing includes queued builds. Unavailable status reads may omit this field.
+	// AiStatus Aggregated AI index status; processing includes queued builds, failed includes unsupported file types and file size limits. Unavailable status reads may omit this field.
 	AiStatus  *FileEntryAiStatus `json:"ai_status,omitempty"`
 	CreatedAt Timestamp          `json:"created_at"`
 
@@ -1107,7 +1107,7 @@ type FileEntry struct {
 	Version      int64         `json:"version"`
 }
 
-// FileEntryAiStatus Aggregated AI index status; processing includes queued builds. Unavailable status reads may omit this field.
+// FileEntryAiStatus Aggregated AI index status; processing includes queued builds, failed includes unsupported file types and file size limits. Unavailable status reads may omit this field.
 type FileEntryAiStatus string
 
 // FileEntryType defines model for FileEntry.Type.

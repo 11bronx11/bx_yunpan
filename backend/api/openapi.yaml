@@ -1306,7 +1306,7 @@ components:
           nullable: true
         ai_status:
           type: string
-          description: Aggregated AI index status; processing includes queued builds. Unavailable status reads may omit this field.
+          description: Aggregated AI index status; processing includes queued builds, failed includes unsupported file types and file size limits. Unavailable status reads may omit this field.
           enum: [missing, processing, indexed, failed]
           nullable: true
         version:
@@ -1896,7 +1896,7 @@ components:
           $ref: '#/components/schemas/UUID'
         ai_status:
           type: string
-          description: Aggregated AI index status for the existing four-state UI.
+          description: Aggregated AI index status. Unsupported file types and failed builds (including file size limits) report failed; missing means no recorded build for a supported file.
           enum: [missing, processing, indexed, failed]
         status:
           type: string

@@ -17,8 +17,11 @@ import (
 // indexStatus preserves the simple public status without making core metadata
 // depend on the AI database. Disabled optional stages do not block completion.
 func indexStatus(caps *pbv2.Capabilities) string {
-	if caps == nil || !caps.GetText().GetSupported() {
+	if caps == nil {
 		return "missing"
+	}
+	if !caps.GetText().GetSupported() {
+		return "failed"
 	}
 	complete, started := true, false
 	for _, cap := range []*pbv2.Capability{caps.Source, caps.Text, caps.Vector, caps.Summary} {

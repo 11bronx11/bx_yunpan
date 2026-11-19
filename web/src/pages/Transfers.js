@@ -84,10 +84,10 @@ const statusMeta = {
   uploading: { label: '上传中', tone: 'mint' },
   pausing: { label: '正在暂停', tone: 'coral' },
   paused: { label: '已暂停', tone: 'coral' },
-  completing: { label: '服务器合并中', tone: 'blue' },
+  completing: { label: '处理中', tone: 'blue' },
   canceling: { label: '正在取消', tone: 'coral' },
   cancel_pending: { label: '取消待确认', tone: 'coral' },
-  verifying: { label: '服务器校验中', tone: 'blue' },
+  verifying: { label: '处理中', tone: 'blue' },
   verification_pending: { label: '等待校验结果', tone: 'coral' },
   interrupted: { label: '上传已中断', tone: 'coral' },
   completed: { label: '已完成', tone: 'lime' },
@@ -142,6 +142,7 @@ const Transfers = () => {
         const canCancel = ['queued', 'checking', 'uploading', 'pausing', 'paused', 'interrupted', 'cancel_pending'].includes(task.status);
         const canRemove = ['failed', 'canceled'].includes(task.status);
         const benignFeedback = task.status === 'skipped';
+        const processing = ['completing', 'verifying'].includes(task.status);
         const progressStatus = task.status === 'failed' ? 'exception' : undefined;
         const progressColor = task.status === 'completed' ? 'var(--mint)' : task.status === 'skipped' ? 'var(--blue)' : 'var(--ink)';
         return <TransferRow key={task.id}>
@@ -150,9 +151,9 @@ const Transfers = () => {
             <Progress percent={task.progress} status={progressStatus} showInfo={false} strokeColor={progressColor} />
             <ProgressMeta>
               <StatusTag tone={meta.tone}>{task.instant ? '秒传完成' : meta.label}</StatusTag>
-              {task.error
+              {!processing && (task.error
                 ? <FeedbackText role={benignFeedback ? undefined : 'alert'} $benign={benignFeedback} title={task.error}>{task.error}</FeedbackText>
-                : <DetailText>{['completing', 'verifying'].includes(task.status) ? '文件已发送，正在处理' : <>{task.status === 'uploading' && task.speed > 0 ? `${formatSize(task.speed)}/s · ` : ''}{formatSize(task.transferred || 0)} / {formatSize(task.size)}</>}</DetailText>}
+                : <DetailText>{task.status === 'uploading' && task.speed > 0 ? `${formatSize(task.speed)}/s · ` : ''}{formatSize(task.transferred || 0)} / {formatSize(task.size)}</DetailText>)}
             </ProgressMeta>
           </ProgressCell>
           <RowActions>
