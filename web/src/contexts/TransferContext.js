@@ -3,6 +3,7 @@ import { abortUpload, getUpload, listActiveUploads, uploadFile, waitForUpload } 
 import { releasePendingParts } from '../services/uploadScheduler';
 import { uploadPolicy } from '../services/uploadPolicy';
 import { uploadRequest } from '../services/uploadRequest';
+import { createUploadSpeedMeter } from '../services/uploadSpeed';
 import { useAuth } from './AuthContext';
 
 const TransferContext = createContext(null);
@@ -205,6 +206,10 @@ export const TransferProvider = ({ children }) => {
       isPaused: () => control.paused, isCanceled: () => control.canceled,
     };
     controls.current.set(id, control);
+    const speedMeter = createUploadSpeedMeter();
+    let speedTimer;
+    const stopSpeed = () => { window.clearInterval(speedTimer); speedTimer = undefined; };
+    abortController.signal.addEventListener('abort', stopSpeed, { once: true });
     const current = () => ownerId.current === runOwner && controls.current.get(id) === control && !control.canceled;
     control.onSession = session => {
       control.session = session;
@@ -215,16 +220,21 @@ export const TransferProvider = ({ children }) => {
     };
     control.onBackground = () => {
       if (!current()) return;
+      stopSpeed();
       transferSlots.current.delete(id);
       updateUpload(id, { speed: 0 });
     };
-    let lastWire = 0, lastTime = Date.now();
     control.onBytes = bytes => {
       if (!current()) return;
-      const now = Date.now();
-      const speed = Math.max(0, Math.round((bytes.wireBytes - lastWire) * 1000 / Math.max(now - lastTime, 1)));
-      lastWire = bytes.wireBytes; lastTime = now;
-      updateUpload(id, { ...bytes, speed });
+      speedMeter.update(bytes.wireBytes);
+      if (speedTimer === undefined && !control.paused) {
+        speedTimer = window.setInterval(() => {
+          if (!current()) return;
+          const speed = speedMeter.read();
+          updateUpload(id, item => ({ speed: item.status === 'uploading' ? speed : 0 }));
+        }, 500);
+      }
+      updateUpload(id, bytes);
     };
     const onProgress = progress => { if (current()) updateUpload(id, { progress }); };
     updateUpload(id, { status: background ? task.status : 'checking', control, pendingParts: control.pendingParts,
@@ -252,6 +262,8 @@ export const TransferProvider = ({ children }) => {
           ...(terminal ? { session: null, pendingParts: null, creation: null, idempotencyKey: `upload-${randomId()}`, progress: 0, transferred: 0 } : {}) });
       }
     } finally {
+      stopSpeed();
+      abortController.signal.removeEventListener('abort', stopSpeed);
       if (controls.current.get(id) === control) {
         activeUploads.current.delete(id); transferSlots.current.delete(id); controls.current.delete(id);
         if (ownerId.current === runOwner) setUploads([...uploadsRef.current]);

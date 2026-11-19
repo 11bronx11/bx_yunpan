@@ -15,11 +15,11 @@ jest.mock('../services/drive', () => ({
 }));
 
 const Probe = () => {
-  const { uploads, enqueueUploads, cancelUpload } = useTransfers();
+  const { uploads, enqueueUploads, cancelUpload, pauseUpload } = useTransfers();
   return <div>
     <button type="button" onClick={() => enqueueUploads([new File(['data'], 'sample.txt', { type: 'text/plain' })], 'folder-1', '根目录')}>添加</button>
     <button type="button" onClick={() => enqueueUploads(Array.from({ length: 5 }, (_, i) => new File(['data'], `file-${i}.txt`)), 'folder-1', '根目录')}>添加五个</button>
-    {uploads.map(task => <div key={task.id}><span data-error-code={task.errorCode}>{task.status}:{task.name}:{task.progress}</span><button type="button" onClick={() => cancelUpload(task.id)}>取消 {task.name}</button></div>)}
+    {uploads.map(task => <div key={task.id}><span data-error-code={task.errorCode} data-speed={task.speed}>{task.status}:{task.name}:{task.progress}</span><button type="button" onClick={() => cancelUpload(task.id)}>取消 {task.name}</button><button type="button" onClick={() => pauseUpload(task.id)}>暂停 {task.name}</button></div>)}
   </div>;
 };
 
@@ -30,6 +30,8 @@ beforeEach(() => {
   jest.clearAllMocks();
   abortUpload.mockResolvedValue();
 });
+
+afterEach(() => jest.useRealTimers());
 
 test('restores an active multipart session as interrupted after refresh', async () => {
   localStorage.setItem('bx-yunpan:uploads:user-1', JSON.stringify([{
@@ -140,4 +142,65 @@ test('does not claim cancellation until the server accepts it', async () => {
   expect(screen.getByText('canceling:sample.txt:0')).toBeInTheDocument();
   await act(async () => finishAbort());
   expect(await screen.findByText('canceled:sample.txt:0')).toBeInTheDocument();
+});
+
+const startSpeedUpload = async () => {
+  listActiveUploads.mockResolvedValue({ items: [] });
+  let control;
+  uploadFile.mockImplementation((file, folder, progress, value) => {
+    control = value;
+    control.onSession({ id: 'speed-session', status: 'uploading' });
+    return new Promise(() => {});
+  });
+  renderTransfers();
+  fireEvent.click(screen.getByRole('button', { name: '添加', exact: true }));
+  const row = await screen.findByText('uploading:sample.txt:0');
+  const emit = bytes => act(() => control.onBytes({ wireBytes: bytes, transferred: bytes }));
+  emit(0);
+  return { row, emit };
+};
+
+test('confirmation callbacks do not reset the displayed upload speed', async () => {
+  jest.useFakeTimers();
+  const { row, emit } = await startSpeedUpload();
+  act(() => { jest.advanceTimersByTime(500); });
+  emit(500);
+  act(() => { jest.advanceTimersByTime(500); });
+  const speed = row.getAttribute('data-speed');
+  expect(Number(speed)).toBeGreaterThan(0);
+  emit(500);
+  expect(row).toHaveAttribute('data-speed', speed);
+});
+
+test('closely spaced part completions cannot create a one-millisecond speed spike', async () => {
+  jest.useFakeTimers();
+  const { row, emit } = await startSpeedUpload();
+  act(() => { jest.advanceTimersByTime(1000); });
+  emit(1024);
+  emit(1024);
+  act(() => { jest.advanceTimersByTime(1); });
+  emit(2048);
+  expect(Number(row.getAttribute('data-speed'))).toBeLessThan(5000);
+});
+
+test('a stalled upload clears its speed even without another progress callback', async () => {
+  jest.useFakeTimers();
+  const { row, emit } = await startSpeedUpload();
+  act(() => { jest.advanceTimersByTime(500); });
+  emit(500);
+  act(() => { jest.advanceTimersByTime(500); });
+  expect(Number(row.getAttribute('data-speed'))).toBeGreaterThan(0);
+  act(() => { jest.advanceTimersByTime(3000); });
+  expect(row).toHaveAttribute('data-speed', '0');
+});
+
+test('late progress while draining a pause does not restore the upload speed', async () => {
+  jest.useFakeTimers();
+  const { emit } = await startSpeedUpload();
+  act(() => { jest.advanceTimersByTime(500); });
+  emit(500);
+  fireEvent.click(screen.getByRole('button', { name: '暂停 sample.txt' }));
+  act(() => { jest.advanceTimersByTime(100); });
+  emit(600);
+  expect(screen.getByText('pausing:sample.txt:0')).toHaveAttribute('data-speed', '0');
 });
