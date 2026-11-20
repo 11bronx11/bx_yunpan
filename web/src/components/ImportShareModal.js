@@ -19,10 +19,12 @@ const ImportForm = ({ folderId, targetLabel, onCancel, onImported }) => {
   const submit = async () => {
     if (busy || importing.current) return;
     if (!result) {
-      if (!/^[A-Za-z0-9_-]{22}$/.test(key.trim())) { message.warning('请输入完整的分享 Key'); return; }
+      const shareKey = key.trim();
+      if (!shareKey) { message.warning('请输入分享 Key'); return; }
+      if (!/^[A-Za-z0-9_-]{22}$/.test(shareKey)) { message.error('分享key格式错误'); return; }
       const controller = new AbortController(); request.current = controller; setBusy('resolve');
       try {
-        const resolved = await resolveShare(key.trim(), { signal: controller.signal });
+        const resolved = await resolveShare(shareKey, { signal: controller.signal });
         if (!controller.signal.aborted) { setResult(resolved); idempotency.current = createImportIdempotencyKey(); }
       } catch (error) { if (!controller.signal.aborted) message.error(error.message || '解析分享失败'); }
       finally { if (!controller.signal.aborted) setBusy(''); }
@@ -35,7 +37,7 @@ const ImportForm = ({ folderId, targetLabel, onCancel, onImported }) => {
       onImported?.(); onCancel();
     } catch (error) {
       message.error(error.message || '导入分享失败');
-      if (error.code === 'share.not_found') { setResult(null); idempotency.current = null; }
+      if (['share.not_found', 'share.source_deleted', 'share.expired', 'share.revoked', 'share.access_expired'].includes(error.code)) { setResult(null); idempotency.current = null; }
     } finally { importing.current = false; setBusy(''); }
   };
   return <Modal open title="导入分享" okText={result ? '导入到当前目录' : '解析分享'} cancelText="取消" onOk={submit}

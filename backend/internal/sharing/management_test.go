@@ -115,10 +115,10 @@ func TestShareManagementLifecycle(t *testing.T) {
 	if err := f.db.Model(&Share{}).Where("id = ?", share.ID).Update("expires_at", past).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.s.Access(token); !errors.Is(err, ErrNotFound) {
+	if _, _, err := f.s.Access(token); !errors.Is(err, ErrExpired) {
 		t.Fatalf("old token bypasses expiry: %v", err)
 	}
-	if _, _, _, _, err := f.s.Resolve(key); !errors.Is(err, ErrNotFound) {
+	if _, _, _, _, err := f.s.Resolve(key); !errors.Is(err, ErrExpired) {
 		t.Fatalf("expired resolve: %v", err)
 	}
 	if err := f.s.UpdateExpiry(ctx, f.owner, share.ID, 2, nil); !errors.Is(err, ErrInactive) {
@@ -148,11 +148,35 @@ func TestShareManagementLifecycle(t *testing.T) {
 	if err := f.s.Revoke(uuid.New(), share.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("foreign revoke: %v", err)
 	}
-	if _, _, err := f.s.Access(token); !errors.Is(err, ErrNotFound) {
+	if _, _, err := f.s.Access(token); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("old token bypasses revocation: %v", err)
+	}
+	if _, _, _, _, err := f.s.Resolve(key); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("revoked resolve: %v", err)
 	}
 	if err := f.s.UpdateExpiry(ctx, f.owner, share.ID, 2, nil); !errors.Is(err, ErrInactive) {
 		t.Fatalf("restored revoked share: %v", err)
+	}
+}
+
+func TestShareIncorrectKeyAndExpiredAccessToken(t *testing.T) {
+	f := seedShare(t, false)
+	share, key, err := f.s.Create(f.owner, f.file.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, err := f.s.Resolve(strings.Repeat("a", 22)); err != ErrNotFound {
+		t.Fatalf("incorrect key: %v", err)
+	}
+	token, err := f.s.signAccess(share.ID, time.Now().Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.s.Access(token); !errors.Is(err, ErrAccessExpired) {
+		t.Fatalf("expired access token: %v", err)
+	}
+	if _, _, _, _, err := f.s.Resolve(key); err != nil {
+		t.Fatalf("active share cannot be resolved again: %v", err)
 	}
 }
 

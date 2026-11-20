@@ -41,12 +41,17 @@ func TestShareCommandsRejectInvalidBodies(t *testing.T) {
 	}
 }
 
-func TestImportQuotaErrorResponses(t *testing.T) {
+func TestShareErrorResponses(t *testing.T) {
 	for _, test := range []struct {
 		err    error
 		status int
 		code   string
 	}{
+		{ErrNotFound, 404, "share.not_found"},
+		{ErrSourceDeleted, 404, "share.source_deleted"},
+		{ErrExpired, 404, "share.expired"},
+		{ErrRevoked, 404, "share.revoked"},
+		{ErrAccessExpired, 404, "share.access_expired"},
 		{ErrQuotaExceeded, 429, "quota.exceeded"},
 		{errors.New("database unavailable"), 500, "internal.error"},
 	} {

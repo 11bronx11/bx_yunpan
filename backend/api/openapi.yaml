@@ -658,6 +658,10 @@ paths:
     post:
       tags: [Shares]
       summary: Resolve a share key
+      description: |
+        Unavailable shares return 404 with share.not_found (incorrect or unknown key),
+        share.source_deleted, share.expired, or share.revoked. No access token or
+        file metadata is returned on failure.
       operationId: resolveShare
       security: []
       requestBody:
@@ -726,6 +730,10 @@ paths:
     post:
       tags: [Shares]
       summary: Import a share into the current user's drive
+      description: |
+        Availability is checked again when importing. A 404 uses share.not_found,
+        share.source_deleted, share.expired, share.revoked, or share.access_expired.
+        Resolve the key again if the short-lived access token has expired.
       operationId: importShare
       security:
         - bearerAuth: []
@@ -746,6 +754,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ImportShareResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
         '422':

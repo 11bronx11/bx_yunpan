@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +32,11 @@ var (
 	ErrConflict      = errors.New("share conflict")
 	ErrInvalidInput  = errors.New("invalid share input")
 	ErrQuotaExceeded = errors.New("share import quota exceeded")
+	// Preserve errors.Is(err, ErrNotFound) for callers that only need to deny access.
+	ErrSourceDeleted = fmt.Errorf("%w: source file deleted", ErrNotFound)
+	ErrExpired       = fmt.Errorf("%w: share expired", ErrNotFound)
+	ErrRevoked       = fmt.Errorf("%w: share revoked", ErrNotFound)
+	ErrAccessExpired = fmt.Errorf("%w: access token expired", ErrNotFound)
 )
 
 type Share struct {
@@ -253,6 +259,9 @@ func (s *Service) Import(ctx context.Context, userID, shareID, targetFolderID uu
 		}
 		var sourceEntry drive.FileEntry
 		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ? AND owner_id = ? AND deleted_at IS NULL", share.FileEntryID, share.OwnerID).First(&sourceEntry).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrSourceDeleted
+			}
 			return lookupError(err)
 		}
 		var current Share
@@ -264,8 +273,14 @@ func (s *Service) Import(ctx context.Context, userID, shareID, targetFolderID uu
 			return err
 		}
 		claims, err := s.verifyAccess(accessToken)
-		if err != nil || now.Unix() >= claims.ExpiresAt || validateShareAt(current, now) != nil {
+		if err != nil {
 			return ErrNotFound
+		}
+		if err := validateShareAt(current, now); err != nil {
+			return err
+		}
+		if now.Unix() >= claims.ExpiresAt {
+			return ErrAccessExpired
 		}
 		var prior Import
 		err = tx.Where("user_id = ? AND share_id = ? AND idempotency_key = ?", userID, shareID, idempotencyKey).Take(&prior).Error
@@ -363,8 +378,14 @@ func (s *Service) verifyAccess(raw string) (accessClaims, error) {
 }
 
 func validateShareAt(share Share, now time.Time) error {
-	if share.SourceDeletedAt != nil || share.RevokedAt != nil || (share.ExpiresAt != nil && !share.ExpiresAt.After(now)) {
-		return ErrNotFound
+	if share.SourceDeletedAt != nil {
+		return ErrSourceDeleted
+	}
+	if share.RevokedAt != nil {
+		return ErrRevoked
+	}
+	if share.ExpiresAt != nil && !share.ExpiresAt.After(now) {
+		return ErrExpired
 	}
 	return nil
 }
@@ -391,10 +412,13 @@ func (s *Service) authorize(ctx context.Context, lookup string, value any, token
 		if err != nil {
 			return err
 		}
-		if tokenExpiry != 0 && now.Unix() >= tokenExpiry {
-			return ErrNotFound
+		if err := validateShareAt(share, now); err != nil {
+			return err
 		}
-		return validateShareAt(share, now)
+		if tokenExpiry != 0 && now.Unix() >= tokenExpiry {
+			return ErrAccessExpired
+		}
+		return nil
 	})
 	return share, now, err
 }

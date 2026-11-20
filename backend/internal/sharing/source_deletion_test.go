@@ -108,10 +108,10 @@ func TestSourceDeletionPreservesIndependentShareHistory(t *testing.T) {
 		if _, exists := shareViewResponse(view)["size_bytes"]; exists {
 			t.Fatal("history leaked physical object metadata")
 		}
-		if _, _, _, _, err := f.s.Resolve(keys[i]); !errors.Is(err, ErrNotFound) {
+		if _, _, _, _, err := f.s.Resolve(keys[i]); !errors.Is(err, ErrSourceDeleted) {
 			t.Fatalf("deleted source resolved: %v", err)
 		}
-		if _, _, err := f.s.Access(tokens[i]); !errors.Is(err, ErrNotFound) {
+		if _, _, err := f.s.Access(tokens[i]); !errors.Is(err, ErrSourceDeleted) {
 			t.Fatalf("old token accessed deleted source: %v", err)
 		}
 		if err := f.s.UpdateExpiry(ctx, f.owner, share.ID, view.Version, nil); !errors.Is(err, ErrInactive) {

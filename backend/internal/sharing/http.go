@@ -284,6 +284,21 @@ func (h *HTTP) importShare(c *gin.Context) {
 }
 
 func (h *HTTP) writeError(c *gin.Context, err error) {
+	for _, unavailable := range []struct {
+		err     error
+		code    string
+		message string
+	}{
+		{ErrSourceDeleted, "share.source_deleted", "share source file deleted"},
+		{ErrExpired, "share.expired", "share expired"},
+		{ErrRevoked, "share.revoked", "share revoked"},
+		{ErrAccessExpired, "share.access_expired", "share access token expired"},
+	} {
+		if errors.Is(err, unavailable.err) {
+			c.JSON(http.StatusNotFound, httpapi.ErrorEnvelope(c, unavailable.code, unavailable.message))
+			return
+		}
+	}
 	if errors.Is(err, ErrInactive) {
 		c.JSON(http.StatusConflict, httpapi.ErrorEnvelope(c, "share.inactive", "inactive shares are read-only"))
 		return
