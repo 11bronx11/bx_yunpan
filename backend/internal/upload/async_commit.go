@@ -42,7 +42,7 @@ func (s *Service) CommitAsync(tx *gorm.DB, kind string, in asyncprotocol.Input, 
 			}
 		}
 		if session.Status == StatusCompleted {
-			return decision, nil
+			return decision, markFailedIntent(tx, in.OperationID, session.ID, out.Error)
 		}
 		if !terminal {
 			if err := s.failAsync(tx, session, StatusFailed, out.Error); err != nil {
@@ -50,7 +50,7 @@ func (s *Service) CommitAsync(tx *gorm.DB, kind string, in asyncprotocol.Input, 
 			}
 		}
 		decision.Outcome = "failed"
-		return decision, nil
+		return decision, markFailedIntent(tx, in.OperationID, session.ID, out.Error)
 	}
 	switch kind {
 	case "upload.expire":
@@ -200,6 +200,18 @@ func markIntent(tx *gorm.DB, id uuid.UUID, uploadID string) error {
 	return tx.Model(&storageops.Operation{}).Where("id=?", id).Updates(fields).Error
 }
 
+// The operation is a business intent, not another scheduler. Settle it in the
+// same transaction as the upload, cleanup intents and domain receipt. A late
+// failure must not overwrite an already completed operation.
+func markFailedIntent(tx *gorm.DB, id, sessionID uuid.UUID, code string) error {
+	if id == uuid.Nil {
+		return nil
+	}
+	return tx.Model(&storageops.Operation{}).
+		Where("id=? AND upload_session_id=? AND state IN ?", id, sessionID, []string{storageops.StatePending, storageops.StateRunning}).
+		Updates(map[string]any{"state": storageops.StateFailed, "last_error": uploadFailureCode(code), "completed_at": gorm.Expr("clock_timestamp()"), "updated_at": gorm.Expr("clock_timestamp()"), "lease_until": nil, "lease_token": nil}).Error
+}
+
 func (s *Service) finishAsync(tx *gorm.DB, session Session, object objectstore.Object) error {
 	if err := lockAsyncDestination(tx, session); err != nil {
 		return err
@@ -238,14 +250,19 @@ func (s *Service) finishAsync(tx *gorm.DB, session Session, object objectstore.O
 	return err
 }
 
-func (s *Service) failAsync(tx *gorm.DB, session Session, state, code string) error {
+func uploadFailureCode(code string) string {
 	// Provider diagnostics remain in the durable control result. This column
 	// is a bounded public error code, not an arbitrary remote error message.
 	switch code {
 	case "upload.expired", "upload.hash_mismatch", "upload.commit_precondition_failed":
+		return code
 	default:
-		code = "upload.async_exhausted"
+		return "upload.async_exhausted"
 	}
+}
+
+func (s *Service) failAsync(tx *gorm.DB, session Session, state, code string) error {
+	code = uploadFailureCode(code)
 	if err := s.quota.ReleaseQuota(tx, session.UserID, session.ReservedBytes); err != nil {
 		return err
 	}

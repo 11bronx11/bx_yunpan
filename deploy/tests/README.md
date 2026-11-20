@@ -1,6 +1,45 @@
 # 异步验证入口
 
-这些工具只用于专用测试资源，不读取 `deploy/.env`，不部署业务栈，也不删除已有数据库、bucket 或卷。
+## 已部署服务的最终黑盒验收
+
+`final-acceptance.mjs` 对实际 `http://127.0.0.1:3000` 发送用户 HTTP 请求，创建带 `final_` 前缀的专属用户，执行上传/下载/分享/AI/竞态、32 并发尖刺与 600 秒浸泡，然后只读核对业务、控制和 AI 数据库。它使用现有 `bx-yunpan` Docker 服务；不创建隔离部署，不切换协议或修改配置，不清理测试数据。请只在允许测试账号、有限并发和模型调用的环境运行。
+
+```bash
+FINAL_OUTPUT=artifacts/final-acceptance-<唯一标识> node deploy/tests/final-acceptance.mjs
+# private-fixture.json 出现后，可在另一个终端执行真实浏览器验收
+node deploy/tests/final-browser.mjs artifacts/final-acceptance-<唯一标识>
+
+# 独立重跑完整浸泡：重新登录，期间两次轮换 refresh cookie；覆盖输出前先保留旧证据
+FINAL_OUTPUT=artifacts/final-acceptance-<标识> node deploy/tests/final-soak.mjs
+# 所有写入停止后，核对该批用户拥有过的全部领域数据
+FINAL_OUTPUT=artifacts/final-acceptance-<标识> node deploy/tests/final-supplement.mjs --reconcile
+python3 deploy/tests/final-storage-audit.py artifacts/final-acceptance-<标识>
+python3 deploy/tests/final-index-audit.py artifacts/final-acceptance-<标识>
+python3 deploy/tests/final-broker-audit.py artifacts/final-acceptance-<标识>
+python3 deploy/tests/final-intent-audit.py artifacts/final-acceptance-<标识>
+```
+
+Node 22+；Python 审计使用 boto3、requests。浏览器可用 `FINAL_PLAYWRIGHT_MODULE` 和 `FINAL_CHROMIUM_EXECUTABLE` 覆盖本机运行器。fixture 含专属测试登录凭据，输出目录权限 0700。`final-summarize.py` 专用于本次保留的分阶段证据，执行严格检查后生成根目录验收报告；不会把原始失败改写成成功。源码对应报告为 `FINAL_BLACKBOX_ACCEPTANCE_2026-11-20.md`。
+
+### canonical.ensure 失败意图回归与定点修复
+
+`intent-fix-e2e.mjs` 创建独立测试用户，通过真实 HTTP 做 4 轮 × 4 个同 owner、同内容并发上传。每轮要求一个成功、三个失败，并核对操作终态、失败码、完成时间、配额、引用及领域回执，下载成功文件校验 SHA-256。至少三个失败必须实际经过 canonical copy 提交，以免只覆盖复制之前的去重分支。
+
+```bash
+FINAL_OUTPUT=artifacts/intent-fix-<唯一标识> node deploy/tests/intent-fix-e2e.mjs
+python3 deploy/tests/final-storage-audit.py artifacts/intent-fix-<唯一标识>
+```
+
+`repair-canonical-intents-20261120.py` 仅处理代码内固定的三条历史验收意图，不做全表修复。先验证控制任务 done/failed、result ID 和双摘要与领域回执一致、会话失败且预留为零、私有清理成功且 MinIO HEAD 返回 404，再在锁定操作/会话/回执的业务事务内补齐 failed、错误码和完成时间。完成时间取既有回执时间。默认只读；`--apply` 才写入，重复运行不重复更新。它不重开任务、不重新计算、不改配额或引用，也不删除字节。证据以每次运行的独立文件保留。
+
+```bash
+python3 deploy/tests/repair-canonical-intents-20261120.py --output artifacts/intent-repair-<标识>
+python3 deploy/tests/repair-canonical-intents-20261120.py --apply --output artifacts/intent-repair-<标识>
+```
+
+## 专用资源验证
+
+以下工具只用于专用测试资源，不读取 `deploy/.env`，不部署业务栈，也不删除已有数据库、bucket 或卷。
 
 `async-check.py` 接收一个权限为 0600 的 JSON 对象，键为仓库测试实际使用的 `TEST_*` 环境变量。它核对真实数据库身份、业务 34/控制 2 的迁移历史，并在关闭会话只读设置后验证 reader 的 INSERT/UPDATE/DELETE/DDL 均被数据库权限拒绝。关键测试缺失、跳过、失败或命令超时均不能通过。原始退出码、JSON 测试事件、skip 和文件摘要写入输出目录。
 

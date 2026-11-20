@@ -1,0 +1,53 @@
+// Browser against actual deployed services, no mocked routes or responses.
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {createHash,randomBytes} from 'node:crypto';
+const {chromium}=await import(process.env.FINAL_PLAYWRIGHT_MODULE||'/home/bronx/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright/index.mjs');
+const out=process.argv[2];assert.ok(out);
+const fixture=JSON.parse(readFileSync(`${out}/private-fixture.json`));
+const user=fixture.users.find(x=>x.username.endsWith('_outsider'));
+const folderName='browser-final-'+Date.now();
+const report={started_at:new Date().toISOString(),checks:[],page_errors:[],network:[]};
+const browser=await chromium.launch({headless:true,executablePath:process.env.FINAL_CHROMIUM_EXECUTABLE||'/home/bronx/.cache/ms-playwright/chromium-1228/chrome-linux/chrome',args:['--no-sandbox','--disable-gpu']});
+const hash=b=>createHash('sha256').update(b).digest('hex');
+try{
+ const context=await browser.newContext({viewport:{width:1440,height:1000},acceptDownloads:true});
+ const page=await context.newPage();page.setDefaultTimeout(30000);
+ page.on('pageerror',e=>report.page_errors.push(e.message));
+ page.on('response',r=>{const u=new URL(r.url());if(u.pathname.startsWith('/api/')||u.pathname.startsWith('/storage/'))report.network.push({method:r.request().method(),path:u.pathname,status:r.status()});});
+ await page.goto(fixture.base_url+'/login');
+ await page.getByPlaceholder('用户名',{exact:true}).fill(user.username);
+ await page.getByPlaceholder('密码',{exact:true}).fill(user.password);
+ await page.getByRole('button',{name:/Enter cloud/}).click();
+ await page.waitForURL('**/drive');report.checks.push('actual form login');
+ await page.getByRole('button',{name:/新建目录/}).click();
+ const dialog=page.getByRole('dialog',{name:'新建目录'});
+ await dialog.getByRole('textbox').fill(folderName);
+ await dialog.getByRole('button',{name:/创\s*建/}).click();
+ await dialog.waitFor({state:'hidden'});
+ await page.getByRole('row',{name:`进入目录 ${folderName}`,exact:true}).click();
+ report.checks.push('create and enter folder through UI');
+ const bytes=randomBytes(1024*1024+123), name='browser-final.bin';
+ const complete=page.waitForResponse(async r=>{if(r.request().method()!=='GET'||!/^\/api\/v1\/uploads\/[a-f0-9-]+$/.test(new URL(r.url()).pathname))return false;const d=await r.json().catch(()=>({}));return d.filename===name&&d.status==='completed';},{timeout:180000});
+ await page.locator('input[type=file]').setInputFiles({name,mimeType:'application/octet-stream',buffer:bytes});
+ const session=await (await complete).json();report.upload={session_id:session.id,file_id:session.completed_entry_id,object_id:session.completed_object_id,owner:user.id,bytes:bytes.length,sha256:hash(bytes)};
+ report.checks.push('real file input upload and /storage PUT');
+ await page.goto(fixture.base_url+'/drive');await page.reload();
+ await page.getByRole('row',{name:`进入目录 ${folderName}`,exact:true}).click();
+ const row=page.getByRole('row',{name:`文件 ${name}`,exact:true});await row.waitFor();
+ await row.hover();
+ const [download]=await Promise.all([page.waitForEvent('download'),row.getByRole('button',{name:`下载 ${name}`,exact:true}).click()]);
+ await download.saveAs(`${out}/browser-download.bin`);
+ assert.equal(hash(readFileSync(`${out}/browser-download.bin`)),hash(bytes));
+ report.checks.push('refresh and browser download SHA256');
+ await page.screenshot({path:`${out}/browser-desktop.png`,fullPage:true});
+ const second=await context.newPage();await second.goto(fixture.base_url+'/drive');await second.getByRole('row',{name:`进入目录 ${folderName}`,exact:true}).waitFor();
+ report.checks.push('second tab session and directory visibility');await second.close();
+ await page.setViewportSize({width:390,height:844});
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await page.screenshot({path:`${out}/browser-mobile.png`,fullPage:true});
+ report.checks.push('390px viewport no horizontal overflow');
+ assert.deepEqual(report.page_errors,[]);assert.ok(report.network.some(r=>r.method==='PUT'&&r.path.startsWith('/storage/')&&r.status===200));
+ report.status='PASS';await context.close();
+}catch(error){report.status='FAIL';report.error=error.stack;console.error(error.message);process.exitCode=1;}
+finally{report.finished_at=new Date().toISOString();await browser.close();writeFileSync(`${out}/browser-results.json`,JSON.stringify(report,null,2),{mode:0o600});console.log(JSON.stringify(report,null,2));}
